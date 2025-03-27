@@ -294,6 +294,7 @@ const (
 	CloudProviderAzure     CloudProviderID = "azure"
 	CloudProviderScaleway  CloudProviderID = "scaleway"
 	CloudProviderLinode    CloudProviderID = "linode"
+	CloudProviderElemento  CloudProviderID = "elemento"
 
 	// Experimental cloud providers
 	CloudProviderMetal CloudProviderID = "metal"

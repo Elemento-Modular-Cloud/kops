@@ -32,6 +32,7 @@ func SupportedClouds() []kops.CloudProviderID {
 		kops.CloudProviderGCE,
 		kops.CloudProviderHetzner,
 		kops.CloudProviderOpenstack,
+		kops.CloudProviderElemento,
 	}
 	if featureflag.Azure.Enabled() {
 		clouds = append(clouds, kops.CloudProviderAzure)
