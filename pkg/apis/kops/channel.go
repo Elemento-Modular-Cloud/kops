@@ -293,6 +293,7 @@ const (
 	CloudProviderOpenstack CloudProviderID = "openstack"
 	CloudProviderAzure     CloudProviderID = "azure"
 	CloudProviderScaleway  CloudProviderID = "scaleway"
+	CloudProviderElemento  CloudProviderID = "elemento"
 
 	// Experimental cloud providers
 	CloudProviderMetal CloudProviderID = "metal"

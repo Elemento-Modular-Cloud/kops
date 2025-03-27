@@ -56,6 +56,7 @@ require (
 	github.com/pkg/sftp v1.13.6
 	github.com/prometheus/client_golang v1.20.4
 	github.com/scaleway/scaleway-sdk-go v1.0.0-beta.30
+	github.com/Elemento-Modular-Cloud/tesi-paolobeci/ecloud v0.0.1
 	github.com/sergi/go-diff v1.3.1
 	github.com/spf13/cobra v1.8.1
 	github.com/spf13/pflag v1.0.5

@@ -491,6 +491,17 @@ func (c *ApplyClusterCmd) Run(ctx context.Context) (*ApplyResults, error) {
 			scwCloud := cloud.(scaleway.ScwCloud)
 			scwZone = scwCloud.Zone()
 		}
+	
+	case kops.CloudProviderElemento:
+		{
+			if len(sshPublicKeys) == 0 {
+				return nil, fmt.Errorf("SSH public key must be specified when running with Openstack (create with `kops create secret --name %s sshpublickey admin -i ~/.ssh/id_rsa.pub`)", cluster.ObjectMeta.Name)
+			}
+
+			if len(sshPublicKeys) != 1 {
+				return nil, fmt.Errorf("exactly one 'admin' SSH public key can be specified when running with Openstack; please delete a key using `kops delete secret`")
+			}
+		}
 
 	case kops.CloudProviderMetal:
 		// Metal is a special case, we don't need to do anything here (yet)

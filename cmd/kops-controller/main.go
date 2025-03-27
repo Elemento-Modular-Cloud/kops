@@ -307,6 +307,12 @@ func addNodeController(ctx context.Context, mgr manager.Manager, vfsContext *vfs
 		if err != nil {
 			return fmt.Errorf("error building identifier: %w", err)
 		}
+	
+	case "elemento":
+		identifier, err = nodeidentityelemento.New(opt.CacheNodeidentityInfo)
+		if err != nil {
+			return fmt.Errorf("error building identifier: %w", err)
+		}
 
 	case "metal":
 		identifier, err = nodeidentitymetal.New()
