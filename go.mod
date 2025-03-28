@@ -15,6 +15,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources v1.2.0
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/storage/armstorage v1.6.0
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.4.1
+	github.com/Elemento-Modular-Cloud/tesi-paolobeci v0.0.1
 	github.com/MakeNowJust/heredoc/v2 v2.0.1
 	github.com/Masterminds/sprig/v3 v3.3.0
 	github.com/apparentlymart/go-cidr v1.1.0
@@ -56,7 +57,6 @@ require (
 	github.com/pkg/sftp v1.13.6
 	github.com/prometheus/client_golang v1.20.4
 	github.com/scaleway/scaleway-sdk-go v1.0.0-beta.30
-	github.com/Elemento-Modular-Cloud/tesi-paolobeci/ecloud v0.0.1
 	github.com/sergi/go-diff v1.3.1
 	github.com/spf13/cobra v1.8.1
 	github.com/spf13/pflag v1.0.5
