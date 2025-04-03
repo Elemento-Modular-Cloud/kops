@@ -1068,6 +1068,8 @@ func (c *Cluster) GetCloudProvider() CloudProviderID {
 		return CloudProviderScaleway
 	} else if spec.CloudProvider.Linode != nil {
 		return CloudProviderLinode
+	} else if spec.CloudProvider.Elemento != nil {
+		return CloudProviderElemento
 	}
 	return ""
 }
