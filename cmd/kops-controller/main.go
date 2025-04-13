@@ -50,6 +50,7 @@ import (
 	nodeidentitymetal "k8s.io/kops/pkg/nodeidentity/metal"
 	nodeidentityos "k8s.io/kops/pkg/nodeidentity/openstack"
 	nodeidentityscw "k8s.io/kops/pkg/nodeidentity/scaleway"
+	nodeidentityelemento "k8s.io/kops/pkg/nodeidentity/elemento"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/azure"
 	"k8s.io/kops/upup/pkg/fi/cloudup/do"
@@ -58,6 +59,7 @@ import (
 	linodecloudup "k8s.io/kops/upup/pkg/fi/cloudup/linode"
 	"k8s.io/kops/upup/pkg/fi/cloudup/openstack"
 	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
+	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
 	"k8s.io/kops/util/pkg/vfs"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -207,6 +209,8 @@ func main() {
 		}
 		if opt.Server.Provider.Linode != nil {
 			verifier, err := linodecloudup.NewLinodeVerifier(opt.Server.Provider.Linode)
+		if opt.Server.Provider.Elemento != nil {
+			verifier, err := elemento.NewElementoVerifier(opt.Server.Provider.Elemento)
 			if err != nil {
 				setupLog.Error(err, "unable to create verifier")
 				os.Exit(1)
