@@ -101,6 +101,8 @@ require (
 	sigs.k8s.io/yaml v1.6.0
 )
 
+replace github.com/Elemento-Modular-Cloud/tesi-paolobeci v0.0.2 => ../tesi-paolobeci
+
 require (
 	cel.dev/expr v0.25.1 // indirect
 	cloud.google.com/go v0.123.0 // indirect
@@ -275,3 +277,5 @@ require (
 	sigs.k8s.io/kustomize/kyaml v0.21.1 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 )
+
+replace github.com/Elemento-Modular-Cloud/tesi-paolobeci => ../tesi-paolobeci
