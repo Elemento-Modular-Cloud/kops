@@ -1736,6 +1736,8 @@ func defaultImage(cluster *api.Cluster, channel *api.Channel, architecture archi
 			return defaultLinodeImageJammy, nil
 		case api.CloudProviderMetal:
 			return "dummy-metal-image", nil
+		case api.CloudProviderElemento:
+			return defaultElementoImageJammy, nil
 		}
 	} else {
 		switch cluster.GetCloudProvider() {
@@ -1749,6 +1751,8 @@ func defaultImage(cluster *api.Cluster, channel *api.Channel, architecture archi
 			return defaultLinodeImageNoble, nil
 		case api.CloudProviderMetal:
 			return "dummy-metal-image", nil
+		case api.CloudProviderElemento:
+			return defaultElementoImageNoble, nil
 		}
 	}
 
