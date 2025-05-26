@@ -171,13 +171,8 @@ func Convert_v1alpha2_ClusterSpec_To_kops_ClusterSpec(in *ClusterSpec, out *kops
 		}
 	case kops.CloudProviderScaleway:
 		out.CloudProvider.Scaleway = &kops.ScalewaySpec{}
-<<<<<<< HEAD
-	case kops.CloudProviderLinode:
-		out.CloudProvider.Linode = &kops.LinodeSpec{}
-=======
 	case kops.CloudProviderElemento:
 		out.CloudProvider.Elemento = &kops.ElementoSpec{}
->>>>>>> 2fdf5a2a5a (delete vendor folder)
 	case "":
 	default:
 		return field.NotSupported(field.NewPath("spec").Child("cloudProvider"), in.LegacyCloudProvider, []string{
@@ -189,6 +184,7 @@ func Convert_v1alpha2_ClusterSpec_To_kops_ClusterSpec(in *ClusterSpec, out *kops
 			string(kops.CloudProviderLinode),
 			string(kops.CloudProviderOpenstack),
 			string(kops.CloudProviderScaleway),
+			string(kops.CloudProviderElemento),
 		})
 	}
 	if in.CloudConfig != nil {
@@ -457,6 +453,8 @@ func Convert_kops_ClusterSpec_To_v1alpha2_ClusterSpec(in *kops.ClusterSpec, out 
 	}
 	if in.CloudProvider.Linode != nil {
 		out.LegacyCloudProvider = string(kops.CloudProviderLinode)
+	if in.CloudProvider.Elemento != nil {
+		out.LegacyCloudProvider = string(kops.CloudProviderElemento)
 	}
 	switch kops.CloudProviderID(out.LegacyCloudProvider) {
 	case kops.CloudProviderAWS:
