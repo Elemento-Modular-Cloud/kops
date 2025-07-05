@@ -46,13 +46,13 @@ import (
 	"k8s.io/kops/pkg/model/components/kubeapiserver"
 	"k8s.io/kops/pkg/model/components/kubescheduler"
 	"k8s.io/kops/pkg/model/domodel"
+	"k8s.io/kops/pkg/model/elementomodel"
 	"k8s.io/kops/pkg/model/gcemodel"
 	"k8s.io/kops/pkg/model/hetznermodel"
 	"k8s.io/kops/pkg/model/iam"
 	"k8s.io/kops/pkg/model/linodemodel"
 	"k8s.io/kops/pkg/model/openstackmodel"
 	"k8s.io/kops/pkg/model/scalewaymodel"
-	"k8s.io/kops/pkg/model/elementomodel"
 	"k8s.io/kops/pkg/nodemodel"
 	"k8s.io/kops/pkg/predicates"
 	"k8s.io/kops/pkg/templates"
@@ -62,6 +62,7 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/azure"
 	"k8s.io/kops/upup/pkg/fi/cloudup/bootstrapchannelbuilder"
 	"k8s.io/kops/upup/pkg/fi/cloudup/do"
+	elemento "k8s.io/kops/upup/pkg/fi/cloudup/elemento"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner"
 	"k8s.io/kops/upup/pkg/fi/cloudup/linode"
@@ -499,7 +500,7 @@ func (c *ApplyClusterCmd) Run(ctx context.Context) (*ApplyResults, error) {
 			scwCloud := cloud.(scaleway.ScwCloud)
 			scwZone = scwCloud.Zone()
 		}
-	
+
 	case kops.CloudProviderElemento:
 		{
 			if len(sshPublicKeys) == 0 {
@@ -730,7 +731,7 @@ func (c *ApplyClusterCmd) Run(ctx context.Context) (*ApplyResults, error) {
 				&scalewaymodel.InstanceModelBuilder{ScwModelContext: scwModelContext, BootstrapScriptBuilder: bootstrapScriptBuilder, Lifecycle: clusterLifecycle},
 				&scalewaymodel.SSHKeyModelBuilder{ScwModelContext: scwModelContext, Lifecycle: securityLifecycle},
 			)
-		
+
 		case kops.CloudProviderElemento:
 			elementoModelContext := &elementomodel.ElementoModelContext{
 				KopsModelContext: modelContext,
@@ -784,6 +785,8 @@ func (c *ApplyClusterCmd) Run(ctx context.Context) (*ApplyResults, error) {
 			target = scaleway.NewScwAPITarget(cloud.(scaleway.ScwCloud))
 		case kops.CloudProviderLinode:
 			target = linode.NewAPITarget(cloud.(linode.LinodeCloud))
+		case kops.CloudProviderElemento:
+			target = elemento.NewElementoAPITarget(cloud.(elemento.ElementoCloud))
 		case kops.CloudProviderMetal:
 			target = metal.NewAPITarget(cloud.(*metal.Cloud), nil)
 		default:
