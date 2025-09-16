@@ -36,7 +36,6 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/linode"
 	"k8s.io/kops/upup/pkg/fi/cloudup/openstack"
 	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
-	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
 )
 
@@ -95,13 +94,12 @@ func (b BootstrapClientBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 			return err
 		}
 		authenticator = a
-<<<<<<< HEAD
 	case kops.CloudProviderLinode:
 		a, err := linode.NewLinodeAuthenticator()
-=======
 	case kops.CloudProviderElemento:
 		a, err := elemento.NewElementoAuthenticator()
->>>>>>> 2fdf5a2a5a (delete vendor folder)
+		// Use PKI file-based authentication like Metal provider to avoid kops-controller dependency
+		a, err := pkibootstrap.NewAuthenticatorFromFile("/etc/kubernetes/kops/pki/machine/private.pem")
 		if err != nil {
 			return err
 		}
