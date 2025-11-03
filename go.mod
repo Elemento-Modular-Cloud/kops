@@ -278,4 +278,3 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 )
 
-replace github.com/Elemento-Modular-Cloud/ecloud-go => ../ecloud-go
