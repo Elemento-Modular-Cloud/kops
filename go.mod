@@ -101,7 +101,7 @@ require (
 	sigs.k8s.io/yaml v1.6.0
 )
 
-// replace github.com/Elemento-Modular-Cloud/ecloud-go v0.0.2 => ../ecloud-go
+// replace github.com/Elemento-Modular-Cloud/ecloud-go v1.0.1 => ../ecloud-go
 
 require (
 	cel.dev/expr v0.25.1 // indirect
