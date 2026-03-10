@@ -56,6 +56,7 @@ const (
 	defaultMasterMachineTypeHetzner  = "cx23"
 	defaultMasterMachineTypeScaleway = "DEV1-M"
 	defaultMasterMachineTypeLinode   = "g6-standard-2"
+	defaultMasterMachineTypeElemento = "argon2"
 
 	defaultDOImageJammy       = "ubuntu-22-04-x64"
 	defaultHetznerImageJammy  = "ubuntu-22.04"
@@ -420,7 +421,7 @@ func defaultMachineType(cloud fi.Cloud, cluster *kops.Cluster, ig *kops.Instance
 
 		case ig.Spec.Role.HasBastion():
 			return defaultBastionMachineTypeLinode, nil
-			
+
 	case kops.CloudProviderElemento:
 		switch ig.Spec.Role {
 		case kops.InstanceGroupRoleControlPlane:
