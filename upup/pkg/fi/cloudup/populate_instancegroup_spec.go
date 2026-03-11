@@ -57,6 +57,7 @@ const (
 	defaultMasterMachineTypeScaleway = "DEV1-M"
 	defaultMasterMachineTypeLinode   = "g6-standard-2"
 	defaultMasterMachineTypeElemento = "argon2"
+	defaultMasterMachineTypeElemento = "neon"
 
 	defaultDOImageJammy       = "ubuntu-22-04-x64"
 	defaultHetznerImageJammy  = "ubuntu-22.04"
