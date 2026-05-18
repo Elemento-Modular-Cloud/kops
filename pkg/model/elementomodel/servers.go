@@ -63,7 +63,6 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 			Name:      fi.PtrTo(b.ClusterName()),
 			Lifecycle: b.Lifecycle,
 		}
-		c.EnsureTask(dnsZoneTask)
 	}
 
 	for _, ig := range b.InstanceGroups {
@@ -122,25 +121,12 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 			RootVolumeSize: rootVolumeSize,
 		}
 		if b.Cluster.PublishesDNSRecords() {
-			serverGroup.ClusterName = fi.PtrTo(b.ClusterName())
-			serverGroup.DNSZone = fi.PtrTo(b.ClusterName())
 			serverGroup.DNSZoneTask = dnsZoneTask
-			if ig.HasAPIServer() {
-				if !b.UseLoadBalancerForAPI() {
-					apiPublicName := b.Cluster.Spec.API.PublicName
-					if apiPublicName == "" {
-						apiPublicName = "api." + b.ClusterName()
-					}
-					serverGroup.APIPublicName = fi.PtrTo(apiPublicName)
-				}
-				if !b.UseLoadBalancerForInternalAPI() {
-					serverGroup.APIInternalName = fi.PtrTo(b.Cluster.APIInternalName())
-				}
-				serverGroup.KopsControllerInternalName = fi.PtrTo("kops-controller.internal." + b.ClusterName())
-				for _, etcdCluster := range b.Cluster.Spec.EtcdClusters {
-					serverGroup.EtcdClusterNames = append(serverGroup.EtcdClusterNames, etcdCluster.Name)
-				}
+			dnsRecordTasks, err := b.elementoDNSRecordTasksForInstanceGroup(ig, b.Lifecycle, dnsZoneTask)
+			if err != nil {
+				return err
 			}
+			serverGroup.DNSRecordTasks = dnsRecordTasks
 		}
 
 		c.AddTask(&serverGroup)

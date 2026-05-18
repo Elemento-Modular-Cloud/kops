@@ -102,16 +102,30 @@ func (_ *DNSZone) RenderElemento(t *elemento.ElementoAPITarget, actual, expected
 
 // +kops:fitask
 type DNSRecord struct {
-	Name      *string
-	Data      *string
-	DNSZone   *string
-	Type      *string
-	TTL       *int64
-	Lifecycle fi.Lifecycle
-	Comment   *string
+	Name        *string
+	Data        *string
+	DNSZone     *string
+	DNSZoneTask *DNSZone
+	DependsOn   *DNSRecord
+	Type        *string
+	TTL         *int64
+	Lifecycle   fi.Lifecycle
+	Comment     *string
 }
 
 var _ fi.CloudupTask = &DNSRecord{}
+var _ fi.CloudupHasDependencies = &DNSRecord{}
+
+func (d *DNSRecord) GetDependencies(tasks map[string]fi.CloudupTask) []fi.CloudupTask {
+	var deps []fi.CloudupTask
+	if d.DNSZoneTask != nil {
+		deps = append(deps, d.DNSZoneTask)
+	}
+	if d.DependsOn != nil {
+		deps = append(deps, d.DependsOn)
+	}
+	return deps
+}
 
 func (d *DNSRecord) Find(c *fi.CloudupContext) (*DNSRecord, error) {
 	cloud := c.T.Cloud.(elemento.ElementoCloud)
@@ -129,13 +143,15 @@ func (d *DNSRecord) Find(c *fi.CloudupContext) (*DNSRecord, error) {
 	}
 
 	return &DNSRecord{
-		Name:      fi.PtrTo(record.Name),
-		Data:      fi.PtrTo(record.Value),
-		DNSZone:   d.DNSZone,
-		Type:      fi.PtrTo(record.Type),
-		TTL:       fi.PtrTo(int64(record.TTL)),
-		Lifecycle: d.Lifecycle,
-		Comment:   d.Comment,
+		Name:        fi.PtrTo(record.Name),
+		Data:        fi.PtrTo(record.Value),
+		DNSZone:     d.DNSZone,
+		DNSZoneTask: d.DNSZoneTask,
+		DependsOn:   d.DependsOn,
+		Type:        fi.PtrTo(record.Type),
+		TTL:         fi.PtrTo(int64(record.TTL)),
+		Lifecycle:   d.Lifecycle,
+		Comment:     d.Comment,
 	}, nil
 }
 
@@ -169,9 +185,6 @@ func (_ *DNSRecord) RenderElemento(t *elemento.ElementoAPITarget, actual, expect
 	recordName := fi.ValueOf(expected.Name)
 	recordValue := fi.ValueOf(expected.Data)
 
-	if err := ensureElementoDNSZone(context.TODO(), client, zoneName); err != nil {
-		return err
-	}
 	if err := ensureElementoDNSRecord(context.TODO(), client, zoneName, recordName, recordValue); err != nil {
 		return err
 	}
