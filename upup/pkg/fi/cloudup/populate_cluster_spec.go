@@ -259,7 +259,7 @@ func (c *populateClusterSpec) run(ctx context.Context, clientset simple.Clientse
 		cluster.Spec.API.LoadBalancer.Class = kopsapi.LoadBalancerClassClassic
 	}
 
-	if cluster.Spec.DNSZone == "" && cluster.PublishesDNSRecords() {
+	if cluster.Spec.DNSZone == "" && cluster.PublishesDNSRecords() && cluster.GetCloudProvider() != kopsapi.CloudProviderElemento {
 		dns, err := cloud.DNS()
 		if err != nil {
 			return err
@@ -284,7 +284,7 @@ func (c *populateClusterSpec) run(ctx context.Context, clientset simple.Clientse
 		if cluster.Spec.DNSZone != "" && cluster.Spec.API.PublicName == "" {
 			cluster.Spec.API.PublicName = "api." + cluster.Name
 		}
-		if cluster.Spec.ExternalDNS == nil {
+		if cluster.Spec.ExternalDNS == nil && cluster.GetCloudProvider() != kopsapi.CloudProviderElemento {
 			cluster.Spec.ExternalDNS = &kopsapi.ExternalDNSConfig{
 				Provider: kopsapi.ExternalDNSProviderDNSController,
 			}

@@ -21,7 +21,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
-	"math/rand"
 	"strings"
 
 	"github.com/Elemento-Modular-Cloud/ecloud-go/ecloud"
@@ -52,8 +51,35 @@ type ServerGroup struct {
 
 	Labels map[string]string
 
+	DNSZoneTask    *DNSZone
+	DNSRecordTasks []*DNSRecord
+
 	// RootVolumeSize is the size of the root volume in GB
 	RootVolumeSize *int32
+}
+
+var _ fi.CloudupHasDependencies = &ServerGroup{}
+
+func (v *ServerGroup) GetDependencies(tasks map[string]fi.CloudupTask) []fi.CloudupTask {
+	var deps []fi.CloudupTask
+
+	for _, sshKey := range v.SSHKeys {
+		deps = append(deps, sshKey)
+	}
+	if v.Network != nil {
+		deps = append(deps, v.Network)
+	}
+	if v.DNSZoneTask != nil {
+		deps = append(deps, v.DNSZoneTask)
+	}
+	for _, dnsRecordTask := range v.DNSRecordTasks {
+		deps = append(deps, dnsRecordTask)
+	}
+	if v.UserData != nil {
+		deps = append(deps, fi.FindDependencies(tasks, v.UserData)...)
+	}
+
+	return deps
 }
 
 func (v *ServerGroup) Find(c *fi.CloudupContext) (*ServerGroup, error) {
@@ -237,8 +263,9 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 	fmt.Printf("EKOPS: UserData length: %d bytes, hash: %s\n", len(userData), userDataHash)
 
 	for i := 1; i <= expectedCount-actualCount; i++ {
-		// Append a random/unique ID to the node name
-		name := fmt.Sprintf("%s-%x", fi.ValueOf(e.Name), rand.Int63())
+		// Use deterministic names so manual DNS records can be created before VM creation.
+		ordinal := actualCount + i
+		name := fmt.Sprintf("%s-%d", fi.ValueOf(e.Name), ordinal)
 
 		// Initialize labels if nil
 		labels := e.Labels
@@ -267,7 +294,7 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 
 		// Add root volume configuration if specified
 		if e.RootVolumeSize != nil {
-			opts.ServerType.Disk = int(fi.ValueOf(e.RootVolumeSize))
+			opts.ServerType.Disk = float64(fi.ValueOf(e.RootVolumeSize))
 		}
 
 		// Add the SSH keys.
@@ -284,9 +311,10 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 
 		fmt.Printf("EKOPS: Creating server %q with options: Location=%s, Size=%s, Image=%s\n",
 			name, e.Location, e.Size, e.Image)
+
 		fmt.Printf("EKOPS: Calling client.Create() for server %q\n", name)
 
-		_, _, err = client.Create(context.TODO(), opts)
+		_, _, err := client.Create(context.TODO(), opts)
 		if err != nil {
 			fmt.Printf("EKOPS: ERROR creating server %q: %v\n", name, err)
 			return err

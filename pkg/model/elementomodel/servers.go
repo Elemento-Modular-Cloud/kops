@@ -57,12 +57,23 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 		sshkeyTasks = append(sshkeyTasks, t)
 	}
 
+	var dnsZoneTask *elementotasks.DNSZone
+	if b.Cluster.PublishesDNSRecords() {
+		dnsZoneTask = &elementotasks.DNSZone{
+			Name:      fi.PtrTo(b.ClusterName()),
+			Lifecycle: b.Lifecycle,
+		}
+	}
+
 	for _, ig := range b.InstanceGroups {
 		igSize := fi.ValueOf(ig.Spec.MinSize)
 		labels, err := b.CloudTagsForInstanceGroup(ig)
 		if err != nil {
 			return err
 		}
+		labels[elemento.TagKubernetesClusterName] = b.ClusterName()
+		labels[elemento.TagKubernetesInstanceGroup] = ig.Name
+		labels[elemento.TagKubernetesInstanceRole] = string(ig.Spec.Role)
 
 		userData, err := b.BootstrapScriptBuilder.ResourceNodeUp(c, ig)
 		if err != nil {
@@ -108,6 +119,14 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 			UserData:       userData,
 			Labels:         labels,
 			RootVolumeSize: rootVolumeSize,
+		}
+		if b.Cluster.PublishesDNSRecords() {
+			serverGroup.DNSZoneTask = dnsZoneTask
+			dnsRecordTasks, err := b.elementoDNSRecordTasksForInstanceGroup(ig, b.Lifecycle, dnsZoneTask)
+			if err != nil {
+				return err
+			}
+			serverGroup.DNSRecordTasks = dnsRecordTasks
 		}
 
 		c.AddTask(&serverGroup)

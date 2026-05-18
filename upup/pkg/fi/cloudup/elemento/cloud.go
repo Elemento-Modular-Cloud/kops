@@ -45,15 +45,13 @@ const (
 type ElementoCloud interface {
 	fi.Cloud
 
-	Region() string
-	DNS() (dnsprovider.Interface, error)
 	NetworkClient() ecloud.NetworkClient
 	ServerClient() ecloud.ServerClient
 	SSHKeyClient() ecloud.SSHKeyClient
 	VolumeClient() ecloud.VolumeClient
 	NodeupClient(ctx context.Context) ecloud.NodeupClient
 
-	// TODO: Detect and add additional fields here
+	DnsClient() ecloud.DnsClient
 }
 
 var _ fi.Cloud = &elementoCloudImplementation{}
@@ -62,7 +60,6 @@ var _ fi.Cloud = &elementoCloudImplementation{}
 type elementoCloudImplementation struct {
 	Client *ecloud.Client
 	region string
-	dns    dnsprovider.Interface
 	// TODO: Add additional fields here
 }
 
@@ -72,6 +69,7 @@ func NewElementoCloud(region string) (ElementoCloud, error) {
 
 	klog.V(2).Infof("Creating ecloud client for region %s", region)
 
+	// Here is the entrypoint of the ecloud-go SDK, executed by building a new ecloud-client
 	client, err := ecloud.NewClient("kops-client", "0.1")
 
 	if err != nil {
@@ -83,7 +81,6 @@ func NewElementoCloud(region string) (ElementoCloud, error) {
 
 	return &elementoCloudImplementation{
 		Client: client,
-		dns:    nil,
 		region: region,
 	}, nil
 }
@@ -153,10 +150,11 @@ func findServerGroups(c *elementoCloudImplementation, clusterName string) (map[s
 }
 
 func (c *elementoCloudImplementation) DNS() (dnsprovider.Interface, error) {
-	if c.dns == nil {
-		return nil, fmt.Errorf("DNS provider is not initialized")
-	}
-	return c.dns, nil
+	return NewDNSProvider(c.Client.Dns, "")
+}
+
+func (c *elementoCloudImplementation) DnsClient() ecloud.DnsClient {
+	return c.Client.Dns
 }
 
 func (c *elementoCloudImplementation) NetworkClient() ecloud.NetworkClient {
