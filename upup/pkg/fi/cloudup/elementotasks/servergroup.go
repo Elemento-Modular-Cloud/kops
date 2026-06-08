@@ -54,6 +54,8 @@ type ServerGroup struct {
 	DNSZoneTask    *DNSZone
 	DNSRecordTasks []*DNSRecord
 
+	DHCPReservationTasks []*DHCPReservation
+
 	// RootVolumeSize is the size of the root volume in GB
 	RootVolumeSize *int32
 }
@@ -74,6 +76,9 @@ func (v *ServerGroup) GetDependencies(tasks map[string]fi.CloudupTask) []fi.Clou
 	}
 	for _, dnsRecordTask := range v.DNSRecordTasks {
 		deps = append(deps, dnsRecordTask)
+	}
+	for _, dhcpReservationTask := range v.DHCPReservationTasks {
+		deps = append(deps, dhcpReservationTask)
 	}
 	if v.UserData != nil {
 		deps = append(deps, fi.FindDependencies(tasks, v.UserData)...)
@@ -266,6 +271,15 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 		// Use deterministic names so manual DNS records can be created before VM creation.
 		ordinal := actualCount + i
 		name := fmt.Sprintf("%s-%d", fi.ValueOf(e.Name), ordinal)
+		networkID := fi.ValueOf(e.Network.ID)
+		reservation := e.dhcpReservationForServerName(name)
+		if reservation == nil {
+			return fmt.Errorf("failed to find DHCP reservation task for server %q", name)
+		}
+		macAddress := fi.ValueOf(reservation.MACAddress)
+		if macAddress == "" {
+			return fmt.Errorf("DHCP reservation task for server %q has no MAC address", name)
+		}
 
 		// Initialize labels if nil
 		labels := e.Labels
@@ -278,7 +292,13 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 			StartAfterCreate: fi.PtrTo(true),
 			Networks: []*ecloud.Network{
 				{
-					ID: fi.ValueOf(e.Network.ID),
+					ID: networkID,
+				},
+			},
+			MacAddressConfig: []ecloud.ServerNetworkAttachment{
+				{
+					NetworkID:  networkID,
+					MACAddress: macAddress,
 				},
 			},
 			Datacenter: &ecloud.Datacenter{
@@ -311,10 +331,12 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 
 		fmt.Printf("EKOPS: Creating server %q with options: Location=%s, Size=%s, Image=%s\n",
 			name, e.Location, e.Size, e.Image)
+		fmt.Printf("EKOPS: Using network %q with MAC address %q for server %q\n",
+			networkID, macAddress, name)
 
 		fmt.Printf("EKOPS: Calling client.Create() for server %q\n", name)
 
-		_, _, err := client.Create(context.TODO(), opts)
+		_, _, err = client.Create(context.TODO(), opts)
 		if err != nil {
 			fmt.Printf("EKOPS: ERROR creating server %q: %v\n", name, err)
 			return err
@@ -322,6 +344,15 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 		fmt.Printf("EKOPS: Successfully created server %q\n", name)
 	}
 
+	return nil
+}
+
+func (v *ServerGroup) dhcpReservationForServerName(serverName string) *DHCPReservation {
+	for _, reservation := range v.DHCPReservationTasks {
+		if fi.ValueOf(reservation.Name) == serverName {
+			return reservation
+		}
+	}
 	return nil
 }
 

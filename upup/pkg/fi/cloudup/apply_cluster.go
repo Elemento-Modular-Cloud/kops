@@ -718,6 +718,7 @@ func (c *ApplyClusterCmd) Run(ctx context.Context) (*ApplyResults, error) {
 			}
 			l.Builders = append(l.Builders,
 				&elementomodel.NetworkModelBuilder{ElementoModelContext: elementoModelContext, Lifecycle: networkLifecycle},
+				&elementomodel.DHCPModelBuilder{ElementoModelContext: elementoModelContext, Lifecycle: networkLifecycle},
 				&elementomodel.DNSModelBuilder{ElementoModelContext: elementoModelContext, Lifecycle: networkLifecycle},
 				&elementomodel.ServerGroupModelBuilder{ElementoModelContext: elementoModelContext, BootstrapScriptBuilder: bootstrapScriptBuilder, Lifecycle: clusterLifecycle},
 			)

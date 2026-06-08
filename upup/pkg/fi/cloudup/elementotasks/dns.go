@@ -102,15 +102,16 @@ func (_ *DNSZone) RenderElemento(t *elemento.ElementoAPITarget, actual, expected
 
 // +kops:fitask
 type DNSRecord struct {
-	Name        *string
-	Data        *string
-	DNSZone     *string
-	DNSZoneTask *DNSZone
-	DependsOn   *DNSRecord
-	Type        *string
-	TTL         *int64
-	Lifecycle   fi.Lifecycle
-	Comment     *string
+	Name            *string
+	Data            *string
+	DNSZone         *string
+	DNSZoneTask     *DNSZone
+	DHCPReservation *DHCPReservation
+	DependsOn       *DNSRecord
+	Type            *string
+	TTL             *int64
+	Lifecycle       fi.Lifecycle
+	Comment         *string
 }
 
 var _ fi.CloudupTask = &DNSRecord{}
@@ -121,6 +122,9 @@ func (d *DNSRecord) GetDependencies(tasks map[string]fi.CloudupTask) []fi.Cloudu
 	if d.DNSZoneTask != nil {
 		deps = append(deps, d.DNSZoneTask)
 	}
+	if d.DHCPReservation != nil {
+		deps = append(deps, d.DHCPReservation)
+	}
 	if d.DependsOn != nil {
 		deps = append(deps, d.DependsOn)
 	}
@@ -130,6 +134,9 @@ func (d *DNSRecord) GetDependencies(tasks map[string]fi.CloudupTask) []fi.Cloudu
 func (d *DNSRecord) Find(c *fi.CloudupContext) (*DNSRecord, error) {
 	cloud := c.T.Cloud.(elemento.ElementoCloud)
 	client := cloud.DnsClient()
+	if d.DHCPReservation != nil {
+		d.Data = d.DHCPReservation.IPAddress
+	}
 
 	record, _, err := client.GetDnsRecord(context.TODO(), fi.ValueOf(d.DNSZone), fi.ValueOf(d.Name), fi.ValueOf(d.Type))
 	if err != nil {
@@ -143,15 +150,16 @@ func (d *DNSRecord) Find(c *fi.CloudupContext) (*DNSRecord, error) {
 	}
 
 	return &DNSRecord{
-		Name:        fi.PtrTo(record.Name),
-		Data:        fi.PtrTo(record.Value),
-		DNSZone:     d.DNSZone,
-		DNSZoneTask: d.DNSZoneTask,
-		DependsOn:   d.DependsOn,
-		Type:        fi.PtrTo(record.Type),
-		TTL:         fi.PtrTo(int64(record.TTL)),
-		Lifecycle:   d.Lifecycle,
-		Comment:     d.Comment,
+		Name:            fi.PtrTo(record.Name),
+		Data:            fi.PtrTo(record.Value),
+		DNSZone:         d.DNSZone,
+		DNSZoneTask:     d.DNSZoneTask,
+		DHCPReservation: d.DHCPReservation,
+		DependsOn:       d.DependsOn,
+		Type:            fi.PtrTo(record.Type),
+		TTL:             fi.PtrTo(int64(record.TTL)),
+		Lifecycle:       d.Lifecycle,
+		Comment:         d.Comment,
 	}, nil
 }
 
@@ -173,7 +181,12 @@ func (_ *DNSRecord) CheckChanges(actual, expected, changes *DNSRecord) error {
 		return fmt.Errorf("Elemento DNS currently supports only A records, got %q", fi.ValueOf(expected.Type))
 	}
 	if expected.Data == nil {
-		return fi.RequiredField("Data")
+		if expected.DHCPReservation == nil {
+			return fi.RequiredField("Data")
+		}
+		if expected.DHCPReservation.IPAddress == nil {
+			return fi.RequiredField("DHCPReservation.IPAddress")
+		}
 	}
 
 	return nil
@@ -184,6 +197,13 @@ func (_ *DNSRecord) RenderElemento(t *elemento.ElementoAPITarget, actual, expect
 	zoneName := fi.ValueOf(expected.DNSZone)
 	recordName := fi.ValueOf(expected.Name)
 	recordValue := fi.ValueOf(expected.Data)
+	if expected.DHCPReservation != nil {
+		recordValue = fi.ValueOf(expected.DHCPReservation.IPAddress)
+		expected.Data = fi.PtrTo(recordValue)
+	}
+	if recordValue == "" {
+		return fmt.Errorf("Elemento DNS record %q in zone %q has no IP address", recordName, zoneName)
+	}
 
 	if err := ensureElementoDNSRecord(context.TODO(), client, zoneName, recordName, recordValue); err != nil {
 		return err

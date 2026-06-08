@@ -105,20 +105,27 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 		}
 
 		serverGroup := elementotasks.ServerGroup{
-			Name:           fi.PtrTo(ig.Name),
-			Lifecycle:      b.Lifecycle,
-			SSHKeys:        sshkeyTasks,
-			Network:        b.LinkToNetwork(),
-			Count:          int(igSize),
-			Location:       ig.Spec.Subnets[0],
-			Size:           ig.Spec.MachineType,
-			Image:          ig.Spec.Image,
-			Architecture:   determineArchitecture(ig),
-			EnableIPv4:     true,
-			EnableIPv6:     false,
-			UserData:       userData,
-			Labels:         labels,
-			RootVolumeSize: rootVolumeSize,
+			Name:                 fi.PtrTo(ig.Name),
+			Lifecycle:            b.Lifecycle,
+			SSHKeys:              sshkeyTasks,
+			Network:              b.LinkToNetwork(),
+			Count:                int(igSize),
+			Location:             ig.Spec.Subnets[0],
+			Size:                 ig.Spec.MachineType,
+			Image:                ig.Spec.Image,
+			Architecture:         determineArchitecture(ig),
+			EnableIPv4:           true,
+			EnableIPv6:           false,
+			UserData:             userData,
+			Labels:               labels,
+			RootVolumeSize:       rootVolumeSize,
+			DHCPReservationTasks: make([]*elementotasks.DHCPReservation, 0, igSize),
+		}
+		for ordinal := int32(1); ordinal <= igSize; ordinal++ {
+			serverName := fmt.Sprintf("%s-%d", ig.Name, ordinal)
+			serverGroup.DHCPReservationTasks = append(serverGroup.DHCPReservationTasks, &elementotasks.DHCPReservation{
+				Name: fi.PtrTo(serverName),
+			})
 		}
 		if b.Cluster.PublishesDNSRecords() {
 			serverGroup.DNSZoneTask = dnsZoneTask

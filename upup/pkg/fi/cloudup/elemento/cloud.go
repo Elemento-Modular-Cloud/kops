@@ -52,6 +52,7 @@ type ElementoCloud interface {
 	NodeupClient(ctx context.Context) ecloud.NodeupClient
 
 	DnsClient() ecloud.DnsClient
+	DhcpClient() ecloud.DhcpClient
 }
 
 var _ fi.Cloud = &elementoCloudImplementation{}
@@ -155,6 +156,10 @@ func (c *elementoCloudImplementation) DNS() (dnsprovider.Interface, error) {
 
 func (c *elementoCloudImplementation) DnsClient() ecloud.DnsClient {
 	return c.Client.Dns
+}
+
+func (c *elementoCloudImplementation) DhcpClient() ecloud.DhcpClient {
+	return c.Client.Dhcp
 }
 
 func (c *elementoCloudImplementation) NetworkClient() ecloud.NetworkClient {

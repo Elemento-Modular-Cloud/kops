@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Elemento-Modular-Cloud/ecloud-go/ecloud"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/elementotasks"
@@ -74,26 +73,25 @@ func (b *ElementoModelContext) elementoDNSRecordTasksForInstanceGroup(ig *kops.I
 	zoneName := b.ClusterName()
 
 	var tasks []*elementotasks.DNSRecord
-	addRecord := func(recordName, recordValue string) {
+	addRecord := func(recordName string, reservation *elementotasks.DHCPReservation) {
 		tasks = append(tasks, &elementotasks.DNSRecord{
-			Name:        fi.PtrTo(trimElementoDNSZoneSuffix(recordName, zoneName)),
-			Data:        fi.PtrTo(recordValue),
-			DNSZone:     fi.PtrTo(zoneName),
-			DNSZoneTask: dnsZoneTask,
-			Type:        fi.PtrTo("A"),
-			TTL:         fi.PtrTo(elementoDNSRecordTTL),
-			Lifecycle:   lifecycle,
+			Name:            fi.PtrTo(trimElementoDNSZoneSuffix(recordName, zoneName)),
+			DNSZone:         fi.PtrTo(zoneName),
+			DNSZoneTask:     dnsZoneTask,
+			DHCPReservation: reservation,
+			Type:            fi.PtrTo("A"),
+			TTL:             fi.PtrTo(elementoDNSRecordTTL),
+			Lifecycle:       lifecycle,
 		})
 	}
 
 	for ordinal := int32(1); ordinal <= igSize; ordinal++ {
 		serverName := fmt.Sprintf("%s-%d", ig.Name, ordinal)
-		serverIP, _, _ := ecloud.StaticNetworkForServerName(serverName)
-		if serverIP == "" {
-			return nil, fmt.Errorf("static Elemento DNS address for server %q is empty", serverName)
+		reservation := &elementotasks.DHCPReservation{
+			Name: fi.PtrTo(serverName),
 		}
 
-		addRecord(fmt.Sprintf("%s.%s", serverName, clusterName), serverIP)
+		addRecord(fmt.Sprintf("%s.%s", serverName, clusterName), reservation)
 
 		if !ig.HasAPIServer() || ordinal != 1 {
 			continue
@@ -104,16 +102,16 @@ func (b *ElementoModelContext) elementoDNSRecordTasksForInstanceGroup(ig *kops.I
 			if apiPublicName == "" {
 				apiPublicName = "api." + clusterName
 			}
-			addRecord(apiPublicName, serverIP)
+			addRecord(apiPublicName, reservation)
 		}
 		if !b.UseLoadBalancerForInternalAPI() {
-			addRecord(b.Cluster.APIInternalName(), serverIP)
+			addRecord(b.Cluster.APIInternalName(), reservation)
 		}
-		addRecord("kops-controller.internal."+clusterName, serverIP)
+		addRecord("kops-controller.internal."+clusterName, reservation)
 
 		for _, etcdClusterName := range elementoEtcdClusterNames(b.Cluster.Spec.EtcdClusters) {
-			addRecord(fmt.Sprintf("node0.%s.%s", etcdClusterName, clusterName), serverIP)
-			addRecord(fmt.Sprintf("%s--%s--0.internal.%s", clusterName, etcdClusterName, clusterName), serverIP)
+			addRecord(fmt.Sprintf("node0.%s.%s", etcdClusterName, clusterName), reservation)
+			addRecord(fmt.Sprintf("%s--%s--0.internal.%s", clusterName, etcdClusterName, clusterName), reservation)
 		}
 	}
 
