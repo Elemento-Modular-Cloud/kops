@@ -184,9 +184,6 @@ func (_ *DNSRecord) CheckChanges(actual, expected, changes *DNSRecord) error {
 		if expected.DHCPReservation == nil {
 			return fi.RequiredField("Data")
 		}
-		if expected.DHCPReservation.IPAddress == nil {
-			return fi.RequiredField("DHCPReservation.IPAddress")
-		}
 	}
 
 	return nil
