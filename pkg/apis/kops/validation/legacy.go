@@ -171,11 +171,9 @@ func ValidateCluster(c *kops.Cluster, strict bool, vfsContext *vfs.VFSContext) f
 			k8sCloudProvider = "azure"
 		case kops.CloudProviderScaleway:
 			k8sCloudProvider = "external"
-<<<<<<< HEAD
 		case kops.CloudProviderLinode:
-=======
+      k8sCloudProvider = "linode"
 		case kops.CloudProviderElemento:
->>>>>>> 2fdf5a2a5a (delete vendor folder)
 			k8sCloudProvider = "external"
 		default:
 			// We already added an error above

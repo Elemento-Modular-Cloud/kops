@@ -431,6 +431,15 @@ func defaultMachineType(cloud fi.Cloud, cluster *kops.Cluster, ig *kops.Instance
 		case kops.InstanceGroupRoleNode:
 			return defaultNodeMachineTypeElemento, nil
 		}
+
+	case kops.CloudProviderElemento:
+		switch ig.Spec.Role {
+		case kops.InstanceGroupRoleControlPlane:
+			return defaultMasterMachineTypeElemento, nil
+
+		case kops.InstanceGroupRoleNode:
+			return defaultNodeMachineTypeElemento, nil
+		}
 	}
 
 	klog.V(2).Infof("Cannot set default MachineType for CloudProvider=%q, Role=%q", cluster.GetCloudProvider(), ig.Spec.Role)

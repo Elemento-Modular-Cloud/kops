@@ -453,6 +453,7 @@ func Convert_kops_ClusterSpec_To_v1alpha2_ClusterSpec(in *kops.ClusterSpec, out 
 	}
 	if in.CloudProvider.Linode != nil {
 		out.LegacyCloudProvider = string(kops.CloudProviderLinode)
+  }
 	if in.CloudProvider.Elemento != nil {
 		out.LegacyCloudProvider = string(kops.CloudProviderElemento)
 	}
