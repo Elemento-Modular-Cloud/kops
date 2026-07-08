@@ -9,18 +9,18 @@ spec:
       class: Classic
       type: Public
   authorization:
-    alwaysAllow: {}
+    rbac: {}
   channel: stable
   cloudConfig:
     awsEBSCSIDriver:
-      version: v1.38.1
+      version: v1.58.0
     manageStorageClasses: true
   cloudControllerManager:
     allocateNodeCIDRs: true
     clusterCIDR: 100.96.0.0/11
     clusterName: privatedns2.example.com
     configureCloudRoutes: false
-    image: registry.k8s.io/provider-aws/cloud-controller-manager:v1.31.0
+    image: registry.k8s.io/provider-aws/cloud-controller-manager:v1.32.5
     leaderElection:
       leaderElect: true
   cloudProvider: aws
@@ -29,8 +29,9 @@ spec:
   containerd:
     logLevel: info
     runc:
-      version: 1.2.4
-    version: 1.7.25
+      version: 1.3.5
+    sandboxImage: registry.k8s.io/pause:3.10.1
+    version: 2.2.4
   dnsZone: private.example.com
   etcdClusters:
   - backups:
@@ -41,7 +42,7 @@ spec:
     manager:
       backupRetentionDays: 90
     name: main
-    version: 3.5.17
+    version: 3.5.31
   - backups:
       backupStore: memfs://clusters.example.com/privatedns2.example.com/backups/etcd/events
     etcdMembers:
@@ -50,7 +51,7 @@ spec:
     manager:
       backupRetentionDays: 90
     name: events
-    version: 3.5.17
+    version: 3.5.31
   externalDns:
     provider: dns-controller
   iam:
@@ -62,19 +63,21 @@ spec:
     apiAudiences:
     - kubernetes.svc.default
     apiServerCount: 1
-    authorizationMode: AlwaysAllow
+    authorizationMode: Node,RBAC
     bindAddress: 0.0.0.0
     cloudProvider: external
     enableAdmissionPlugins:
-    - NamespaceLifecycle
-    - LimitRanger
-    - ServiceAccount
     - DefaultStorageClass
     - DefaultTolerationSeconds
+    - LimitRanger
     - MutatingAdmissionWebhook
-    - ValidatingAdmissionWebhook
+    - NamespaceLifecycle
     - NodeRestriction
     - ResourceQuota
+    - RuntimeClass
+    - ServiceAccount
+    - ValidatingAdmissionPolicy
+    - ValidatingAdmissionWebhook
     etcdServers:
     - https://127.0.0.1:4001
     etcdServersOverrides:
@@ -120,7 +123,7 @@ spec:
     nodeLocalDNS:
       cpuRequest: 25m
       enabled: false
-      image: registry.k8s.io/dns/k8s-dns-node-cache:1.23.0
+      image: registry.k8s.io/dns/k8s-dns-node-cache:1.26.0
       memoryRequest: 5Mi
     provider: CoreDNS
     serverIP: 100.64.0.10
@@ -145,7 +148,6 @@ spec:
     evictionHard: memory.available<100Mi,nodefs.available<10%,nodefs.inodesFree<5%,imagefs.available<10%,imagefs.inodesFree<5%
     kubeconfigPath: /var/lib/kubelet/kubeconfig
     logLevel: 2
-    podInfraContainerImage: registry.k8s.io/pause:3.9
     podManifestPath: /etc/kubernetes/manifests
     protectKernelDefaults: true
     registerSchedulable: true
@@ -165,7 +167,6 @@ spec:
     evictionHard: memory.available<100Mi,nodefs.available<10%,nodefs.inodesFree<5%,imagefs.available<10%,imagefs.inodesFree<5%
     kubeconfigPath: /var/lib/kubelet/kubeconfig
     logLevel: 2
-    podInfraContainerImage: registry.k8s.io/pause:3.9
     podManifestPath: /etc/kubernetes/manifests
     protectKernelDefaults: true
     registerSchedulable: true
@@ -179,6 +180,7 @@ spec:
   nodeTerminationHandler:
     cpuRequest: 50m
     deleteSQSMsgIfNodeNotFound: false
+    enableOutOfServiceTaint: false
     enableRebalanceDraining: false
     enableRebalanceMonitoring: false
     enableScheduledEventDraining: true
@@ -190,7 +192,7 @@ spec:
     podTerminationGracePeriod: -1
     prometheusEnable: false
     taintNode: false
-    version: v1.22.0
+    version: v1.25.5
   nonMasqueradeCIDR: 100.64.0.0/10
   podCIDR: 100.96.0.0/11
   secretStore: memfs://clusters.example.com/privatedns2.example.com/secrets

@@ -45,6 +45,7 @@ const (
 	TagKubernetesClusterNamePrefix   = "KubernetesCluster"
 	TagKubernetesClusterMasterPrefix = "KubernetesCluster-Master"
 	TagKubernetesInstanceGroup       = "kops-instancegroup"
+	TagKubernetesInstanceRole        = "kops-instance-role"
 )
 
 type DOInstanceGroup struct {
@@ -52,11 +53,6 @@ type DOInstanceGroup struct {
 	InstanceGroupName string
 	GroupType         string   // will be either "master" or "worker"
 	Members           []string // will store the droplet names that matches.
-}
-
-// TokenSource implements oauth2.TokenSource
-type TokenSource struct {
-	AccessToken string
 }
 
 // DOCloud exposes all the interfaces required to operate on DigitalOcean resources
@@ -87,7 +83,7 @@ var readBackoff = wait.Backoff{
 }
 
 // static compile time check to validate DOCloud's fi.Cloud Interface.
-var _ fi.Cloud = &doCloudImplementation{}
+var _ fi.Cloud = (*doCloudImplementation)(nil)
 
 // doCloudImplementation holds the godo client object to interact with DO resources.
 type doCloudImplementation struct {
@@ -99,14 +95,6 @@ type doCloudImplementation struct {
 	region string
 }
 
-// Token() returns oauth2.Token
-func (t *TokenSource) Token() (*oauth2.Token, error) {
-	token := &oauth2.Token{
-		AccessToken: t.AccessToken,
-	}
-	return token, nil
-}
-
 // NewDOCloud returns a Cloud, expecting the env var DIGITALOCEAN_ACCESS_TOKEN
 // NewDOCloud will return an err if DIGITALOCEAN_ACCESS_TOKEN is not defined
 func NewDOCloud(region string) (DOCloud, error) {
@@ -115,12 +103,8 @@ func NewDOCloud(region string) (DOCloud, error) {
 		return nil, errors.New("DIGITALOCEAN_ACCESS_TOKEN is required")
 	}
 
-	tokenSource := &TokenSource{
-		AccessToken: accessToken,
-	}
-
-	oauthClient := oauth2.NewClient(context.TODO(), tokenSource)
-	client := godo.NewClient(oauthClient)
+	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: accessToken})
+	client := godo.NewClient(oauth2.NewClient(context.TODO(), tokenSource))
 
 	return &doCloudImplementation{
 		Client: client,
@@ -153,14 +137,14 @@ func (c *doCloudImplementation) DeleteInstance(i *cloudinstances.CloudInstance) 
 
 	_, _, err = c.Client.DropletActions.Shutdown(context.TODO(), dropletID)
 	if err != nil {
-		return fmt.Errorf("error stopping instance %q: %v", dropletID, err)
+		return fmt.Errorf("error stopping instance %d: %v", dropletID, err)
 	}
 
 	// Wait for 5 min to stop the instance
 	for i := 0; i < 5; i++ {
 		droplet, _, err := c.Client.Droplets.Get(context.TODO(), dropletID)
 		if err != nil {
-			return fmt.Errorf("error describing instance %q: %v", dropletID, err)
+			return fmt.Errorf("error describing instance %d: %v", dropletID, err)
 		}
 
 		klog.V(8).Infof("stopping DO instance %q, current Status: %q", droplet, droplet.Status)
@@ -178,10 +162,10 @@ func (c *doCloudImplementation) DeleteInstance(i *cloudinstances.CloudInstance) 
 
 	_, err = c.Client.Droplets.Delete(context.TODO(), dropletID)
 	if err != nil {
-		return fmt.Errorf("error stopping instance %q: %v", dropletID, err)
+		return fmt.Errorf("error stopping instance %d: %v", dropletID, err)
 	}
 
-	klog.V(8).Infof("deleted droplet instance %q", dropletID)
+	klog.V(8).Infof("deleted droplet instance %d", dropletID)
 
 	return nil
 }
@@ -295,7 +279,7 @@ func (c *doCloudImplementation) GetApiIngressStatus(cluster *kops.Cluster) ([]fi
 			return false, fmt.Errorf("LoadBalancers.List returned error: %v", err)
 		}
 
-		lbName := "api-" + strings.Replace(cluster.Name, ".", "-", -1)
+		lbName := "api-" + strings.ReplaceAll(cluster.Name, ".", "-")
 
 		for _, lb := range loadBalancers {
 			if lb.Name == lbName {
@@ -352,7 +336,7 @@ func findEtcdStatus(c *doCloudImplementation, cluster *kops.Cluster) ([]kops.Etc
 			klog.V(8).Infof("findEtcdStatus status (from cloud): checking if volume with tag %q belongs to cluster", myTag)
 			// check if volume belongs to this cluster.
 			// tag will be in the format "KubernetesCluster:dev5-k8s-local" (where clusterName is dev5.k8s.local)
-			clusterName := strings.Replace(cluster.Name, ".", "-", -1)
+			clusterName := strings.ReplaceAll(cluster.Name, ".", "-")
 			if strings.Contains(myTag, fmt.Sprintf("%s:%s", TagKubernetesClusterNamePrefix, clusterName)) {
 				klog.V(10).Infof("findEtcdStatus cluster comparison matched for tag: %v", myTag)
 				// this volume belongs to our cluster, add this to our etcdClusterSpec.
@@ -400,11 +384,12 @@ func findEtcdStatus(c *doCloudImplementation, cluster *kops.Cluster) ([]kops.Etc
 
 func (c *doCloudImplementation) getEtcdClusterSpec(volumeName string, dropletName string) (*etcd.EtcdClusterSpec, error) {
 	var clusterKey string
-	if strings.Contains(volumeName, "etcd-main") {
+	switch {
+	case strings.Contains(volumeName, "etcd-main"):
 		clusterKey = "main"
-	} else if strings.Contains(volumeName, "etcd-events") {
+	case strings.Contains(volumeName, "etcd-events"):
 		clusterKey = "events"
-	} else {
+	default:
 		return nil, fmt.Errorf("could not determine etcd cluster type for volume: %s", volumeName)
 	}
 
@@ -453,7 +438,7 @@ func findInstanceGroups(c *doCloudImplementation, clusterName string) ([]DOInsta
 	var result []DOInstanceGroup
 	instanceGroupMap := make(map[string][]string) // map of instance group name with droplet ids
 
-	clusterTag := "KubernetesCluster:" + strings.Replace(clusterName, ".", "-", -1)
+	clusterTag := "KubernetesCluster:" + strings.ReplaceAll(clusterName, ".", "-")
 	droplets, err := c.GetAllDropletsByTag(clusterTag)
 	if err != nil {
 		return nil, fmt.Errorf("get all droplets for tag %s returned error. Error=%v", clusterTag, err)
@@ -503,8 +488,9 @@ func matchInstanceGroup(name string, clusterName string, instancegroups []*kops.
 	for _, g := range instancegroups {
 		var groupName string
 
-		switch g.Spec.Role {
-		case kops.InstanceGroupRoleControlPlane, kops.InstanceGroupRoleNode:
+		switch {
+		case g.Spec.Role.HasControlPlane(),
+			g.Spec.Role.HasNode():
 			groupName = clusterName + "-" + g.ObjectMeta.Name
 		default:
 			klog.Warningf("Ignoring InstanceGroup of unknown role %q", g.Spec.Role)

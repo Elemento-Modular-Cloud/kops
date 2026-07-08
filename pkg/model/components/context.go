@@ -27,7 +27,6 @@ import (
 	kopsmodel "k8s.io/kops/pkg/apis/kops/model"
 	"k8s.io/kops/pkg/apis/kops/util"
 	"k8s.io/kops/pkg/assets"
-	"k8s.io/kops/pkg/k8sversion"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/util/pkg/vfs"
 
@@ -140,21 +139,17 @@ func Image(component string, clusterSpec *kops.ClusterSpec, assetsBuilder *asset
 		return "", fmt.Errorf("unable to parse assets as assetBuilder is not defined")
 	}
 
-	kubernetesVersion, err := k8sversion.Parse(clusterSpec.KubernetesVersion)
+	kubernetesVersion, err := kopsmodel.ParseKubernetesVersion(clusterSpec.KubernetesVersion)
 	if err != nil {
 		return "", err
 	}
 
 	imageName := component
 
-	if !kopsmodel.IsBaseURL(clusterSpec.KubernetesVersion) {
+	if !kubernetesVersion.IsBaseURL() {
 		image := "registry.k8s.io/" + imageName + ":" + "v" + kubernetesVersion.String()
 
-		image, err := assetsBuilder.RemapImage(image)
-		if err != nil {
-			return "", fmt.Errorf("unable to remap container %q: %v", image, err)
-		}
-		return image, nil
+		return assetsBuilder.RemapImage(image), nil
 	}
 
 	// The simple name is valid when pulling.  But if we

@@ -18,7 +18,10 @@ package azuretasks
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/arm"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	network "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/network/armnetwork"
 	"k8s.io/klog/v2"
@@ -35,6 +38,10 @@ type NetworkSecurityGroup struct {
 	ResourceGroup *ResourceGroup
 
 	SecurityRules []*NetworkSecurityRule
+
+	// ApplicationSecurityGroups are the ASGs referenced by security rules.
+	// This field is used for dependency ordering and is not rendered to the cloud.
+	ApplicationSecurityGroups []*ApplicationSecurityGroup
 
 	Tags map[string]*string
 }
@@ -67,6 +74,10 @@ func (nsg *NetworkSecurityGroup) Find(c *fi.CloudupContext) (*NetworkSecurityGro
 	if found == nil {
 		return nil, nil
 	}
+	if found.Properties != nil && found.Properties.ProvisioningState != nil && *found.Properties.ProvisioningState == network.ProvisioningStateFailed {
+		klog.Warningf("found network security group %q in failed provisioning state", *nsg.Name)
+		return nil, nil
+	}
 
 	actual := &NetworkSecurityGroup{
 		Name:      nsg.Name,
@@ -76,6 +87,14 @@ func (nsg *NetworkSecurityGroup) Find(c *fi.CloudupContext) (*NetworkSecurityGro
 		},
 		ID:   found.ID,
 		Tags: found.Tags,
+		// ApplicationSecurityGroups is for dependency ordering only and is not rendered to the cloud.
+		ApplicationSecurityGroups: nsg.ApplicationSecurityGroups,
+	}
+	expectedRules := make(map[string]*NetworkSecurityRule)
+	for _, rule := range nsg.SecurityRules {
+		if rule.Name != nil {
+			expectedRules[*rule.Name] = rule
+		}
 	}
 	for _, rule := range found.Properties.SecurityRules {
 		nsr := &NetworkSecurityRule{
@@ -89,35 +108,39 @@ func (nsg *NetworkSecurityGroup) Find(c *fi.CloudupContext) (*NetworkSecurityGro
 			DestinationAddressPrefix: rule.Properties.DestinationAddressPrefix,
 			DestinationPortRange:     rule.Properties.DestinationPortRange,
 		}
-		if rule.Properties.SourceAddressPrefixes != nil && len(rule.Properties.SourceAddressPrefixes) > 0 {
+		// Map the source address back to the referenced public IP so unchanged rules compare as equal.
+		if expected := expectedRules[fi.ValueOf(nsr.Name)]; expected != nil && expected.SourcePublicIPAddress != nil {
+			pipAddress := expected.SourcePublicIPAddress.IPAddress
+			if pipAddress != nil && nsr.SourceAddressPrefix != nil && *nsr.SourceAddressPrefix == *pipAddress {
+				nsr.SourcePublicIPAddress = expected.SourcePublicIPAddress
+				nsr.SourceAddressPrefix = nil
+			}
+		}
+		if len(rule.Properties.SourceAddressPrefixes) > 0 {
 			nsr.SourceAddressPrefixes = rule.Properties.SourceAddressPrefixes
 		}
-		if rule.Properties.SourceApplicationSecurityGroups != nil && len(rule.Properties.SourceApplicationSecurityGroups) > 0 {
+		if len(rule.Properties.SourceApplicationSecurityGroups) > 0 {
 			var sasgs []*string
 			for _, sasg := range rule.Properties.SourceApplicationSecurityGroups {
-				asg, err := azure.ParseApplicationSecurityGroupID(*sasg.ID)
+				asg, err := arm.ParseResourceID(*sasg.ID)
 				if err != nil {
-					if err != nil {
-						return nil, err
-					}
+					return nil, err
 				}
-				sasgs = append(sasgs, &asg.ApplicationSecurityGroupName)
+				sasgs = append(sasgs, to.Ptr(strings.ToLower(asg.Name)))
 			}
 			nsr.SourceApplicationSecurityGroupNames = sasgs
 		}
-		if rule.Properties.DestinationAddressPrefixes != nil && len(rule.Properties.DestinationAddressPrefixes) > 0 {
+		if len(rule.Properties.DestinationAddressPrefixes) > 0 {
 			nsr.DestinationAddressPrefixes = rule.Properties.DestinationAddressPrefixes
 		}
-		if rule.Properties.DestinationApplicationSecurityGroups != nil && len(rule.Properties.DestinationApplicationSecurityGroups) > 0 {
+		if len(rule.Properties.DestinationApplicationSecurityGroups) > 0 {
 			var dasgs []*string
 			for _, dasg := range rule.Properties.DestinationApplicationSecurityGroups {
-				asg, err := azure.ParseApplicationSecurityGroupID(*dasg.ID)
+				asg, err := arm.ParseResourceID(*dasg.ID)
 				if err != nil {
-					if err != nil {
-						return nil, err
-					}
+					return nil, err
 				}
-				dasgs = append(dasgs, &asg.ApplicationSecurityGroupName)
+				dasgs = append(dasgs, to.Ptr(strings.ToLower(asg.Name)))
 			}
 			nsr.DestinationApplicationSecurityGroupNames = dasgs
 		}
@@ -173,6 +196,13 @@ func (*NetworkSecurityGroup) RenderAzure(t *azure.AzureAPITarget, a, e, changes 
 		Tags:     e.Tags,
 	}
 	for _, nsr := range e.SecurityRules {
+		sourceAddressPrefix := nsr.SourceAddressPrefix
+		if nsr.SourcePublicIPAddress != nil {
+			if nsr.SourcePublicIPAddress.IPAddress == nil {
+				return fmt.Errorf("public IP address %q referenced by security rule %q does not have an allocated address", fi.ValueOf(nsr.SourcePublicIPAddress.Name), fi.ValueOf(nsr.Name))
+			}
+			sourceAddressPrefix = nsr.SourcePublicIPAddress.IPAddress
+		}
 		securityRule := network.SecurityRule{
 			Name: nsr.Name,
 			Properties: &network.SecurityRulePropertiesFormat{
@@ -180,7 +210,7 @@ func (*NetworkSecurityGroup) RenderAzure(t *azure.AzureAPITarget, a, e, changes 
 				Access:                     &nsr.Access,
 				Direction:                  &nsr.Direction,
 				Protocol:                   &nsr.Protocol,
-				SourceAddressPrefix:        nsr.SourceAddressPrefix,
+				SourceAddressPrefix:        sourceAddressPrefix,
 				SourceAddressPrefixes:      nsr.SourceAddressPrefixes,
 				SourcePortRange:            nsr.SourcePortRange,
 				DestinationAddressPrefix:   nsr.DestinationAddressPrefix,
@@ -246,10 +276,16 @@ type NetworkSecurityRule struct {
 	DestinationAddressPrefix                 *string
 	DestinationApplicationSecurityGroupNames []*string
 	DestinationPortRange                     *string
+
+	// SourcePublicIPAddress restricts the rule source to the referenced public IP's allocated address.
+	SourcePublicIPAddress *PublicIPAddress
 }
 
-var _ fi.CloudupHasDependencies = &NetworkSecurityRule{}
+var _ fi.CloudupHasDependencies = (*NetworkSecurityRule)(nil)
 
 func (e *NetworkSecurityRule) GetDependencies(tasks map[string]fi.CloudupTask) []fi.CloudupTask {
+	if e.SourcePublicIPAddress != nil {
+		return []fi.CloudupTask{e.SourcePublicIPAddress}
+	}
 	return nil
 }

@@ -100,15 +100,17 @@ type AutoscalingGroup struct {
 	TargetGroups []*TargetGroup
 	// CapacityRebalance makes ASG proactively replace spot instances when ASG receives a rebalance recommendation
 	CapacityRebalance *bool
-	// WarmPool is the WarmPool config for the ASG
-	WarmPool *WarmPool
+
+	// WarmPool is the WarmPool config for the ASG.
+	// It is marked to be ignored in JSON marshalling to avoid a circular dependency.
+	WarmPool *WarmPool `json:"-"`
 
 	deletions []fi.CloudupDeletion
 }
 
-var _ fi.CloudupProducesDeletions = &AutoscalingGroup{}
-var _ fi.CompareWithID = &AutoscalingGroup{}
-var _ fi.CloudupTaskNormalize = &AutoscalingGroup{}
+var _ fi.CloudupProducesDeletions = (*AutoscalingGroup)(nil)
+var _ fi.CompareWithID = (*AutoscalingGroup)(nil)
+var _ fi.CloudupTaskNormalize = (*AutoscalingGroup)(nil)
 
 // CompareWithID returns the ID of the ASG
 func (e *AutoscalingGroup) CompareWithID() *string {
@@ -429,6 +431,7 @@ func (v *AutoscalingGroup) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *Autos
 		if e.UseMixedInstancesPolicy() {
 			request.MixedInstancesPolicy = &autoscalingtypes.MixedInstancesPolicy{
 				InstancesDistribution: &autoscalingtypes.InstancesDistribution{
+					OnDemandAllocationStrategy:          e.MixedOnDemandAllocationStrategy,
 					OnDemandPercentageAboveBaseCapacity: e.MixedOnDemandAboveBase,
 					OnDemandBaseCapacity:                e.MixedOnDemandBase,
 					SpotAllocationStrategy:              e.MixedSpotAllocationStrategy,
@@ -521,6 +524,10 @@ func (v *AutoscalingGroup) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *Autos
 			changes.LaunchTemplate = nil
 		}
 
+		if changes.MixedOnDemandAllocationStrategy != nil {
+			setup(request).InstancesDistribution.OnDemandAllocationStrategy = e.MixedOnDemandAllocationStrategy
+			changes.MixedOnDemandAllocationStrategy = nil
+		}
 		if changes.MixedOnDemandAboveBase != nil {
 			setup(request).InstancesDistribution.OnDemandPercentageAboveBaseCapacity = e.MixedOnDemandAboveBase
 			changes.MixedOnDemandAboveBase = nil
@@ -867,24 +874,6 @@ func (e *AutoscalingGroup) getLBsToDetach(currentLBs []*ClassicLoadBalancer) []s
 	return lbsToDetach
 }
 
-// getTGsToDetach loops through the currently set LBs and builds a list of
-// target groups to be detached from the Autoscaling Group
-func (e *AutoscalingGroup) getTGsToDetach(currentTGs []*TargetGroup) []*string {
-	tgsToDetach := []*string{}
-	desiredTGs := map[string]bool{}
-
-	for _, v := range e.TargetGroups {
-		desiredTGs[*v.ARN] = true
-	}
-
-	for _, v := range currentTGs {
-		if _, ok := desiredTGs[*v.ARN]; !ok {
-			tgsToDetach = append(tgsToDetach, v.ARN)
-		}
-	}
-	return tgsToDetach
-}
-
 // sliceChunks returns a chunked slice
 func sliceChunks(slice []string, chunkSize int) [][]string {
 	var chunks [][]string
@@ -1124,7 +1113,7 @@ type deleteAutoscalingTargetGroupAttachment struct {
 	targetGroupARN       string
 }
 
-var _ fi.CloudupDeletion = &deleteAutoscalingTargetGroupAttachment{}
+var _ fi.CloudupDeletion = (*deleteAutoscalingTargetGroupAttachment)(nil)
 
 func buildDeleteAutoscalingTargetGroupAttachment(autoScalingGroupName string, targetGroupARN string) *deleteAutoscalingTargetGroupAttachment {
 	d := &deleteAutoscalingTargetGroupAttachment{}

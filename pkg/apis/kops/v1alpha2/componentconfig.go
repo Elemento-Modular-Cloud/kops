@@ -57,7 +57,8 @@ type KubeletConfigSpec struct {
 	// HostnameOverride is the hostname used to identify the kubelet instead of the actual hostname.
 	HostnameOverride string `json:"hostnameOverride,omitempty" flag:"hostname-override"`
 	// PodInfraContainerImage is the image whose network/ipc containers in each pod will use.
-	PodInfraContainerImage string `json:"podInfraContainerImage,omitempty" flag:"pod-infra-container-image"`
+	// DEPRECATED: Image garbage collector will get sandbox image information from CRI.
+	PodInfraContainerImage string `json:"podInfraContainerImage,omitempty"`
 	// SeccompDefault enables the use of `RuntimeDefault` as the default seccomp profile for all workloads.
 	SeccompDefault *bool `json:"seccompDefault,omitempty" flag:"seccomp-default"`
 	// SeccompProfileRoot is the directory path for seccomp profiles.
@@ -132,11 +133,16 @@ type KubeletConfigSpec struct {
 	// computed (such as IPSEC).
 	NetworkPluginMTU *int32 `json:"networkPluginMTU,omitempty" flag:"network-plugin-mtu"`
 	// imageMinimumGCAge is the minimum age for an unused image before it is garbage collected. Default: "2m"
-	ImageMinimumGCAge *string `json:"imageMinimumGCAge,omitempty" flag:"image-minimum-gc-age"`
+	ImageMinimumGCAge *metav1.Duration `json:"imageMinimumGCAge,omitempty"`
 	// imageMaximumGCAge is the maximum age an image can be unused before it is garbage collected.
 	// The default of this field is "0s", which disables this field--meaning images won't be garbage
 	// collected based on being unused for too long. Default: "0s" (disabled)
-	ImageMaximumGCAge *string `json:"imageMaximumGCAge,omitempty" flag:"image-maximum-gc-age"`
+	ImageMaximumGCAge *metav1.Duration `json:"imageMaximumGCAge,omitempty"`
+	// MaxParallelImagePulls sets the maximum number of image pulls in parallel.
+	// This field cannot be set if SerializeImagePulls is true.
+	// Setting it to nil means no limit.
+	// Default: nil
+	MaxParallelImagePulls *int32 `json:"maxParallelImagePulls,omitempty"`
 	// ImageGCHighThresholdPercent is the percent of disk usage after which
 	// image garbage collection is always run.
 	ImageGCHighThresholdPercent *int32 `json:"imageGCHighThresholdPercent,omitempty" flag:"image-gc-high-threshold"`
@@ -213,9 +219,10 @@ type KubeletConfigSpec struct {
 	// rotateCertificates enables client certificate rotation.
 	RotateCertificates *bool `json:"rotateCertificates,omitempty" flag:"rotate-certificates"`
 	// Default kubelet behaviour for kernel tuning. If set, kubelet errors if any of kernel tunables is different than kubelet defaults.
-	// (DEPRECATED: This parameter should be set via the config file specified by the Kubelet's --config flag.
+	// DEPRECATED: This parameter should be set via the config file specified by the Kubelet's --config flag.
 	ProtectKernelDefaults *bool `json:"protectKernelDefaults,omitempty" flag:"protect-kernel-defaults"`
-	// CgroupDriver allows the explicit setting of the kubelet cgroup driver. If omitted, defaults to cgroupfs.
+	// CgroupDriver allows the explicit setting of the kubelet cgroup driver.
+	// DEPRECATED: The cgroup driver is automatically detected.
 	CgroupDriver string `json:"cgroupDriver,omitempty" flag:"cgroup-driver"`
 	// HousekeepingInterval allows to specify interval between container housekeepings.
 	HousekeepingInterval *metav1.Duration `json:"housekeepingInterval,omitempty" flag:"housekeeping-interval"`
@@ -243,6 +250,16 @@ type KubeletConfigSpec struct {
 	// MemorySwapBehavior defines how swap is used by container workloads.
 	// Supported values: LimitedSwap, "UnlimitedSwap.
 	MemorySwapBehavior string `json:"memorySwapBehavior,omitempty"`
+	// CrashLoopBackOffMaxContainerRestartPeriod is the maximum duration the backoff delay can accrue to for container restarts, minimum 1 second, maximum 300 seconds. If not set, defaults to the internal crashloopbackoff maximum (300s).
+	CrashLoopBackOffMaxContainerRestartPeriod *metav1.Duration `json:"crashLoopBackOffMaxContainerRestartPeriod,omitempty"`
+	// KubeAPIQPS Burst to use while talking with kubernetes apiserver. (default 50)
+	KubeAPIQPS *int32 `json:"kubeAPIQPS,omitempty" flag:"kube-api-qps"`
+	// EventRecordQPS is the maximum event creations per second. If 0, there is no limit enforced.
+	// Default: 50
+	EventRecordQPS *int32 `json:"eventRecordQPS,omitempty"`
+	// NodeLeaseDurationSeconds is the duration the Kubelet will set on its corresponding Lease, in seconds.
+	// Default: 40
+	NodeLeaseDurationSeconds *int32 `json:"nodeLeaseDurationSeconds,omitempty"`
 }
 
 // KubeProxyConfig defines the configuration for a proxy
@@ -302,6 +319,9 @@ type KubeAPIServerConfig struct {
 	LogLevel int32 `json:"logLevel,omitempty" flag:"v" flag-empty:"0"`
 	// CloudProvider is the name of the cloudProvider we are using, aws, gce etcd
 	CloudProvider string `json:"cloudProvider,omitempty" flag:"cloud-provider"`
+	// CompactionInterval is an interval of requesting compaction from apiserver.
+	// If the value is 0, no compaction will be issued.
+	CompactionInterval *metav1.Duration `json:"compactionInterval,omitempty" flag:"etcd-compaction-interval"`
 	// SecurePort is the port the kube runs on
 	SecurePort int32 `json:"securePort,omitempty" flag:"secure-port"`
 	// InsecurePort is the port the insecure api runs
@@ -477,6 +497,8 @@ type KubeAPIServerConfig struct {
 	RequestheaderAllowedNames []string `json:"requestheaderAllowedNames,omitempty" flag:"requestheader-allowed-names"`
 	// FeatureGates is set of key=value pairs that describe feature gates for alpha/experimental features.
 	FeatureGates map[string]string `json:"featureGates,omitempty" flag:"feature-gates"`
+	// GoawayChance is the probability that send a GOAWAY to HTTP/2 clients. Default to 0, means never send GOAWAY. Max is 0.02 to prevent break the apiserver.
+	GoawayChance string `json:"goawayChance,omitempty" flag:"goaway-chance"`
 	// MaxRequestsInflight The maximum number of non-mutating requests in flight at a given time.
 	MaxRequestsInflight int32 `json:"maxRequestsInflight,omitempty" flag:"max-requests-inflight" flag-empty:"0"`
 	// MaxMutatingRequestsInflight The maximum number of mutating requests in flight at a given time. Defaults to 200
@@ -556,6 +578,9 @@ type KubeAPIServerConfig struct {
 	DefaultNotReadyTolerationSeconds *int64 `json:"defaultNotReadyTolerationSeconds,omitempty" flag:"default-not-ready-toleration-seconds"`
 	// DefaultUnreachableTolerationSeconds
 	DefaultUnreachableTolerationSeconds *int64 `json:"defaultUnreachableTolerationSeconds,omitempty" flag:"default-unreachable-toleration-seconds"`
+
+	// DeleteCollectionWorkers indicates the number of workers spawned for DeleteCollection call. These are used to speed up namespace cleanup.
+	DeleteCollectionWorkers int `json:"deleteCollectionWorkers,omitempty" flag:"delete-collection-workers" flag-empty:"0"`
 
 	// Env allows users to pass in env variables to the apiserver container.
 	// This can be useful to control some environment runtime settings, such as GOMEMLIMIT and GOCG to tweak the memory settings of the apiserver
@@ -760,6 +785,8 @@ type CloudControllerManagerConfig struct {
 	NodeStatusUpdateFrequency *metav1.Duration `json:"nodeStatusUpdateFrequency,omitempty" flag:"node-status-update-frequency"`
 	// ConcurrentNodeSyncs is the number of workers concurrently synchronizing nodes. (default: 1)
 	ConcurrentNodeSyncs *int32 `json:"concurrentNodeSyncs,omitempty" flag:"concurrent-node-syncs"`
+	// AzureNodeManagerImage is the OCI image of the Azure cloud node manager.
+	AzureNodeManagerImage string `json:"azureNodeManagerImage,omitempty"`
 }
 
 // KubeSchedulerConfig is the configuration for the kube-scheduler
@@ -972,6 +999,10 @@ type CloudConfiguration struct {
 	// one per ELB (AWS only).
 	// +k8s:conversion-gen=false
 	ElbSecurityGroup *string `json:"elbSecurityGroup,omitempty"`
+	// NLBSecurityGroupMode determines if the Cloud Controller Manager supports and manages
+	// security groups for Network Load Balancers (AWS only). Valid value: "Managed"
+	// +k8s:conversion-gen=false
+	NLBSecurityGroupMode *string `json:"nlbSecurityGroupMode,omitempty"`
 	// VSphereUsername is unused.
 	// +k8s:conversion-gen=false
 	VSphereUsername *string `json:"vSphereUsername,omitempty"`
@@ -1050,6 +1081,11 @@ type EBSCSIDriverSpec struct {
 type PDCSIDriver struct {
 	// Enabled enables the GCP PD CSI driver
 	Enabled *bool `json:"enabled,omitempty"`
+	// Version is the container image tag used.
+	// Default: The latest stable release which is compatible with your Kubernetes version
+	Version *string `json:"version,omitempty"`
+	// Default StorageClassName is the name of the default StorageClass created for GCP PD CSI driver.
+	DefaultStorageClassName *string `json:"defaultStorageClassName,omitempty"`
 }
 
 // SnapshotControllerConfig is the config for the CSI Snapshot Controller
@@ -1084,6 +1120,11 @@ type NodeTerminationHandlerSpec struct {
 	// EnableRebalanceDraining makes node termination handler drain nodes when the rebalance recommendation notice is received.
 	// Default: false
 	EnableRebalanceDraining *bool `json:"enableRebalanceDraining,omitempty"`
+
+	// EnableOutOfServiceTaint makes node termination handler apply the node.kubernetes.io/out-of-service taint
+	// to nodes during non-graceful shutdown, allowing Kubernetes to quickly detach volumes and reschedule pods.
+	// Default: false
+	EnableOutOfServiceTaint *bool `json:"enableOutOfServiceTaint,omitempty"`
 
 	// EnablePrometheusMetrics enables the "/metrics" endpoint.
 	// Default: false
@@ -1280,6 +1321,18 @@ type LoadBalancerControllerSpec struct {
 	// EnableShield specifies whether the controller can enable Shield Advanced.
 	// Default: false
 	EnableShield bool `json:"enableShield,omitempty"`
+	// CPURequest, cpu request compute resource for AWS Load Balancer Controller.
+	// Default: 100m
+	CPURequest *resource.Quantity `json:"cpuRequest,omitempty"`
+	// CPULimit, cpu limit compute resource for AWS Load Balancer Controller.
+	// Default: 200m
+	CPULimit *resource.Quantity `json:"cpuLimit,omitempty"`
+	// MemoryRequest, memory request compute resource for AWS Load Balancer Controller.
+	// Default: 200Mi
+	MemoryRequest *resource.Quantity `json:"memoryRequest,omitempty"`
+	// MemoryLimit, memory limit compute resource for AWS Load Balancer Controller.
+	// Default: 500Mi
+	MemoryLimit *resource.Quantity `json:"memoryLimit,omitempty"`
 }
 
 // HasAdmissionController checks if a specific admission controller is enabled

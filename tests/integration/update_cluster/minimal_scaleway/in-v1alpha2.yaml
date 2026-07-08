@@ -61,7 +61,7 @@ metadata:
     kops.k8s.io/cluster: scw-minimal.k8s.local
   name: control-plane-fr-par-1
 spec:
-  image: ubuntu_focal
+  image: ubuntu_resolute
   machineType: DEV1-M
   maxSize: 1
   minSize: 1
@@ -79,7 +79,7 @@ metadata:
     kops.k8s.io/cluster: scw-minimal.k8s.local
   name: nodes-fr-par-1
 spec:
-  image: ubuntu_focal
+  image: ubuntu_resolute
   machineType: DEV1-M
   maxSize: 1
   minSize: 1

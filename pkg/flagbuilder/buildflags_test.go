@@ -17,6 +17,7 @@ limitations under the License.
 package flagbuilder
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -94,12 +95,6 @@ func TestKubeletConfigSpec(t *testing.T) {
 		},
 		{
 			Config: &kops.KubeletConfigSpec{
-				EvictionPressureTransitionPeriod: &metav1.Duration{Duration: 5 * time.Second},
-			},
-			Expected: "--eviction-pressure-transition-period=5s",
-		},
-		{
-			Config: &kops.KubeletConfigSpec{
 				LogLevel: fi.PtrTo(int32(0)),
 			},
 			Expected: "",
@@ -111,41 +106,17 @@ func TestKubeletConfigSpec(t *testing.T) {
 			Expected: "--v=2",
 		},
 
-		// Test string pointers without the "flag-include-empty" tag
+		// Fields that have been migrated to the kubelet config file emit no flag.
 		{
 			Config: &kops.KubeletConfigSpec{
-				EvictionHard: fi.PtrTo("memory.available<100Mi"),
-			},
-			Expected: "--eviction-hard=memory.available<100Mi",
-		},
-		{
-			Config: &kops.KubeletConfigSpec{
-				EvictionHard: fi.PtrTo(""),
+				EvictionPressureTransitionPeriod: &metav1.Duration{Duration: 5 * time.Second},
+				EvictionHard:                     fi.PtrTo("memory.available<100Mi"),
+				ResolverConfig:                   fi.PtrTo("test"),
 			},
 			Expected: "",
 		},
-
-		// Test string pointers with the "flag-include-empty" tag
 		{
 			Config:   &kops.KubeletConfigSpec{},
-			Expected: "",
-		},
-		{
-			Config: &kops.KubeletConfigSpec{
-				ResolverConfig: fi.PtrTo("test"),
-			},
-			Expected: "--resolv-conf=test",
-		},
-		{
-			Config: &kops.KubeletConfigSpec{
-				ResolverConfig: fi.PtrTo(""),
-			},
-			Expected: "--resolv-conf=",
-		},
-		{
-			Config: &kops.KubeletConfigSpec{
-				ResolverConfig: nil,
-			},
 			Expected: "",
 		},
 	}
@@ -239,6 +210,44 @@ func TestBuildAPIServerFlags(t *testing.T) {
 		if actual != test.Expected {
 			t.Errorf("unexpected flags.  actual=%q expected=%q", actual, test.Expected)
 			continue
+		}
+	}
+}
+
+// TestBuildFlagsQuoting checks that the quote function is applied: neverQuote leaves argv values
+// verbatim while maybeQuote quotes those containing a double quote. Regression for etcd-manager's
+// --static-config JSON, executes directly via go-runner with no shell to strip quotes.
+func TestBuildFlagsQuoting(t *testing.T) {
+	options := &struct {
+		StaticConfig string `flag:"static-config"`
+	}{
+		StaticConfig: `{"etcdVersion":"3.6.12"}`,
+	}
+
+	grid := []struct {
+		Quote    func(string) string
+		Expected string
+	}{
+		{
+			Quote:    neverQuote,
+			Expected: `--static-config={"etcdVersion":"3.6.12"}`,
+		},
+		{
+			Quote:    maybeQuote,
+			Expected: `--static-config="{\"etcdVersion\":\"3.6.12\"}"`,
+		},
+	}
+
+	for _, test := range grid {
+		flags, err := buildFlagsList(options, test.Quote)
+		if err != nil {
+			t.Errorf("error from buildFlagsList: %v", err)
+			continue
+		}
+
+		actual := strings.Join(flags, " ")
+		if actual != test.Expected {
+			t.Errorf("unexpected flags.  actual=%q expected=%q", actual, test.Expected)
 		}
 	}
 }

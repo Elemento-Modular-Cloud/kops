@@ -88,7 +88,7 @@ func (s *Service) GetDependencies(tasks map[string]fi.NodeupTask) []fi.NodeupTas
 		// launching a custom Kubernetes build), they all depend on
 		// the "docker.service" Service task.
 		switch v := v.(type) {
-		case *Package, *UpdatePackages, *UserTask, *GroupTask, *Chattr, *BindMount, *Archive, *Prefix, *UpdateEtcHostsTask:
+		case *Package, *AptSource, *UserTask, *GroupTask, *Chattr, *BindMount, *Prefix, *UpdateEtcHostsTask:
 			deps = append(deps, v)
 		case *Service, *PullImageTask, *IssueCert, *BootstrapClientTask, *KubeConfig:
 			// ignore
@@ -392,8 +392,11 @@ func (s *Service) RenderLocal(_ *local.LocalTarget, a, e, changes *Service) erro
 	}
 
 	if action != "" && fi.ValueOf(e.ManageState) {
-		klog.Infof("Restarting service %q", serviceName)
-		cmd := exec.Command("systemctl", action, serviceName)
+		args := []string{"systemctl", action, serviceName}
+		// We use --no-block to avoid hanging if the service has issues stopping/starting
+		args = append(args, "--no-block")
+		cmd := exec.Command(args[0], args[1:]...)
+		klog.Infof("Restarting service %q (running %q)", serviceName, strings.Join(cmd.Args, " "))
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("error doing systemd %s %s: %v\nOutput: %s", action, serviceName, err, output)

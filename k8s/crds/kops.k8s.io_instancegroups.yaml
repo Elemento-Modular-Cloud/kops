@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.17.0
+    controller-gen.kubebuilder.io/version: v0.20.0
   name: instancegroups.kops.k8s.io
 spec:
   group: kops.k8s.io
@@ -126,13 +126,35 @@ spec:
                       - type: integer
                       - type: string
                       x-kubernetes-int-or-string: true
-                    description: ConfigAdditions adds additional config entries to
-                      the generated config file.
+                    description: |-
+                      ConfigAdditions adds additional config entries to the generated config file.
+                      Paths are written to the config as-is, so they must match the schema version of the
+                      configured containerd: v2 paths (e.g. plugins."io.containerd.grpc.v1.cri".*) for
+                      containerd < 2.0, v3 paths (e.g. plugins."io.containerd.cri.v1.runtime".*) for >= 2.0.
                     type: object
                   configOverride:
                     description: ConfigOverride is the complete containerd config
                       file provided by the user.
                     type: string
+                  gvisor:
+                    description: GVisor configures the gVisor (runsc) sandboxed runtime.
+                    properties:
+                      enabled:
+                        description: Enabled determines if kOps will install the gVisor
+                          runtime.
+                        type: boolean
+                      platform:
+                        description: |-
+                          Platform is the gVisor execution platform: "systrap" (default, works
+                          everywhere including VMs) or "kvm" (bare-metal with KVM support).
+                        type: string
+                    type: object
+                  installCriCtl:
+                    description: InstallCriCtl installs crictl (default "false").
+                    type: boolean
+                  installNerdCtl:
+                    description: InstallNerdCtl installs nerdctl (default "false").
+                    type: boolean
                   logLevel:
                     description: LogLevel controls the logging details [trace, debug,
                       info, warn, error, fatal, panic] (default "info").
@@ -168,10 +190,14 @@ spec:
                           Enabled determines if kOps will install the Nvidia GPU runtime and drivers.
                           They will only be installed on intances that has an Nvidia GPU.
                         type: boolean
+                      image:
+                        description: Image defines the container image used to deploy
+                          the Nvidia Kubernetes Device Plugin.
+                        type: string
                       package:
                         description: |-
                           Package is the name of the nvidia driver package that will be installed.
-                          Default is "nvidia-headless-460-server".
+                          Default is "nvidia-driver-535-server".
                         type: string
                     type: object
                   packages:
@@ -227,6 +253,9 @@ spec:
                         description: Version used to pick the runc package.
                         type: string
                     type: object
+                  sandboxImage:
+                    description: SandboxImage is the image used for the sandbox container.
+                    type: string
                   selinuxEnabled:
                     description: SelinuxEnabled enables SELinux support
                     type: boolean
@@ -238,6 +267,10 @@ spec:
                     description: State directory for execution state files (default
                       "/run/containerd").
                     type: string
+                  useECRCredentialsForMirrors:
+                    description: Enables Kubelet ECR Credential helper to pass credentials
+                      to containerd mirrors, to use ECR as a pull-through cache
+                    type: boolean
                   version:
                     description: Version used to pick the containerd package.
                     type: string
@@ -461,8 +494,9 @@ spec:
                       that will be used to get client certificate for kubelet
                     type: string
                   cgroupDriver:
-                    description: CgroupDriver allows the explicit setting of the kubelet
-                      cgroup driver. If omitted, defaults to cgroupfs.
+                    description: |-
+                      CgroupDriver allows the explicit setting of the kubelet cgroup driver.
+                      DEPRECATED: The cgroup driver is automatically detected.
                     type: string
                   cgroupRoot:
                     description: cgroupRoot is the root cgroup to use for pods. This
@@ -506,6 +540,12 @@ spec:
                     description: CpuManagerPolicy allows for changing the default
                       policy of None to static
                     type: string
+                  crashLoopBackOffMaxContainerRestartPeriod:
+                    description: CrashLoopBackOffMaxContainerRestartPeriod is the
+                      maximum duration the backoff delay can accrue to for container
+                      restarts, minimum 1 second, maximum 300 seconds. If not set,
+                      defaults to the internal crashloopbackoff maximum (300s).
+                    type: string
                   dockerDisableSharedPID:
                     description: DockerDisableSharedPID was removed.
                     type: boolean
@@ -533,6 +573,12 @@ spec:
                   eventQPS:
                     description: EventQPS if > 0, limit event creations per second
                       to this value.  If 0, unlimited.
+                    format: int32
+                    type: integer
+                  eventRecordQPS:
+                    description: |-
+                      EventRecordQPS is the maximum event creations per second. If 0, there is no limit enforced.
+                      Default: 50
                     format: int32
                     type: integer
                   evictionHard:
@@ -636,6 +682,11 @@ spec:
                     description: Integrate with the kernel memcg notification to determine
                       if memory eviction thresholds are crossed rather than polling.
                     type: boolean
+                  kubeAPIQPS:
+                    description: KubeAPIQPS Burst to use while talking with kubernetes
+                      apiserver. (default 50)
+                    format: int32
+                    type: integer
                   kubeReserved:
                     additionalProperties:
                       type: string
@@ -662,6 +713,14 @@ spec:
                     type: string
                   logLevel:
                     description: LogLevel is the logging level of the kubelet
+                    format: int32
+                    type: integer
+                  maxParallelImagePulls:
+                    description: |-
+                      MaxParallelImagePulls sets the maximum number of image pulls in parallel.
+                      This field cannot be set if SerializeImagePulls is true.
+                      Setting it to nil means no limit.
+                      Default: nil
                     format: int32
                     type: integer
                   maxPods:
@@ -691,6 +750,12 @@ spec:
                     description: NodeLabels to add when registering the node in the
                       cluster.
                     type: object
+                  nodeLeaseDurationSeconds:
+                    description: |-
+                      NodeLeaseDurationSeconds is the duration the Kubelet will set on its corresponding Lease, in seconds.
+                      Default: 40
+                    format: int32
+                    type: integer
                   nodeStatusUpdateFrequency:
                     description: |-
                       NodeStatusUpdateFrequency Specifies how often kubelet posts node status to master (default 10s)
@@ -711,8 +776,9 @@ spec:
                       In cluster mode, this is obtained from the master.
                     type: string
                   podInfraContainerImage:
-                    description: PodInfraContainerImage is the image whose network/ipc
-                      containers in each pod will use.
+                    description: |-
+                      PodInfraContainerImage is the image whose network/ipc containers in each pod will use.
+                      DEPRECATED: Image garbage collector will get sandbox image information from CRI.
                     type: string
                   podManifestPath:
                     description: config is the path to the config file or directory
@@ -726,7 +792,7 @@ spec:
                   protectKernelDefaults:
                     description: |-
                       Default kubelet behaviour for kernel tuning. If set, kubelet errors if any of kernel tunables is different than kubelet defaults.
-                      (DEPRECATED: This parameter should be set via the config file specified by the Kubelet's --config flag.
+                      DEPRECATED: This parameter should be set via the config file specified by the Kubelet's --config flag.
                     type: boolean
                   readOnlyPort:
                     description: ReadOnlyPort is the port used by the kubelet api
@@ -901,6 +967,14 @@ spec:
                             pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                             x-kubernetes-int-or-string: true
                         type: object
+                      excludedInstanceTypes:
+                        description: |-
+                          ExcludedInstanceTypes is a list of instance types which will not be used by the instance group.
+                          You can use strings with one or more wild cards, represented by an asterisk (*), to exclude an
+                          instance type, size, or generation.
+                        items:
+                          type: string
+                        type: array
                       memory:
                         properties:
                           max:
@@ -1166,11 +1240,22 @@ spec:
                 description: WarmPool configures an ASG warm pool for the instance
                   group
                 properties:
+                  additionalImages:
+                    description: AdditionalImages is a list of additional container
+                      images to pull into the warm pool instances.
+                    items:
+                      type: string
+                    type: array
                   enableLifecycleHook:
                     description: |-
                       EnableLifecycleHook determines if an ASG lifecycle hook will be added ensuring that nodeup runs to completion.
                       Note that the metadata API must be protected from arbitrary Pods when this is enabled.
                     type: boolean
+                  lifecycleHookTimeout:
+                    description: LifecycleHookTimeout is the timeout for the ASG lifecycle
+                      hook in seconds.
+                    format: int32
+                    type: integer
                   maxSize:
                     description: |-
                       MaxSize is the maximum size of the warm pool. The desired size of the instance group

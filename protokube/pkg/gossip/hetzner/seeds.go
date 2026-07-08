@@ -20,8 +20,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/hetznercloud/hcloud-go/hcloud"
+	"github.com/hetznercloud/hcloud-go/v2/hcloud"
 	"k8s.io/klog/v2"
+	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/protokube/pkg/gossip"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner"
 )
@@ -43,7 +44,10 @@ func NewSeedProvider(hcloudClient *hcloud.Client, tag string) (*SeedProvider, er
 func (p *SeedProvider) GetSeeds() ([]string, error) {
 	var seeds []string
 
-	labelSelector := fmt.Sprintf("%s=%s", hetzner.TagKubernetesClusterName, p.tag)
+	// Seed only from control-plane nodes; workers do not run gossip.
+	labelSelector := fmt.Sprintf("%s=%s,%s=%s",
+		hetzner.TagKubernetesClusterName, p.tag,
+		hetzner.TagKubernetesInstanceRole, string(kops.InstanceGroupRoleControlPlane))
 	listOptions := hcloud.ListOpts{
 		PerPage:       50,
 		LabelSelector: labelSelector,

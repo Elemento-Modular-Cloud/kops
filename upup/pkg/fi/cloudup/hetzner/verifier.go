@@ -25,7 +25,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/hetznercloud/hcloud-go/hcloud"
+	"github.com/hetznercloud/hcloud-go/v2/hcloud"
+	version "k8s.io/kops"
 	"k8s.io/kops/pkg/bootstrap"
 	"k8s.io/kops/pkg/wellknownports"
 )
@@ -38,7 +39,7 @@ type hetznerVerifier struct {
 	client *hcloud.Client
 }
 
-var _ bootstrap.Verifier = &hetznerVerifier{}
+var _ bootstrap.Verifier = (*hetznerVerifier)(nil)
 
 func NewHetznerVerifier(opt *HetznerVerifierOptions) (bootstrap.Verifier, error) {
 	hcloudToken := os.Getenv("HCLOUD_TOKEN")
@@ -48,6 +49,7 @@ func NewHetznerVerifier(opt *HetznerVerifierOptions) (bootstrap.Verifier, error)
 
 	opts := []hcloud.ClientOption{
 		hcloud.WithToken(hcloudToken),
+		hcloud.WithApplication("kops", version.Version),
 	}
 	hcloudClient := hcloud.NewClient(opts...)
 
@@ -63,7 +65,7 @@ func (h hetznerVerifier) VerifyToken(ctx context.Context, rawRequest *http.Reque
 	}
 	token = strings.TrimPrefix(token, HetznerAuthenticationTokenPrefix)
 
-	serverID, err := strconv.Atoi(token)
+	serverID, err := strconv.ParseInt(token, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert server ID %q to int: %w", token, err)
 	}
@@ -86,7 +88,7 @@ func (h hetznerVerifier) VerifyToken(ctx context.Context, rawRequest *http.Reque
 	}
 
 	if len(challengeEndpoints) == 0 {
-		return nil, fmt.Errorf("cannot determine challenge endpoint for server %q", serverID)
+		return nil, fmt.Errorf("cannot determine challenge endpoint for server %d", serverID)
 	}
 
 	result := &bootstrap.VerifyResult{

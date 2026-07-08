@@ -6,7 +6,6 @@ contents: |
       dns.alpha.kubernetes.io/external: api.minimal.example.com
       dns.alpha.kubernetes.io/internal: api.internal.minimal.example.com
       kubectl.kubernetes.io/default-container: kube-apiserver
-    creationTimestamp: null
     labels:
       k8s-app: kube-apiserver
     name: kube-apiserver
@@ -21,10 +20,10 @@ contents: |
       - --anonymous-auth=false
       - --api-audiences=kubernetes.svc.default
       - --apiserver-count=1
-      - --authorization-mode=AlwaysAllow
+      - --authorization-mode=Node,RBAC
       - --bind-address=0.0.0.0
       - --client-ca-file=/srv/kubernetes/ca.crt
-      - --enable-admission-plugins=NamespaceLifecycle,LimitRanger,ServiceAccount,DefaultStorageClass,DefaultTolerationSeconds,MutatingAdmissionWebhook,ValidatingAdmissionWebhook,NodeRestriction,ResourceQuota
+      - --enable-admission-plugins=DefaultStorageClass,DefaultTolerationSeconds,LimitRanger,MutatingAdmissionWebhook,NamespaceLifecycle,NodeRestriction,ResourceQuota,RuntimeClass,ServiceAccount,ValidatingAdmissionPolicy,ValidatingAdmissionWebhook
       - --etcd-cafile=/srv/kubernetes/kube-apiserver/etcd-ca.crt
       - --etcd-certfile=/srv/kubernetes/kube-apiserver/etcd-client.crt
       - --etcd-keyfile=/srv/kubernetes/kube-apiserver/etcd-client.key
@@ -120,9 +119,6 @@ contents: |
       - mountPath: /etc/openssl
         name: etcopenssl
         readOnly: true
-      - mountPath: /etc/kubernetes/in-tree-cloud.config
-        name: cloudconfig
-        readOnly: true
       - mountPath: /srv/kubernetes/ca.crt
         name: kubernetesca
         readOnly: true
@@ -168,9 +164,6 @@ contents: |
     - hostPath:
         path: /etc/openssl
       name: etcopenssl
-    - hostPath:
-        path: /etc/kubernetes/in-tree-cloud.config
-      name: cloudconfig
     - hostPath:
         path: /srv/kubernetes/ca.crt
       name: kubernetesca

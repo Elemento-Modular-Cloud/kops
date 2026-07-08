@@ -20,7 +20,9 @@ import (
 	"fmt"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
+	network "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/network/armnetwork"
 	"k8s.io/kops/pkg/apis/kops"
+	"k8s.io/kops/pkg/wellknownports"
 	"k8s.io/kops/pkg/wellknownservices"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/azuretasks"
@@ -54,8 +56,26 @@ func (b *APILoadBalancerModelBuilder) Build(c *fi.CloudupModelBuilderContext) er
 		Lifecycle:         b.Lifecycle,
 		ResourceGroup:     b.LinkToResourceGroup(),
 		Tags:              map[string]*string{},
+		SKU:               network.LoadBalancerSKUNameStandard,
 		WellKnownServices: []wellknownservices.WellKnownService{wellknownservices.KubeAPIServer},
 	}
+
+	// API server probe: TCP on 443
+	lb.Probes = append(lb.Probes, azuretasks.LoadBalancerProbe{
+		Name:              fmt.Sprintf("Health-TCP-%d", wellknownports.KubeAPIServer),
+		Protocol:          network.ProbeProtocolTCP,
+		Port:              wellknownports.KubeAPIServer,
+		IntervalInSeconds: 15,
+		NumberOfProbes:    4,
+	})
+	lb.Rules = append(lb.Rules, azuretasks.LoadBalancerRule{
+		Name:                 fmt.Sprintf("TCP-%d", wellknownports.KubeAPIServer),
+		Port:                 wellknownports.KubeAPIServer,
+		ProbeName:            fmt.Sprintf("Health-TCP-%d", wellknownports.KubeAPIServer),
+		Protocol:             network.TransportProtocolTCP,
+		IdleTimeoutInMinutes: 4,
+		LoadDistribution:     network.LoadDistributionDefault,
+	})
 
 	switch lbSpec.Type {
 	case kops.LoadBalancerTypeInternal:
@@ -70,21 +90,43 @@ func (b *APILoadBalancerModelBuilder) Build(c *fi.CloudupModelBuilderContext) er
 
 		// Create Public IP Address for Public Loadbalacer
 		p := &azuretasks.PublicIPAddress{
-			Name:          fi.PtrTo(b.NameForLoadBalancer()),
-			Lifecycle:     b.Lifecycle,
-			ResourceGroup: b.LinkToResourceGroup(),
-			Tags:          map[string]*string{},
+			Name:             fi.PtrTo(b.NameForLoadBalancer()),
+			Lifecycle:        b.Lifecycle,
+			ResourceGroup:    b.LinkToResourceGroup(),
+			IPVersion:        network.IPVersionIPv4,
+			AllocationMethod: network.IPAllocationMethodStatic,
+			SKU:              network.PublicIPAddressSKUNameStandard,
+			Tags:             map[string]*string{},
 		}
 		c.AddTask(p)
+		lb.PublicIPAddress = p
 	default:
 		return fmt.Errorf("unknown load balancer Type: %q", lbSpec.Type)
 	}
 
-	c.AddTask(lb)
-
-	if b.Cluster.UsesLegacyGossip() || b.Cluster.UsesPrivateDNS() || b.Cluster.UsesNoneDNS() {
+	if b.Cluster.UsesLoadBalancerForKopsController() {
 		lb.WellKnownServices = append(lb.WellKnownServices, wellknownservices.KopsController)
+
+		// kops-controller probe: HTTPS on 3988 with /healthz
+		lb.Probes = append(lb.Probes, azuretasks.LoadBalancerProbe{
+			Name:              fmt.Sprintf("Health-HTTPS-%d", wellknownports.KopsControllerPort),
+			Protocol:          network.ProbeProtocolHTTPS,
+			Port:              wellknownports.KopsControllerPort,
+			RequestPath:       fi.PtrTo("/healthz"),
+			IntervalInSeconds: 15,
+			NumberOfProbes:    4,
+		})
+		lb.Rules = append(lb.Rules, azuretasks.LoadBalancerRule{
+			Name:                 fmt.Sprintf("TCP-%d", wellknownports.KopsControllerPort),
+			Port:                 wellknownports.KopsControllerPort,
+			ProbeName:            fmt.Sprintf("Health-HTTPS-%d", wellknownports.KopsControllerPort),
+			Protocol:             network.TransportProtocolTCP,
+			IdleTimeoutInMinutes: 4,
+			LoadDistribution:     network.LoadDistributionDefault,
+		})
 	}
+
+	c.AddTask(lb)
 
 	return nil
 }

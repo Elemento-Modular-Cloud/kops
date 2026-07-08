@@ -64,9 +64,11 @@ metadata:
   name: control-plane-fsn1
 spec:
   image: ubuntu-24.04
-  machineType: cx22
+  machineType: cx23
   maxSize: 1
   minSize: 1
+  nodeLabels:
+    kops.k8s.io/instancegroup: control-plane-fsn1
   role: Master
   subnets:
   - fsn1
@@ -82,9 +84,11 @@ metadata:
   name: nodes-fsn1
 spec:
   image: ubuntu-24.04
-  machineType: cx22
+  machineType: cx23
   maxSize: 1
   minSize: 1
+  nodeLabels:
+    kops.k8s.io/instancegroup: nodes-fsn1
   role: Node
   subnets:
   - fsn1

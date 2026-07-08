@@ -21,14 +21,16 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
-	"github.com/octago/sflags/gen/gpflag"
+	"github.com/urfave/sflags/gen/gpflag"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
 	unversioned "k8s.io/kops/pkg/apis/kops"
 	api "k8s.io/kops/pkg/apis/kops/v1alpha2"
+	csimanifests "k8s.io/kops/tests/e2e/csi-manifests"
 	"k8s.io/kops/tests/e2e/pkg/kops"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce"
 	"sigs.k8s.io/kubetest2/pkg/artifacts"
@@ -60,7 +62,7 @@ func parseKubeconfig(jsonPath string) (string, error) {
 
 	s := strings.TrimSpace(stdout.String())
 	if s == "" {
-		return "", fmt.Errorf("kubeconfig did not contain " + jsonPath)
+		return "", fmt.Errorf("kubeconfig did not contain %q", jsonPath)
 	}
 	return s, nil
 }
@@ -148,7 +150,7 @@ func (t *Tester) addProviderFlag() error {
 
 	provider := ""
 	switch cluster.Spec.LegacyCloudProvider {
-	case "aws", "gce":
+	case "aws", "azure", "gce":
 		provider = cluster.Spec.LegacyCloudProvider
 	case "digitalocean":
 	default:
@@ -177,8 +179,6 @@ func (t *Tester) addZoneFlag() error {
 	klog.Infof("Setting --gce-zone=%s", zone)
 	t.TestArgs += " --gce-zone=" + zone
 
-	// TODO: Pass the new gce-zones flag for 1.21 with all zones?
-
 	return nil
 }
 
@@ -195,7 +195,7 @@ func (t *Tester) addNodeIG() error {
 
 	var ig *api.InstanceGroup
 	for _, v := range igs {
-		if unversioned.InstanceGroupRole(v.Spec.Role) == unversioned.InstanceGroupRoleNode {
+		if unversioned.InstanceGroupRole(v.Spec.Role).HasNode() {
 			ig = v
 		}
 	}
@@ -253,6 +253,8 @@ func (t *Tester) addRegionFlag() error {
 	case "aws":
 		zone := cluster.Spec.Subnets[0].Zone
 		region = zone[:len(zone)-1]
+	case "azure":
+		region = cluster.Spec.Subnets[0].Region
 	case "gce":
 		region = cluster.Spec.Subnets[0].Region
 	default:
@@ -364,10 +366,10 @@ func (t *Tester) getSchedulableZones() ([]string, error) {
 
 	var schedulable []*api.InstanceGroup
 	for _, ig := range igs {
-		if unversioned.InstanceGroupRole(ig.Spec.Role) == unversioned.InstanceGroupRoleControlPlane {
+		if unversioned.InstanceGroupRole(ig.Spec.Role).HasControlPlane() {
 			continue
 		}
-		if unversioned.InstanceGroupRole(ig.Spec.Role) == unversioned.InstanceGroupRoleAPIServer {
+		if unversioned.InstanceGroupRole(ig.Spec.Role).HasAPIServer() {
 			continue
 		}
 
@@ -391,7 +393,7 @@ func (t *Tester) addNodeOSArchFlag() error {
 		return err
 	}
 	for _, ig := range igs {
-		if strings.Contains(ig.Spec.Image, "arm64") {
+		if strings.Contains(ig.Spec.Image, "arm64") || strings.Contains(ig.Spec.Image, "aarch64") {
 			klog.Info("Setting --node-os-arch=arm64")
 			t.TestArgs += " --node-os-arch=arm64"
 			break
@@ -417,21 +419,69 @@ func (t *Tester) addCSIDriverFlags() error {
 		return err
 	}
 
-	if cluster.Spec.CloudConfig != nil &&
-		cluster.Spec.CloudConfig.AWSEBSCSIDriver != nil &&
-		cluster.Spec.CloudConfig.AWSEBSCSIDriver.Enabled != nil &&
-		*cluster.Spec.CloudConfig.AWSEBSCSIDriver.Enabled {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
+	var provider string
+	switch cluster.Spec.LegacyCloudProvider {
+	case "aws":
+		if cluster.Spec.CloudConfig != nil &&
+			cluster.Spec.CloudConfig.AWSEBSCSIDriver != nil &&
+			cluster.Spec.CloudConfig.AWSEBSCSIDriver.Enabled != nil &&
+			!*cluster.Spec.CloudConfig.AWSEBSCSIDriver.Enabled {
+			break
 		}
-		klog.Infof("Setting --storage.testdriver=%s/tests/e2e/csi-manifests/ebs.yaml --storage.migratedPlugins=kubernetes.io/aws-ebs", cwd)
-		t.TestArgs += fmt.Sprintf(" --storage.testdriver=%s/tests/e2e/csi-manifests/aws-ebs/driver.yaml --storage.migratedPlugins=kubernetes.io/aws-ebs", cwd)
-	} else {
-		klog.Info("EBS CSI driver not enabled. Skipping tests")
+		provider = "aws-ebs"
+	case "gce":
+		if cluster.Spec.CloudConfig != nil &&
+			cluster.Spec.CloudConfig.GCPPDCSIDriver != nil &&
+			cluster.Spec.CloudConfig.GCPPDCSIDriver.Enabled != nil &&
+			!*cluster.Spec.CloudConfig.GCPPDCSIDriver.Enabled {
+			break
+		}
+		provider = "gcp-pd"
+	case "azure":
+		provider = "azure-disk"
+	case "digitalocean":
+		provider = "dobs"
 	}
-	return nil
 
+	if provider == "" {
+		klog.Info("CSI driver not enabled. Skipping tests")
+		return nil
+	}
+
+	tmpDir, err := os.MkdirTemp("", "csi-manifests-*")
+	if err != nil {
+		return fmt.Errorf("creating temp dir for CSI manifests: %w", err)
+	}
+
+	scData, err := csimanifests.FS.ReadFile(provider + "/sc.yaml")
+	if err != nil {
+		return fmt.Errorf("reading embedded %s/sc.yaml: %w", provider, err)
+	}
+	scPath := filepath.Join(tmpDir, "sc.yaml")
+	if err := os.WriteFile(scPath, scData, 0644); err != nil {
+		return fmt.Errorf("writing sc.yaml: %w", err)
+	}
+
+	driverData, err := csimanifests.FS.ReadFile(provider + "/driver.yaml")
+	if err != nil {
+		return fmt.Errorf("reading embedded %s/driver.yaml: %w", provider, err)
+	}
+	// Rewrite the FromFile path to point to the temp dir copy of sc.yaml
+	driverContent := strings.Replace(
+		string(driverData),
+		"tests/e2e/csi-manifests/"+provider+"/sc.yaml",
+		scPath,
+		1,
+	)
+	driverPath := filepath.Join(tmpDir, "driver.yaml")
+	if err := os.WriteFile(driverPath, []byte(driverContent), 0644); err != nil {
+		return fmt.Errorf("writing driver.yaml: %w", err)
+	}
+
+	driverFlags := fmt.Sprintf(" --storage.testdriver=%s", driverPath)
+	klog.Infof("Setting %v", driverFlags)
+	t.TestArgs += driverFlags
+	return nil
 }
 
 func (t *Tester) execute() error {
@@ -510,6 +560,9 @@ func NewDefaultTester() *Tester {
 }
 
 func Main() {
+	// Prow's Azure WI preset exports AZURE_STORAGE_ACCOUNT; kOps now rejects it.
+	os.Unsetenv("AZURE_STORAGE_ACCOUNT")
+
 	t := NewDefaultTester()
 	if err := t.execute(); err != nil {
 		klog.Fatalf("failed to run ginkgo tester: %v", err)

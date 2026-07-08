@@ -22,7 +22,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/hetznercloud/hcloud-go/hcloud"
+	"github.com/hetznercloud/hcloud-go/v2/hcloud"
 	"k8s.io/kops/pkg/pki"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner"
@@ -35,16 +35,16 @@ type SSHKey struct {
 	Name      *string
 	Lifecycle fi.Lifecycle
 
-	ID        *int
+	ID        *int64
 	PublicKey string
 
 	Labels map[string]string
 }
 
-var _ fi.CompareWithID = &SSHKey{}
+var _ fi.CompareWithID = (*SSHKey)(nil)
 
 func (v *SSHKey) CompareWithID() *string {
-	return fi.PtrTo(strconv.Itoa(fi.ValueOf(v.ID)))
+	return fi.PtrTo(strconv.FormatInt(fi.ValueOf(v.ID), 10))
 }
 
 func (v *SSHKey) Find(c *fi.CloudupContext) (*SSHKey, error) {

@@ -28,17 +28,16 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"go.uber.org/multierr"
 	"k8s.io/klog/v2"
 	"k8s.io/kops/nodeup/pkg/model"
@@ -58,6 +57,7 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/do"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce/tpm/gcetpmsigner"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner"
+	"k8s.io/kops/upup/pkg/fi/cloudup/linode"
 	"k8s.io/kops/upup/pkg/fi/cloudup/openstack"
 	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
 	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
@@ -107,9 +107,6 @@ func (c *NodeUpCommand) Run(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err = seedRNG(ctx, &bootConfig, region); err != nil {
-		return err
-	}
 
 	var configBase vfs.Path
 
@@ -134,13 +131,17 @@ func (c *NodeUpCommand) Run(out io.Writer) error {
 
 	var nodeupConfig nodeup.Config
 	var nodeupConfigHash [32]byte
-	if nodeConfig != nil {
+	switch {
+	case nodeConfig != nil:
 		if err := utils.YamlUnmarshal([]byte(nodeConfig.NodeupConfig), &nodeupConfig); err != nil {
 			return fmt.Errorf("error parsing BootConfig config response: %v", err)
 		}
 		nodeupConfigHash = sha256.Sum256([]byte(nodeConfig.NodeupConfig))
+		if nodeupConfig.CAs == nil {
+			nodeupConfig.CAs = make(map[string]string)
+		}
 		nodeupConfig.CAs[fi.CertificateIDCA] = bootConfig.ConfigServer.CACertificates
-	} else if bootConfig.InstanceGroupName != "" {
+	case bootConfig.InstanceGroupName != "":
 		nodeupConfigLocation := configBase.Join("igconfig", bootConfig.InstanceGroupRole.ToLowerString(), bootConfig.InstanceGroupName, "nodeupconfig.yaml")
 
 		b, err := nodeupConfigLocation.ReadFile(ctx)
@@ -152,7 +153,7 @@ func (c *NodeUpCommand) Run(out io.Writer) error {
 			return fmt.Errorf("error parsing NodeupConfig %q: %v", nodeupConfigLocation, err)
 		}
 		nodeupConfigHash = sha256.Sum256(b)
-	} else {
+	default:
 		return fmt.Errorf("no instance group defined in nodeup config")
 	}
 
@@ -180,7 +181,7 @@ func (c *NodeUpCommand) Run(out io.Writer) error {
 	configAssets := nodeupConfig.Assets[architecture]
 	assetStore := fi.NewAssetStore(c.CacheDir)
 	for _, asset := range configAssets {
-		err := assetStore.Add(asset)
+		err := assetStore.Add(ctx, asset)
 		if err != nil {
 			return fmt.Errorf("error adding asset %q: %v", asset, err)
 		}
@@ -208,9 +209,10 @@ func (c *NodeUpCommand) Run(out io.Writer) error {
 
 	var secretStore fi.SecretStoreReader
 	var keyStore fi.KeystoreReader
-	if nodeConfig != nil {
+	switch {
+	case nodeConfig != nil:
 		modelContext.SecretStore = configserver.NewSecretStore(nodeConfig.NodeSecrets)
-	} else if nodeupConfig.ConfigStore != nil && nodeupConfig.ConfigStore.Secrets != "" {
+	case nodeupConfig.ConfigStore != nil && nodeupConfig.ConfigStore.Secrets != "":
 		klog.Infof("Building SecretStore at %q", nodeupConfig.ConfigStore.Secrets)
 		p, err := vfs.Context.BuildVfsPath(nodeupConfig.ConfigStore.Secrets)
 		if err != nil {
@@ -219,7 +221,7 @@ func (c *NodeUpCommand) Run(out io.Writer) error {
 
 		secretStore = secrets.NewVFSSecretStoreReader(p)
 		modelContext.SecretStore = secretStore
-	} else {
+	default:
 		return fmt.Errorf("SecretStore not set")
 	}
 
@@ -242,7 +244,8 @@ func (c *NodeUpCommand) Run(out io.Writer) error {
 		return err
 	}
 
-	if bootConfig.CloudProvider == api.CloudProviderAWS {
+	switch bootConfig.CloudProvider {
+	case api.CloudProviderAWS:
 		instanceIDBytes, err := vfs.Context.ReadFile("metadata://aws/meta-data/instance-id")
 		if err != nil {
 			return fmt.Errorf("error reading instance-id from AWS metadata: %v", err)
@@ -277,7 +280,7 @@ func (c *NodeUpCommand) Run(out io.Writer) error {
 				modelContext.GPUVendor = architectures.GPUVendorNvidia
 			}
 		}
-	} else if bootConfig.CloudProvider == api.CloudProviderOpenstack {
+	case api.CloudProviderOpenstack:
 		// NvidiaGPU possible to enable only in instance group level in OpenStack. When we assume that GPU is supported
 		if nodeupConfig.NvidiaGPU != nil && fi.ValueOf(nodeupConfig.NvidiaGPU.Enabled) {
 			klog.Info("instance supports GPU acceleration")
@@ -285,11 +288,12 @@ func (c *NodeUpCommand) Run(out io.Writer) error {
 		}
 	}
 
-	if err := loadKernelModules(modelContext); err != nil {
+	if err := loadKernelModules(modelContext, distribution); err != nil {
 		return err
 	}
 
 	loader := &Loader{}
+	loader.Builders = append(loader.Builders, &model.DiscoveryService{NodeupModelContext: modelContext})
 	loader.Builders = append(loader.Builders, &model.EtcHostsBuilder{NodeupModelContext: modelContext})
 	loader.Builders = append(loader.Builders, &model.NTPBuilder{NodeupModelContext: modelContext})
 	loader.Builders = append(loader.Builders, &model.DirectoryBuilder{NodeupModelContext: modelContext})
@@ -297,6 +301,7 @@ func (c *NodeUpCommand) Run(out io.Writer) error {
 	loader.Builders = append(loader.Builders, &model.VolumesBuilder{NodeupModelContext: modelContext})
 	loader.Builders = append(loader.Builders, &model.ContainerdBuilder{NodeupModelContext: modelContext})
 	loader.Builders = append(loader.Builders, &model.ProtokubeBuilder{NodeupModelContext: modelContext})
+	loader.Builders = append(loader.Builders, &model.ChannelsBuilder{NodeupModelContext: modelContext})
 	loader.Builders = append(loader.Builders, &model.CloudConfigBuilder{NodeupModelContext: modelContext})
 	loader.Builders = append(loader.Builders, &model.FileAssetsBuilder{NodeupModelContext: modelContext})
 	loader.Builders = append(loader.Builders, &model.HookBuilder{NodeupModelContext: modelContext})
@@ -306,6 +311,7 @@ func (c *NodeUpCommand) Run(out io.Writer) error {
 	loader.Builders = append(loader.Builders, &model.ManifestsBuilder{NodeupModelContext: modelContext})
 	loader.Builders = append(loader.Builders, &model.PackagesBuilder{NodeupModelContext: modelContext})
 	loader.Builders = append(loader.Builders, &model.NvidiaBuilder{NodeupModelContext: modelContext})
+	loader.Builders = append(loader.Builders, &model.GVisorBuilder{NodeupModelContext: modelContext})
 	loader.Builders = append(loader.Builders, &model.SecretBuilder{NodeupModelContext: modelContext})
 	loader.Builders = append(loader.Builders, &model.FirewallBuilder{NodeupModelContext: modelContext})
 	loader.Builders = append(loader.Builders, &model.SysctlBuilder{NodeupModelContext: modelContext})
@@ -319,6 +325,9 @@ func (c *NodeUpCommand) Run(out io.Writer) error {
 	loader.Builders = append(loader.Builders, &model.PrefixBuilder{NodeupModelContext: modelContext})
 	loader.Builders = append(loader.Builders, &model.NerdctlBuilder{NodeupModelContext: modelContext})
 	loader.Builders = append(loader.Builders, &model.CrictlBuilder{NodeupModelContext: modelContext})
+	// Cloud-specific configuration
+	loader.Builders = append(loader.Builders, &model.AzureBuilder{NodeupModelContext: modelContext})
+	loader.Builders = append(loader.Builders, &model.LinodeBuilder{NodeupModelContext: modelContext})
 
 	loader.Builders = append(loader.Builders, &networking.CommonBuilder{NodeupModelContext: modelContext})
 	loader.Builders = append(loader.Builders, &networking.CalicoBuilder{NodeupModelContext: modelContext})
@@ -333,13 +342,23 @@ func (c *NodeUpCommand) Run(out io.Writer) error {
 		return fmt.Errorf("error building loader: %v", err)
 	}
 
-	for i, image := range nodeupConfig.Images[architecture] {
-		taskMap["LoadImage."+strconv.Itoa(i)] = &nodetasks.LoadImageTask{
+	for _, image := range nodeupConfig.Images[architecture] {
+		if len(image.Sources) == 0 {
+			return fmt.Errorf("image has no sources: %v", image)
+		}
+		u, err := url.Parse(image.Sources[0])
+		if err != nil {
+			return fmt.Errorf("invalid image source URL %q: %w", image.Sources[0], err)
+		}
+		key := "SideloadImage/" + path.Base(u.Path)
+		if _, ok := taskMap[key]; ok {
+			return fmt.Errorf("duplicate image task %q", key)
+		}
+		taskMap[key] = &nodetasks.LoadImageTask{
 			Sources: image.Sources,
 			Hash:    image.Hash,
 		}
 	}
-	// Protokube load image task is in ProtokubeBuilder
 
 	var target fi.NodeupTarget
 
@@ -491,6 +510,23 @@ func evaluateHostnameOverride(cloudProvider api.CloudProviderID) (string, error)
 		}
 
 		return hostname, nil
+	case api.CloudProviderLinode:
+		label, err := linode.GetMetadataValue(context.TODO(), "label")
+		if err != nil {
+			return "", fmt.Errorf("error reading hostname from Linode metadata: %v", err)
+		}
+
+		// Linode cloud-init does not set the OS hostname.
+		// Set it here so the OS hostname matches the kubelet hostname override.
+		if err := os.WriteFile("/etc/hostname", []byte(label+"\n"), 0o644); err != nil { //nolint:gosec // /etc/hostname is conventionally world-readable system configuration.
+			klog.Warningf("Failed to write /etc/hostname: %v", err)
+		} else if err := exec.Command("hostname", label).Run(); err != nil {
+			klog.Warningf("Failed to set runtime hostname %q: %v", label, err)
+		} else {
+			klog.Infof("Set OS hostname to %q", label)
+		}
+
+		return label, nil
 	}
 
 	return "", nil
@@ -526,26 +562,6 @@ func evaluateBindAddress(bindAddress string) (string, error) {
 	return bindAddress, nil
 }
 
-// kernelHasFilesystem checks if /proc/filesystems contains the specified filesystem
-func kernelHasFilesystem(fs string) (bool, error) {
-	contents, err := os.ReadFile("/proc/filesystems")
-	if err != nil {
-		return false, fmt.Errorf("error reading /proc/filesystems: %v", err)
-	}
-
-	for _, line := range strings.Split(string(contents), "\n") {
-		tokens := strings.Fields(line)
-		for _, token := range tokens {
-			// Technically we should skip "nodev", but it doesn't matter
-			if token == fs {
-				return true, nil
-			}
-		}
-	}
-
-	return false, nil
-}
-
 // modprobe will exec `modprobe <module>`
 func modprobe(module string) error {
 	klog.Infof("Doing modprobe for module %v", module)
@@ -563,7 +579,7 @@ func modprobe(module string) error {
 // loadKernelModules is a hack to force br_netfilter to be loaded
 // and used by some components to load its recommended modules.
 // TODO: Move to tasks architecture
-func loadKernelModules(context *model.NodeupModelContext) error {
+func loadKernelModules(context *model.NodeupModelContext, distribution distributions.Distribution) error {
 	if context.NodeupConfig.Networking.Kindnet != nil {
 		err := modprobe("nfnetlink_queue")
 		if err != nil {
@@ -574,6 +590,32 @@ func loadKernelModules(context *model.NodeupModelContext) error {
 		if err != nil {
 			// TODO: Return error in 1.11 (too risky for 1.10)
 			klog.Warningf("error loading br_netfilter module: %v", err)
+		}
+	}
+	if distribution.ForceNftables() {
+		// Distributions like RHEL10+ use nftables exclusively.
+		// - nf_tables / nf_conntrack: required by CNI plugins that shell out
+		//   to iptables-nft.
+		// - ip_set: Calico's Felix unconditionally starts an `ipsetsManager`
+		//   that shells out to `ipset list -name` during dataplane resync,
+		//   even when NFTablesMode=Enabled. On RHEL10 family kernels the
+		//   ip_set module isn't auto-loaded, so the ipset call returns
+		//   EINVAL and Felix panics, crashlooping calico-node.
+		for _, mod := range []string{"nf_tables", "nf_conntrack", "ip_set"} {
+			if err := modprobe(mod); err != nil {
+				klog.Warningf("error loading %s module: %v", mod, err)
+			}
+		}
+	} else {
+		switch distribution {
+		case distributions.DistributionRocky9:
+			// Rocky 9 doesn't load nf_conntrack by default, and it's required for kube-proxy:
+			// "Error running ProxyServer" err="open /proc/sys/net/netfilter/nf_conntrack_max: no such file or directory"
+			// "command failed" err="open /proc/sys/net/netfilter/nf_conntrack_max: no such file or directory"
+			err := modprobe("nf_conntrack")
+			if err != nil {
+				klog.Warningf("error loading nf_conntrack module: %v", err)
+			}
 		}
 	}
 	// TODO: Add to /etc/modules-load.d/ ?
@@ -593,40 +635,6 @@ func getRegion(ctx context.Context, bootConfig *nodeup.BootConfig) (string, erro
 	}
 
 	return "", nil
-}
-
-// seedRNG adds entropy to the random number generator.
-func seedRNG(ctx context.Context, bootConfig *nodeup.BootConfig, region string) error {
-	switch bootConfig.CloudProvider {
-	case api.CloudProviderAWS:
-		cfg, err := awsconfig.LoadDefaultConfig(context.TODO(),
-			awsconfig.WithRegion(region),
-		)
-		if err != nil {
-			return err
-		}
-
-		random, err := kms.NewFromConfig(cfg).GenerateRandom(ctx, &kms.GenerateRandomInput{
-			NumberOfBytes: aws.Int32(64),
-		})
-		if err != nil {
-			return fmt.Errorf("generating random seed: %v", err)
-		}
-
-		f, err := os.OpenFile("/dev/urandom", os.O_WRONLY, 0)
-		if err != nil {
-			return fmt.Errorf("opening /dev/urandom: %v", err)
-		}
-		_, err = f.Write(random.Plaintext)
-		if err1 := f.Close(); err1 != nil && err == nil {
-			err = err1
-		}
-		if err != nil {
-			return fmt.Errorf("writing /dev/urandom: %v", err)
-		}
-	}
-
-	return nil
 }
 
 // getNodeConfigFromServers queries kops-controllers for our node's configuration.
@@ -690,13 +698,18 @@ func getNodeConfigFromServers(ctx context.Context, bootConfig *nodeup.BootConfig
 			return nil, err
 		}
 		authenticator = a
+	case api.CloudProviderLinode:
+		a, err := linode.NewLinodeAuthenticator()
+		if err != nil {
+			return nil, err
+		}
+		authenticator = a
 
 	default:
 		return nil, fmt.Errorf("unsupported cloud provider for node configuration %s", bootConfig.CloudProvider)
 	}
 
 	var challengeListener *bootstrap.ChallengeListener
-
 	if kopsmodel.UseChallengeCallback(bootConfig.CloudProvider) {
 		challengeServer, err := bootstrap.NewChallengeServer(bootConfig.ClusterName, []byte(bootConfig.ConfigServer.CACertificates))
 		if err != nil {
@@ -712,10 +725,8 @@ func getNodeConfigFromServers(ctx context.Context, bootConfig *nodeup.BootConfig
 		defer challengeListener.Stop()
 	}
 
-	client := &kopscontrollerclient.Client{
-		Authenticator: authenticator,
-		CAs:           []byte(bootConfig.ConfigServer.CACertificates),
-	}
+	// Note: The url is overridden in every iteration of the loop below.
+	client := kopscontrollerclient.NewWithTLSServerName(authenticator, []byte(bootConfig.ConfigServer.CACertificates), url.URL{}, bootConfig.ConfigServer.TLSServerName)
 	defer client.Close()
 
 	var merr error
@@ -756,7 +767,7 @@ func getAWSConfigurationMode(ctx context.Context, c *model.NodeupModelContext) (
 	// Only worker nodes and apiservers can actually autoscale.
 	// We are not adding describe permissions to the other roles
 	role := c.BootConfig.InstanceGroupRole
-	if role != api.InstanceGroupRoleNode && role != api.InstanceGroupRoleAPIServer {
+	if !role.HasNode() && !role.HasAPIServer() {
 		return "", nil
 	}
 

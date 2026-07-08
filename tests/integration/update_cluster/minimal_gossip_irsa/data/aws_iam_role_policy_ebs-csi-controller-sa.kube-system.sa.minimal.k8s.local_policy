@@ -6,8 +6,8 @@
         "StringEquals": {
           "aws:RequestTag/KubernetesCluster": "minimal.k8s.local",
           "ec2:CreateAction": [
-            "CreateVolume",
-            "CreateSnapshot"
+            "CopyVolumes",
+            "CreateVolume"
           ]
         }
       },
@@ -38,17 +38,33 @@
     },
     {
       "Action": [
-        "ec2:DescribeAccountAttributes",
-        "ec2:DescribeInstances",
-        "ec2:DescribeTags",
-        "ec2:DescribeVolumes",
-        "ec2:DescribeVolumesModifications",
-        "kms:CreateGrant",
         "kms:Decrypt",
-        "kms:DescribeKey",
         "kms:Encrypt",
         "kms:GenerateDataKey*",
         "kms:ReEncrypt*"
+      ],
+      "Condition": {
+        "StringLike": {
+          "kms:ViaService": [
+            "ec2.us-test-1.amazonaws.com",
+            "s3.*.amazonaws.com"
+          ]
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "*"
+    },
+    {
+      "Action": [
+        "ec2:DescribeAvailabilityZones",
+        "ec2:DescribeInstanceTypes",
+        "ec2:DescribeInstances",
+        "ec2:DescribeTags",
+        "ec2:DescribeVolumeStatus",
+        "ec2:DescribeVolumes",
+        "ec2:DescribeVolumesModifications",
+        "kms:CreateGrant",
+        "kms:DescribeKey"
       ],
       "Effect": "Allow",
       "Resource": "*"
@@ -58,7 +74,6 @@
         "ec2:AttachVolume",
         "ec2:DeleteVolume",
         "ec2:DetachVolume",
-        "ec2:ModifyInstanceAttribute",
         "ec2:ModifyVolume"
       ],
       "Condition": {
@@ -71,7 +86,7 @@
     },
     {
       "Action": [
-        "ec2:CreateSnapshot",
+        "ec2:CopyVolumes",
         "ec2:CreateVolume"
       ],
       "Condition": {

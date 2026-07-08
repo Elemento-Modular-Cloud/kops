@@ -33,6 +33,7 @@ import (
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awstasks"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
+	"k8s.io/kops/upup/pkg/fi/cloudup/gce"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner"
 	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
 
@@ -136,7 +137,7 @@ func (b *KopsModelContext) MasterInstanceGroups() []*kops.InstanceGroup {
 func (b *KopsModelContext) NodeInstanceGroups() []*kops.InstanceGroup {
 	var groups []*kops.InstanceGroup
 	for _, ig := range b.InstanceGroups {
-		if ig.Spec.Role != kops.InstanceGroupRoleNode {
+		if !ig.Spec.Role.HasNode() {
 			continue
 		}
 		groups = append(groups, ig)
@@ -145,6 +146,8 @@ func (b *KopsModelContext) NodeInstanceGroups() []*kops.InstanceGroup {
 }
 
 // CloudTagsForInstanceGroup computes the tags to apply to instances in the specified InstanceGroup
+//
+// TODO: The cloud provider specific logic should be moved to relevant model packages.
 func (b *KopsModelContext) CloudTagsForInstanceGroup(ig *kops.InstanceGroup) (map[string]string, error) {
 	labels := b.CloudTags(b.AutoscalingGroupName(ig), false)
 
@@ -178,6 +181,8 @@ func (b *KopsModelContext) CloudTagsForInstanceGroup(ig *kops.InstanceGroup) (ma
 		switch b.Cluster.GetCloudProvider() {
 		case kops.CloudProviderHetzner:
 			labels[hetzner.TagKubernetesNodeLabelPrefix+k] = v
+		case kops.CloudProviderGCE:
+			// TODO: Do nothing for now while we figure out how to address GCE label length limit of 63
 		default:
 			labels[nodeidentityaws.ClusterAutoscalerNodeTemplateLabel+k] = v
 		}
@@ -185,10 +190,11 @@ func (b *KopsModelContext) CloudTagsForInstanceGroup(ig *kops.InstanceGroup) (ma
 
 	// Apply labels for cluster autoscaler node taints
 	for _, v := range ig.Spec.Taints {
-		splits := strings.SplitN(v, "=", 2)
-		if len(splits) > 1 {
-			labels[clusterAutoscalerNodeTemplateTaint+splits[0]] = splits[1]
+		taint, err := util.ParseTaint(v)
+		if err != nil || taint["effect"] == "" {
+			continue
 		}
+		labels[clusterAutoscalerNodeTemplateTaint+taint["key"]] = taint["value"] + ":" + taint["effect"]
 	}
 
 	switch b.Cluster.GetCloudProvider() {
@@ -196,23 +202,35 @@ func (b *KopsModelContext) CloudTagsForInstanceGroup(ig *kops.InstanceGroup) (ma
 		labels[hetzner.TagKubernetesInstanceRole] = string(ig.Spec.Role)
 		labels[hetzner.TagKubernetesClusterName] = b.ClusterName()
 		labels[hetzner.TagKubernetesInstanceGroup] = ig.Name
+		if ig.Spec.Role.HasNode() {
+			labels[hetzner.TagClusterAutoscalerNodeGroup] = ig.Name
+		}
+	case kops.CloudProviderGCE:
+		clusterLabel := gce.LabelForCluster(b.ClusterName())
+		roleLabel := gce.GceLabelNameRolePrefix + ig.Spec.Role.ToLowerString()
+		labels[clusterLabel.Key] = clusterLabel.Value
+		labels[roleLabel] = ig.Spec.Role.ToLowerString()
+		labels[gce.GceLabelNameInstanceGroup] = ig.ObjectMeta.Name
+		if ig.Spec.Role.HasControlPlane() {
+			labels[gce.GceLabelNameRolePrefix+"master"] = "master"
+		}
 	default:
 		// The system tags take priority because the cluster likely breaks without them...
 
-		if ig.Spec.Role == kops.InstanceGroupRoleControlPlane {
+		if ig.Spec.Role.HasControlPlane() {
 			labels[awstasks.CloudTagInstanceGroupRolePrefix+"master"] = "1"
 			labels[awstasks.CloudTagInstanceGroupRolePrefix+kops.InstanceGroupRoleControlPlane.ToLowerString()] = "1"
 		}
 
-		if ig.Spec.Role == kops.InstanceGroupRoleAPIServer {
+		if ig.Spec.Role.HasAPIServer() {
 			labels[awstasks.CloudTagInstanceGroupRolePrefix+strings.ToLower(string(kops.InstanceGroupRoleAPIServer))] = "1"
 		}
 
-		if ig.Spec.Role == kops.InstanceGroupRoleNode {
+		if ig.Spec.Role.HasNode() {
 			labels[awstasks.CloudTagInstanceGroupRolePrefix+strings.ToLower(string(kops.InstanceGroupRoleNode))] = "1"
 		}
 
-		if ig.Spec.Role == kops.InstanceGroupRoleBastion {
+		if ig.Spec.Role.HasBastion() {
 			labels[awstasks.CloudTagInstanceGroupRolePrefix+strings.ToLower(string(kops.InstanceGroupRoleBastion))] = "1"
 		}
 
@@ -265,7 +283,7 @@ func (b *KopsModelContext) CloudTags(name string, shared bool) map[string]string
 		}
 	case kops.CloudProviderScaleway:
 		for k, v := range b.Cluster.Spec.CloudLabels {
-			if k == scaleway.TagClusterName && shared == true {
+			if k == scaleway.TagClusterName && shared {
 				klog.V(4).Infof("Skipping %q tag for shared resource", scaleway.TagClusterName)
 				continue
 			}
@@ -288,7 +306,7 @@ func (b *KopsModelContext) UsesBastionDns() bool {
 // UsesSSHBastion checks if we have a Bastion in the cluster
 func (b *KopsModelContext) UsesSSHBastion() bool {
 	for _, ig := range b.InstanceGroups {
-		if ig.Spec.Role == kops.InstanceGroupRoleBastion {
+		if ig.Spec.Role.HasBastion() {
 			return true
 		}
 	}

@@ -58,6 +58,14 @@ resource "aws_s3_object" "kops-version-txt" {
   server_side_encryption = "AES256"
 }
 
+resource "aws_s3_object" "manifests-channels-kops-channels" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_object_manifests-channels-kops-channels_content")
+  key                    = "tests/minimal-gce.example.com/manifests/channels/kops-channels.yaml"
+  provider               = aws.files
+  server_side_encryption = "AES256"
+}
+
 resource "aws_s3_object" "manifests-etcdmanager-events-master-us-test1-a" {
   bucket                 = "testingBucket"
   content                = file("${path.module}/data/aws_s3_object_manifests-etcdmanager-events-master-us-test1-a_content")
@@ -167,16 +175,6 @@ resource "google_compute_address" "api-us-test1-minimal-gce-example-com" {
   name         = "api-us-test1-minimal-gce-example-com"
   purpose      = "SHARED_LOADBALANCER_VIP"
   subnetwork   = google_compute_subnetwork.us-test1-minimal-gce-example-com.name
-}
-
-resource "google_compute_backend_service" "api-minimal-gce-example-com" {
-  backend {
-    group = google_compute_instance_group_manager.a-master-us-test1-a-minimal-gce-example-com.instance_group
-  }
-  health_checks         = [google_compute_health_check.api-minimal-gce-example-com.id]
-  load_balancing_scheme = "INTERNAL_SELF_MANAGED"
-  name                  = "api-minimal-gce-example-com"
-  protocol              = "TCP"
 }
 
 resource "google_compute_disk" "a-etcd-events-minimal-gce-example-com" {
@@ -441,7 +439,7 @@ resource "google_compute_firewall" "ssh-external-to-node-minimal-gce-example-com
 }
 
 resource "google_compute_forwarding_rule" "api-us-test1-minimal-gce-example-com" {
-  backend_service = google_compute_backend_service.api-minimal-gce-example-com.id
+  backend_service = google_compute_region_backend_service.api-minimal-gce-example-com.id
   ip_address      = google_compute_address.api-us-test1-minimal-gce-example-com.address
   ip_protocol     = "TCP"
   labels = {
@@ -456,7 +454,7 @@ resource "google_compute_forwarding_rule" "api-us-test1-minimal-gce-example-com"
 }
 
 resource "google_compute_forwarding_rule" "kops-controller-us-test1-minimal-gce-example-com" {
-  backend_service = google_compute_backend_service.api-minimal-gce-example-com.id
+  backend_service = google_compute_region_backend_service.api-minimal-gce-example-com.id
   ip_address      = google_compute_address.api-us-test1-minimal-gce-example-com.address
   ip_protocol     = "TCP"
   labels = {
@@ -470,18 +468,18 @@ resource "google_compute_forwarding_rule" "kops-controller-us-test1-minimal-gce-
   subnetwork            = google_compute_subnetwork.us-test1-minimal-gce-example-com.name
 }
 
-resource "google_compute_health_check" "api-minimal-gce-example-com" {
-  name = "api-minimal-gce-example-com"
-  tcp_health_check {
-    port = 443
-  }
-}
-
 resource "google_compute_instance_group_manager" "a-master-us-test1-a-minimal-gce-example-com" {
-  base_instance_name             = "master-us-test1-a"
+  base_instance_name = "master-us-test1-a"
+  lifecycle {
+    ignore_changes = [target_size]
+  }
   list_managed_instances_results = "PAGINATED"
   name                           = "a-master-us-test1-a-minimal-gce-example-com"
   target_size                    = 1
+  update_policy {
+    minimal_action = "REPLACE"
+    type           = "OPPORTUNISTIC"
+  }
   version {
     instance_template = google_compute_instance_template.master-us-test1-a-minimal-gce-example-com.self_link
   }
@@ -489,36 +487,63 @@ resource "google_compute_instance_group_manager" "a-master-us-test1-a-minimal-gc
 }
 
 resource "google_compute_instance_group_manager" "a-nodes-minimal-gce-example-com" {
-  base_instance_name             = "nodes"
+  base_instance_name = "nodes"
+  lifecycle {
+    ignore_changes = [target_size]
+  }
   list_managed_instances_results = "PAGINATED"
   name                           = "a-nodes-minimal-gce-example-com"
-  target_size                    = 2
+  target_size                    = 1
+  update_policy {
+    minimal_action = "REPLACE"
+    type           = "OPPORTUNISTIC"
+  }
   version {
     instance_template = google_compute_instance_template.nodes-minimal-gce-example-com.self_link
   }
   zone = "us-test1-a"
 }
 
+resource "google_compute_instance_group_manager" "b-nodes-minimal-gce-example-com" {
+  base_instance_name = "nodes"
+  lifecycle {
+    ignore_changes = [target_size]
+  }
+  list_managed_instances_results = "PAGINATED"
+  name                           = "b-nodes-minimal-gce-example-com"
+  target_size                    = 1
+  update_policy {
+    minimal_action = "REPLACE"
+    type           = "OPPORTUNISTIC"
+  }
+  version {
+    instance_template = google_compute_instance_template.nodes-minimal-gce-example-com.self_link
+  }
+  zone = "us-test1-b"
+}
+
 resource "google_compute_instance_template" "master-us-test1-a-minimal-gce-example-com" {
   can_ip_forward = true
   disk {
-    auto_delete  = true
-    boot         = true
-    device_name  = "persistent-disks-0"
-    disk_name    = ""
-    disk_size_gb = 64
-    disk_type    = "pd-standard"
-    interface    = ""
-    mode         = "READ_WRITE"
-    source       = ""
-    source_image = "https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/ubuntu-2004-focal-v20221018"
-    type         = "PERSISTENT"
+    auto_delete            = true
+    boot                   = true
+    device_name            = "persistent-disks-0"
+    disk_name              = ""
+    disk_size_gb           = 64
+    disk_type              = "pd-standard"
+    interface              = ""
+    mode                   = "READ_WRITE"
+    provisioned_iops       = 0
+    provisioned_throughput = 0
+    source                 = ""
+    source_image           = "https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/ubuntu-2604-resolute-amd64-v20221018"
+    type                   = "PERSISTENT"
   }
   labels = {
     "k8s-io-cluster-name"       = "minimal-gce-example-com"
     "k8s-io-instance-group"     = "master-us-test1-a"
-    "k8s-io-role-control-plane" = ""
-    "k8s-io-role-master"        = ""
+    "k8s-io-role-control-plane" = "control-plane"
+    "k8s-io-role-master"        = "master"
   }
   lifecycle {
     create_before_destroy = true
@@ -552,22 +577,24 @@ resource "google_compute_instance_template" "master-us-test1-a-minimal-gce-examp
 resource "google_compute_instance_template" "nodes-minimal-gce-example-com" {
   can_ip_forward = true
   disk {
-    auto_delete  = true
-    boot         = true
-    device_name  = "persistent-disks-0"
-    disk_name    = ""
-    disk_size_gb = 128
-    disk_type    = "pd-standard"
-    interface    = ""
-    mode         = "READ_WRITE"
-    source       = ""
-    source_image = "https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/ubuntu-2004-focal-v20221018"
-    type         = "PERSISTENT"
+    auto_delete            = true
+    boot                   = true
+    device_name            = "persistent-disks-0"
+    disk_name              = ""
+    disk_size_gb           = 128
+    disk_type              = "pd-standard"
+    interface              = ""
+    mode                   = "READ_WRITE"
+    provisioned_iops       = 0
+    provisioned_throughput = 0
+    source                 = ""
+    source_image           = "https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/ubuntu-2604-resolute-amd64-v20221018"
+    type                   = "PERSISTENT"
   }
   labels = {
     "k8s-io-cluster-name"   = "minimal-gce-example-com"
     "k8s-io-instance-group" = "nodes"
-    "k8s-io-role-node"      = ""
+    "k8s-io-role-node"      = "node"
   }
   lifecycle {
     create_before_destroy = true
@@ -604,6 +631,24 @@ resource "google_compute_network" "minimal-gce-example-com" {
   name                    = "minimal-gce-example-com"
 }
 
+resource "google_compute_region_backend_service" "api-minimal-gce-example-com" {
+  backend {
+    balancing_mode = "CONNECTION"
+    group          = google_compute_instance_group_manager.a-master-us-test1-a-minimal-gce-example-com.instance_group
+  }
+  health_checks         = [google_compute_region_health_check.api-minimal-gce-example-com.id]
+  load_balancing_scheme = "INTERNAL"
+  name                  = "api-minimal-gce-example-com"
+  protocol              = "TCP"
+}
+
+resource "google_compute_region_health_check" "api-minimal-gce-example-com" {
+  name = "api-minimal-gce-example-com"
+  tcp_health_check {
+    port = 443
+  }
+}
+
 resource "google_compute_router" "nat-minimal-gce-example-com" {
   name    = "nat-minimal-gce-example-com"
   network = google_compute_network.minimal-gce-example-com.name
@@ -630,15 +675,9 @@ resource "google_compute_subnetwork" "us-test1-minimal-gce-example-com" {
 }
 
 resource "google_project_iam_binding" "serviceaccount-control-plane" {
-  members = ["serviceAccount:control-plane-minimal-g-fu1mg6@testproject.iam.gserviceaccount.com"]
+  members = [format("serviceAccount:%s", google_service_account.control-plane.email)]
   project = "testproject"
   role    = "roles/container.serviceAgent"
-}
-
-resource "google_project_iam_binding" "serviceaccount-nodes" {
-  members = ["serviceAccount:node-minimal-gce-example-com@testproject.iam.gserviceaccount.com"]
-  project = "testproject"
-  role    = "roles/compute.viewer"
 }
 
 resource "google_service_account" "control-plane" {

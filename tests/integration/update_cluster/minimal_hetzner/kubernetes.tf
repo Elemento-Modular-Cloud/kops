@@ -51,6 +51,14 @@ resource "aws_s3_object" "kops-version-txt" {
   server_side_encryption = "AES256"
 }
 
+resource "aws_s3_object" "manifests-channels-kops-channels" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_object_manifests-channels-kops-channels_content")
+  key                    = "tests/minimal.example.com/manifests/channels/kops-channels.yaml"
+  provider               = aws.files
+  server_side_encryption = "AES256"
+}
+
 resource "aws_s3_object" "manifests-etcdmanager-events-master-fsn1" {
   bucket                 = "testingBucket"
   content                = file("${path.module}/data/aws_s3_object_manifests-etcdmanager-events-master-fsn1_content")
@@ -83,6 +91,14 @@ resource "aws_s3_object" "minimal-example-com-addons-bootstrap" {
   server_side_encryption = "AES256"
 }
 
+resource "aws_s3_object" "minimal-example-com-addons-cluster-autoscaler-addons-k8s-io-k8s-1-15" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_object_minimal.example.com-addons-cluster-autoscaler.addons.k8s.io-k8s-1.15_content")
+  key                    = "tests/minimal.example.com/addons/cluster-autoscaler.addons.k8s.io/k8s-1.15.yaml"
+  provider               = aws.files
+  server_side_encryption = "AES256"
+}
+
 resource "aws_s3_object" "minimal-example-com-addons-coredns-addons-k8s-io-k8s-1-12" {
   bucket                 = "testingBucket"
   content                = file("${path.module}/data/aws_s3_object_minimal.example.com-addons-coredns.addons.k8s.io-k8s-1.12_content")
@@ -95,6 +111,14 @@ resource "aws_s3_object" "minimal-example-com-addons-hcloud-cloud-controller-add
   bucket                 = "testingBucket"
   content                = file("${path.module}/data/aws_s3_object_minimal.example.com-addons-hcloud-cloud-controller.addons.k8s.io-k8s-1.22_content")
   key                    = "tests/minimal.example.com/addons/hcloud-cloud-controller.addons.k8s.io/k8s-1.22.yaml"
+  provider               = aws.files
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_object" "minimal-example-com-addons-hcloud-config-addons-k8s-io-k8s-1-22" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_object_minimal.example.com-addons-hcloud-config.addons.k8s.io-k8s-1.22_content")
+  key                    = "tests/minimal.example.com/addons/hcloud-config.addons.k8s.io/k8s-1.22.yaml"
   provider               = aws.files
   server_side_encryption = "AES256"
 }
@@ -233,7 +257,7 @@ resource "hcloud_network_subnet" "minimal-example-com-10-0-0-0--16" {
 
 resource "hcloud_server" "master-fsn1" {
   count = 1
-  image = "ubuntu-20.04"
+  image = "ubuntu-26.04"
   labels = {
     "kops.k8s.io/cluster"                                                            = "minimal.example.com"
     "kops.k8s.io/instance-group"                                                     = "master-fsn1"
@@ -251,15 +275,16 @@ resource "hcloud_server" "master-fsn1" {
     ipv4_enabled = true
     ipv6_enabled = false
   }
-  server_type = "cx22"
+  server_type = "cx23"
   ssh_keys    = [hcloud_ssh_key.minimal-example-com-c4_a6_ed_9a_a8_89_b9_e2_c3_9c_d6_63_eb_9c_71_57.id]
   user_data   = filebase64("${path.module}/data/hcloud_server_master-fsn1_user_data")
 }
 
 resource "hcloud_server" "nodes-fsn1" {
   count = 1
-  image = "ubuntu-20.04"
+  image = "ubuntu-26.04"
   labels = {
+    "hcloud/node-group"                                   = "nodes-fsn1"
     "kops.k8s.io/cluster"                                 = "minimal.example.com"
     "kops.k8s.io/instance-group"                          = "nodes-fsn1"
     "kops.k8s.io/instance-role"                           = "Node"
@@ -274,7 +299,7 @@ resource "hcloud_server" "nodes-fsn1" {
     ipv4_enabled = true
     ipv6_enabled = false
   }
-  server_type = "cx22"
+  server_type = "cx23"
   ssh_keys    = [hcloud_ssh_key.minimal-example-com-c4_a6_ed_9a_a8_89_b9_e2_c3_9c_d6_63_eb_9c_71_57.id]
   user_data   = filebase64("${path.module}/data/hcloud_server_nodes-fsn1_user_data")
 }

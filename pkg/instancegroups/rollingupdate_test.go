@@ -52,7 +52,7 @@ const (
 )
 
 func getTestSetup() (*RollingUpdateCluster, *awsup.MockAWSCloud) {
-	k8sClient := fake.NewSimpleClientset()
+	k8sClient := fake.NewClientset()
 
 	mockcloud := awsup.BuildMockAWSCloud("us-east-1", "abc")
 	mockAutoscaling := &mockautoscaling.MockAutoscaling{
@@ -165,7 +165,7 @@ func makeGroup(groups map[string]*cloudinstances.CloudInstanceGroup, k8sClient k
 	for i := 0; i < count; i++ {
 		id := name + string(rune('a'+i))
 		var node *v1.Node
-		if role != kopsapi.InstanceGroupRoleBastion {
+		if !role.HasBastion() {
 			node = &v1.Node{
 				ObjectMeta: v1meta.ObjectMeta{Name: id + ".local"},
 			}
@@ -196,6 +196,25 @@ func getGroups(k8sClient kubernetes.Interface, cloud awsup.AWSCloud) map[string]
 	makeGroup(groups, k8sClient, cloud, "master-1", kopsapi.InstanceGroupRoleControlPlane, 2, 0)
 	makeGroup(groups, k8sClient, cloud, "bastion-1", kopsapi.InstanceGroupRoleBastion, 1, 0)
 	return groups
+}
+
+func TestIsExitableError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"plain error", fmt.Errorf("boom"), false},
+		{"validation timeout", &ValidationTimeoutError{operation: " after node update", err: fmt.Errorf("x")}, true},
+		{"deregister error", &DeregisterError{err: fmt.Errorf("x")}, true},
+		{"wrapped deregister error", fmt.Errorf("failed to drain node %q: %w", "n", &DeregisterError{err: fmt.Errorf("x")}), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isExitableError(tc.err))
+		})
+	}
 }
 
 func getGroupsAllNeedUpdate(k8sClient kubernetes.Interface, cloud awsup.AWSCloud) map[string]*cloudinstances.CloudInstanceGroup {

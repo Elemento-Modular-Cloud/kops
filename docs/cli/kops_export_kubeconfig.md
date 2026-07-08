@@ -31,6 +31,7 @@ kops export kubeconfig [CLUSTER | --all] [flags]
 ```
       --admin duration[=18h0m0s]   Also export a cluster admin user credential with the specified lifetime and add it to the cluster context
       --all                        Export all clusters from the kOps state store
+      --api-server string          Override the API server used when communicating with the cluster kube-apiserver
       --auth-plugin                Use the kOps authentication plugin
   -h, --help                       help for kubeconfig
       --internal                   Use the cluster's internal DNS name
@@ -41,10 +42,12 @@ kops export kubeconfig [CLUSTER | --all] [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   yaml config file (default is $HOME/.kops.yaml)
-      --name string     Name of cluster. Overrides KOPS_CLUSTER_NAME environment variable
-      --state string    Location of state storage (kops 'config' file). Overrides KOPS_STATE_STORE environment variable
-  -v, --v Level         number for the log level verbosity
+      --alsologtostderrthreshold severity   logs at or above this threshold go to stderr when -alsologtostderr=true (no effect when -logtostderr=true)
+      --config string                       yaml config file (default is $HOME/.kops.yaml)
+      --legacy_stderr_threshold_behavior    If true, stderrthreshold is ignored when logtostderr=true (legacy behavior). If false, stderrthreshold is honored even when logtostderr=true
+      --name string                         Name of cluster. Overrides KOPS_CLUSTER_NAME environment variable
+      --state string                        Location of state storage (kops 'config' file). Overrides KOPS_STATE_STORE environment variable
+  -v, --v Level                             number for the log level verbosity
 ```
 
 ### SEE ALSO

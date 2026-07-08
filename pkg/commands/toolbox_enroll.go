@@ -34,6 +34,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
@@ -48,9 +49,13 @@ import (
 	"k8s.io/kops/pkg/client/simple"
 	"k8s.io/kops/pkg/commands/commandutils"
 	"k8s.io/kops/pkg/featureflag"
+	"k8s.io/kops/pkg/k8scodecs"
+	"k8s.io/kops/pkg/kubeconfig"
+	"k8s.io/kops/pkg/kubemanifest"
 	"k8s.io/kops/pkg/model"
 	"k8s.io/kops/pkg/model/resources"
 	"k8s.io/kops/pkg/nodemodel"
+	"k8s.io/kops/pkg/nodemodel/wellknownassets"
 	"k8s.io/kops/pkg/wellknownservices"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup"
@@ -65,6 +70,14 @@ type ToolboxEnrollOptions struct {
 
 	SSHUser string
 	SSHPort int
+
+	// BuildHost is a flag to only build the host resource, don't apply it or enroll the node
+	BuildHost bool
+
+	// PodCIDRs is the list of IP Address ranges to use for pods that run on this node
+	PodCIDRs []string
+
+	kubeconfig.CreateKubecfgOptions
 }
 
 func (o *ToolboxEnrollOptions) InitDefaults() {
@@ -82,6 +95,17 @@ func RunToolboxEnroll(ctx context.Context, f commandutils.Factory, out io.Writer
 	if options.InstanceGroup == "" {
 		return fmt.Errorf("instance-group is required")
 	}
+	if options.Host == "" {
+		// Technically we could build the host resource without the PKI, but this isn't the case we are targeting right now.
+		return fmt.Errorf("host is required")
+	}
+
+	// Resolve KOPS_BASE_URL early so that kops.Version is overridden
+	// before the version downgrade check in ApplyClusterCmd.Run.
+	if _, err := wellknownassets.BaseURL(); err != nil {
+		return err
+	}
+
 	clientset, err := f.KopsClient()
 	if err != nil {
 		return err
@@ -97,6 +121,36 @@ func RunToolboxEnroll(ctx context.Context, f commandutils.Factory, out io.Writer
 	if err != nil {
 		return err
 	}
+
+	// Enroll the node over SSH.
+	restConfig, err := f.RESTConfig(ctx, fullCluster, options.CreateKubecfgOptions)
+	if err != nil {
+		return err
+	}
+
+	sudo := options.SSHUser != "root"
+
+	sshTarget, err := NewSSHHost(ctx, options.Host, options.SSHPort, options.SSHUser, sudo)
+	if err != nil {
+		return err
+	}
+	defer sshTarget.Close()
+
+	hostData, err := buildHostData(ctx, sshTarget, options)
+	if err != nil {
+		return err
+	}
+
+	if options.BuildHost {
+		klog.Infof("building host data for %+v", hostData)
+		b, err := yaml.Marshal(hostData)
+		if err != nil {
+			return fmt.Errorf("error marshalling host data: %w", err)
+		}
+		fmt.Fprintf(out, "%s\n", string(b))
+		return nil
+	}
+
 	fullInstanceGroup, err := configBuilder.GetFullInstanceGroup(ctx)
 	if err != nil {
 		return err
@@ -106,44 +160,15 @@ func RunToolboxEnroll(ctx context.Context, f commandutils.Factory, out io.Writer
 		return err
 	}
 
-	// Enroll the node over SSH.
-	if options.Host != "" {
-		restConfig, err := f.RESTConfig(fullCluster)
-		if err != nil {
-			return err
-		}
-
-		if err := enrollHost(ctx, fullInstanceGroup, options, bootstrapData, restConfig); err != nil {
-			return err
-		}
+	if err := enrollHost(ctx, fullInstanceGroup, bootstrapData, restConfig, hostData, sshTarget); err != nil {
+		return err
 	}
 
 	return nil
 }
 
-func enrollHost(ctx context.Context, ig *kops.InstanceGroup, options *ToolboxEnrollOptions, bootstrapData *BootstrapData, restConfig *rest.Config) error {
-	scheme := runtime.NewScheme()
-	if err := v1alpha2.AddToScheme(scheme); err != nil {
-		return fmt.Errorf("building kubernetes scheme: %w", err)
-	}
-	kubeClient, err := client.New(restConfig, client.Options{
-		Scheme: scheme,
-	})
-	if err != nil {
-		return fmt.Errorf("building kubernetes client: %w", err)
-	}
-
-	sudo := true
-	if options.SSHUser == "root" {
-		sudo = false
-	}
-
-	sshTarget, err := NewSSHHost(ctx, options.Host, options.SSHPort, options.SSHUser, sudo)
-	if err != nil {
-		return err
-	}
-	defer sshTarget.Close()
-
+// buildHostData builds an instance of the Host CRD, based on information in the options and by SSHing to the target host.
+func buildHostData(ctx context.Context, sshTarget *SSHHost, options *ToolboxEnrollOptions) (*v1alpha2.Host, error) {
 	publicKeyPath := "/etc/kubernetes/kops/pki/machine/public.pem"
 
 	publicKeyBytes, err := sshTarget.readFile(ctx, publicKeyPath)
@@ -151,19 +176,20 @@ func enrollHost(ctx context.Context, ig *kops.InstanceGroup, options *ToolboxEnr
 		if errors.Is(err, fs.ErrNotExist) {
 			publicKeyBytes = nil
 		} else {
-			return fmt.Errorf("error reading public key %q: %w", publicKeyPath, err)
+			return nil, fmt.Errorf("error reading public key %q: %w", publicKeyPath, err)
 		}
 	}
 
+	// Create the key if it doesn't exist
 	publicKeyBytes = bytes.TrimSpace(publicKeyBytes)
 	if len(publicKeyBytes) == 0 {
-		if _, err := sshTarget.runScript(ctx, scriptCreateKey, ExecOptions{Sudo: sudo, Echo: true}); err != nil {
-			return err
+		if _, err := sshTarget.runScript(ctx, scriptCreateKey, ExecOptions{Echo: true}); err != nil {
+			return nil, err
 		}
 
 		b, err := sshTarget.readFile(ctx, publicKeyPath)
 		if err != nil {
-			return fmt.Errorf("error reading public key %q (after creation): %w", publicKeyPath, err)
+			return nil, fmt.Errorf("error reading public key %q (after creation): %w", publicKeyPath, err)
 		}
 		publicKeyBytes = b
 	}
@@ -171,14 +197,42 @@ func enrollHost(ctx context.Context, ig *kops.InstanceGroup, options *ToolboxEnr
 
 	hostname, err := sshTarget.getHostname(ctx)
 	if err != nil {
-		return err
+		return nil, err
+	}
+
+	host := &v1alpha2.Host{}
+	host.SetGroupVersionKind(v1alpha2.SchemeGroupVersion.WithKind("Host"))
+	host.Namespace = "kops-system"
+	host.Name = hostname
+	host.Spec.InstanceGroup = options.InstanceGroup
+	host.Spec.PublicKey = string(publicKeyBytes)
+	host.Spec.PodCIDRs = options.PodCIDRs
+
+	return host, nil
+}
+
+func enrollHost(ctx context.Context, ig *kops.InstanceGroup, bootstrapData *BootstrapData, restConfig *rest.Config, hostData *v1alpha2.Host, sshTarget *SSHHost) error {
+	scheme := runtime.NewScheme()
+	if err := v1alpha2.AddToScheme(scheme); err != nil {
+		return fmt.Errorf("building kubernetes scheme: %w", err)
+	}
+	// Ensure that we don't try to use proto with our CRD
+	restConfigNoProto := rest.CopyConfig(restConfig)
+	restConfigNoProto.ContentType = runtime.ContentTypeJSON
+	restConfigNoProto.AcceptContentTypes = runtime.ContentTypeJSON
+
+	kubeClient, err := client.New(restConfigNoProto, client.Options{
+		Scheme: scheme,
+	})
+	if err != nil {
+		return fmt.Errorf("building kubernetes client: %w", err)
 	}
 
 	// We can't create the host resource in the API server for control-plane nodes,
 	// because the API server (likely) isn't running yet.
 	if !ig.IsControlPlane() {
-		if err := createHostResourceInAPIServer(ctx, options, hostname, publicKeyBytes, kubeClient); err != nil {
-			return err
+		if err := kubeClient.Create(ctx, hostData); err != nil {
+			return fmt.Errorf("failed to create host %s/%s: %w", hostData.Namespace, hostData.Name, err)
 		}
 	}
 
@@ -189,24 +243,10 @@ func enrollHost(ctx context.Context, ig *kops.InstanceGroup, options *ToolboxEnr
 	}
 
 	if len(bootstrapData.NodeupScript) != 0 {
-		if _, err := sshTarget.runScript(ctx, string(bootstrapData.NodeupScript), ExecOptions{Sudo: sudo, Echo: true}); err != nil {
+		if _, err := sshTarget.runScript(ctx, string(bootstrapData.NodeupScript), ExecOptions{Echo: true}); err != nil {
 			return err
 		}
 	}
-	return nil
-}
-
-func createHostResourceInAPIServer(ctx context.Context, options *ToolboxEnrollOptions, nodeName string, publicKey []byte, client client.Client) error {
-	host := &v1alpha2.Host{}
-	host.Namespace = "kops-system"
-	host.Name = nodeName
-	host.Spec.InstanceGroup = options.InstanceGroup
-	host.Spec.PublicKey = string(publicKey)
-
-	if err := client.Create(ctx, host); err != nil {
-		return fmt.Errorf("failed to create host %s/%s: %w", host.Namespace, host.Name, err)
-	}
-
 	return nil
 }
 
@@ -261,6 +301,16 @@ func NewSSHHost(ctx context.Context, host string, sshPort int, sshUser string, s
 
 	agentClient := agent.NewClient(conn)
 
+	signers, err := agentClient.Signers()
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("failed to get signers: %w", err)
+	}
+
+	if len(signers) == 0 {
+		return nil, fmt.Errorf("SSH agent has no keys")
+	}
+
 	sshConfig := &ssh.ClientConfig{
 		HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 			klog.Warningf("accepting SSH key %v for %q", key, hostname)
@@ -273,7 +323,8 @@ func NewSSHHost(ctx context.Context, host string, sshPort int, sshUser string, s
 		},
 		User: sshUser,
 	}
-	sshClient, err := ssh.Dial("tcp", host+":"+strconv.Itoa(sshPort), sshConfig)
+	// Use net.JoinHostPort so that IPv6 addresses are bracketed correctly.
+	sshClient, err := ssh.Dial("tcp", net.JoinHostPort(host, strconv.Itoa(sshPort)), sshConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to SSH to %q (with user %q): %w", host, sshUser, err)
 	}
@@ -310,7 +361,7 @@ func (s *SSHHost) runScript(ctx context.Context, script string, options ExecOpti
 	p := vfs.NewSSHPath(s.sshClient, s.hostname, scriptPath, s.sudo)
 
 	defer func() {
-		if _, err := s.runCommand(ctx, "rm -rf "+tempDir, ExecOptions{Sudo: s.sudo, Echo: false}); err != nil {
+		if _, err := s.runCommand(ctx, "rm -rf "+tempDir, ExecOptions{Echo: false}); err != nil {
 			klog.Warningf("error cleaning up temp directory %q: %v", tempDir, err)
 		}
 	}()
@@ -331,7 +382,6 @@ type CommandOutput struct {
 
 // ExecOptions holds options for running a command remotely.
 type ExecOptions struct {
-	Sudo bool
 	Echo bool
 }
 
@@ -348,10 +398,11 @@ func (s *SSHHost) runCommand(ctx context.Context, command string, options ExecOp
 	session.Stderr = &output.Stderr
 
 	if options.Echo {
-		session.Stdout = io.MultiWriter(os.Stdout, session.Stdout)
+		// We send both to stderr, so we don't "corrupt" stdout
+		session.Stdout = io.MultiWriter(os.Stderr, session.Stdout)
 		session.Stderr = io.MultiWriter(os.Stderr, session.Stderr)
 	}
-	if options.Sudo {
+	if s.sudo {
 		command = "sudo " + command
 	}
 	if err := session.Run(command); err != nil {
@@ -363,7 +414,7 @@ func (s *SSHHost) runCommand(ctx context.Context, command string, options ExecOp
 // getHostname gets the hostname of the SSH target.
 // This is used as the node name when registering the node.
 func (s *SSHHost) getHostname(ctx context.Context) (string, error) {
-	output, err := s.runCommand(ctx, "hostname", ExecOptions{Sudo: false, Echo: true})
+	output, err := s.runCommand(ctx, "hostname", ExecOptions{Echo: true})
 	if err != nil {
 		return "", fmt.Errorf("failed to get hostname: %w", err)
 	}
@@ -388,11 +439,11 @@ type BootstrapData struct {
 // ConfigBuilder builds bootstrap configuration for a node.
 type ConfigBuilder struct {
 	// ClusterName is the name of the cluster to build.
-	// Required.
+	// Required (unless Cluster is set).
 	ClusterName string
 
 	// InstanceGroupName is the name of the InstanceGroup we are building configuration for.
-	// Required.
+	// Required (unless InstanceGroup is set).
 	InstanceGroupName string
 
 	// Clientset is the clientset to use to query for clusters / instancegroups etc
@@ -635,7 +686,7 @@ func (b *ConfigBuilder) GetAssetBuilder(ctx context.Context) (*assets.AssetBuild
 		return nil, err
 	}
 
-	// ApplyClusterCmd is get the assets.
+	// ApplyClusterCmd is used to get the assets.
 	// We use DryRun and GetAssets to do this without applying any changes.
 	apply := &cloudup.ApplyClusterCmd{
 		Cloud:      cloud,
@@ -803,7 +854,7 @@ func (b *ConfigBuilder) GetBootstrapData(ctx context.Context) (*BootstrapData, e
 
 	// If this is the control plane, we want to copy the config from s3/gcs to the local file system on the target node,
 	// so that we don't need credentials to the state store.
-	if bootConfig.InstanceGroupRole == kops.InstanceGroupRoleControlPlane {
+	if bootConfig.InstanceGroupRole.HasControlPlane() {
 		remapPrefix := "s3://" // TODO: Support GCS?
 
 		// targetDir is the location of the config on the target node.
@@ -874,27 +925,34 @@ func (b *ConfigBuilder) GetBootstrapData(ctx context.Context) (*BootstrapData, e
 			}
 		}
 
-		configBase, err := vfs.Context.BuildVfsPath(cluster.Spec.ConfigStore.Base)
-		if err != nil {
-			return nil, fmt.Errorf("parsing configStore.base %q: %w", cluster.Spec.ConfigStore.Base, err)
-		}
-		for i, channel := range nodeupConfig.Channels {
-			bootstrapChannelPath := configBase.Join("addons", "bootstrap-channel.yaml").Path()
-			if channel != bootstrapChannelPath {
-				klog.Infof("not remapping non-bootstrap channel %q", channel)
-				continue
+		// The kops-channels static pod is built at cloudup with the remote bootstrap URL baked
+		// into its args. To run on an enrolled node without state-store credentials, copy the
+		// addons tree onto the host, pull the manifest down, then rewrite the bootstrap URL in
+		// the manifest to file://<local addons>/bootstrap-channel.yaml (+ matching hostPath mount).
+		if strings.HasPrefix(nodeupConfig.ChannelsManifest, remapPrefix) {
+			configBase, err := vfs.Context.BuildVfsPath(cluster.Spec.ConfigStore.Base)
+			if err != nil {
+				return nil, fmt.Errorf("parsing configStore.base %q: %w", cluster.Spec.ConfigStore.Base, err)
 			}
+			bootstrapChannelURL := configBase.Join("addons", "bootstrap-channel.yaml").Path()
 
-			parentPath := configBase.Join("addons").Path()
-			if err := remapTree(&parentPath, path.Join(targetDir, "addons")); err != nil {
+			addonsPath := configBase.Join("addons").Path()
+			if err := remapTree(&addonsPath, path.Join(targetDir, "addons")); err != nil {
 				return nil, err
 			}
-			nodeupConfig.Channels[i] = path.Join(parentPath, "bootstrap-channel.yaml")
-
-			// The channels tool requires a file:// prefix
-			if strings.HasPrefix(nodeupConfig.Channels[i], "/") {
-				nodeupConfig.Channels[i] = "file://" + nodeupConfig.Channels[i]
+			localAddons := addonsPath // remapTree mutated it in place to the on-host destination
+			if err := remapFile(&nodeupConfig.ChannelsManifest, targetDir); err != nil {
+				return nil, err
 			}
+			rewritten, err := rewriteChannelsManifestForEnroll(
+				bootstrapData.NodeupScriptAdditionalFiles[nodeupConfig.ChannelsManifest],
+				bootstrapChannelURL,
+				localAddons,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("rewriting channels manifest: %w", err)
+			}
+			bootstrapData.NodeupScriptAdditionalFiles[nodeupConfig.ChannelsManifest] = rewritten
 		}
 
 		if nodeupConfig.ConfigStore != nil {
@@ -918,7 +976,7 @@ func (b *ConfigBuilder) GetBootstrapData(ctx context.Context) (*BootstrapData, e
 		bootstrapData.NodeupScriptAdditionalFiles[p] = nodeupConfigBytes
 
 		// Copy any static manifests we need on the control plane
-		for _, staticManifest := range assetBuilder.StaticManifests {
+		for _, staticManifest := range assetBuilder.StaticManifests() {
 			if !staticManifest.AppliesToRole(bootConfig.InstanceGroupRole) {
 				continue
 			}
@@ -937,4 +995,34 @@ func (b *ConfigBuilder) GetBootstrapData(ctx context.Context) (*BootstrapData, e
 	b.bootstrapData = bootstrapData
 
 	return bootstrapData, nil
+}
+
+// rewriteChannelsManifestForEnroll rewrites the bootstrap-channel URL in the kops-channels
+// pod's container args to a file:// URL under localAddonsDir, and adds the matching hostPath
+// mount so the container can read the bootstrap from the host. Custom addons pass through
+// unchanged. If no arg matches the bootstrap URL we warn — the cloudup manifest shape almost
+// certainly drifted and the enrolled node won't be able to reach the bootstrap channel.
+func rewriteChannelsManifestForEnroll(data []byte, bootstrapChannelURL string, localAddonsDir string) ([]byte, error) {
+	pod := &corev1.Pod{}
+	if err := yaml.Unmarshal(data, pod); err != nil {
+		return nil, fmt.Errorf("parsing kops-channels manifest: %w", err)
+	}
+	localBootstrap := "file://" + path.Join(localAddonsDir, "bootstrap-channel.yaml")
+	rewroteContainer := -1
+	for ci := range pod.Spec.Containers {
+		args := pod.Spec.Containers[ci].Args
+		for i, arg := range args {
+			if arg == bootstrapChannelURL {
+				args[i] = localBootstrap
+				rewroteContainer = ci
+			}
+		}
+	}
+	if rewroteContainer < 0 {
+		klog.Warningf("kops-channels manifest had no arg matching the bootstrap URL %q; enrolled node will not be able to reach the bootstrap channel", bootstrapChannelURL)
+		return k8scodecs.ToVersionedYaml(pod)
+	}
+	kubemanifest.AddHostPathMapping(pod, &pod.Spec.Containers[rewroteContainer], "channels-enroll", localAddonsDir,
+		kubemanifest.WithType(corev1.HostPathDirectory))
+	return k8scodecs.ToVersionedYaml(pod)
 }

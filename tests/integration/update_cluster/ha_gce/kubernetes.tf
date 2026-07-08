@@ -58,6 +58,14 @@ resource "aws_s3_object" "ha-gce-example-com-addons-bootstrap" {
   server_side_encryption = "AES256"
 }
 
+resource "aws_s3_object" "ha-gce-example-com-addons-cluster-autoscaler-addons-k8s-io-k8s-1-15" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_object_ha-gce.example.com-addons-cluster-autoscaler.addons.k8s.io-k8s-1.15_content")
+  key                    = "tests/ha-gce.example.com/addons/cluster-autoscaler.addons.k8s.io/k8s-1.15.yaml"
+  provider               = aws.files
+  server_side_encryption = "AES256"
+}
+
 resource "aws_s3_object" "ha-gce-example-com-addons-coredns-addons-k8s-io-k8s-1-12" {
   bucket                 = "testingBucket"
   content                = file("${path.module}/data/aws_s3_object_ha-gce.example.com-addons-coredns.addons.k8s.io-k8s-1.12_content")
@@ -126,6 +134,14 @@ resource "aws_s3_object" "kops-version-txt" {
   bucket                 = "testingBucket"
   content                = file("${path.module}/data/aws_s3_object_kops-version.txt_content")
   key                    = "tests/ha-gce.example.com/kops-version.txt"
+  provider               = aws.files
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_object" "manifests-channels-kops-channels" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_object_manifests-channels-kops-channels_content")
+  key                    = "tests/ha-gce.example.com/manifests/channels/kops-channels.yaml"
   provider               = aws.files
   server_side_encryption = "AES256"
 }
@@ -221,7 +237,7 @@ resource "aws_s3_object" "nodeupconfig-nodes" {
 resource "google_compute_disk" "a-etcd-events-ha-gce-example-com" {
   labels = {
     "k8s-io-cluster-name" = "ha-gce-example-com"
-    "k8s-io-etcd-events"  = "a-2fa-2cb-2cc"
+    "k8s-io-etcd-events"  = "a-2fa"
     "k8s-io-role-master"  = "master"
   }
   name = "a-etcd-events-ha-gce-example-com"
@@ -233,7 +249,7 @@ resource "google_compute_disk" "a-etcd-events-ha-gce-example-com" {
 resource "google_compute_disk" "a-etcd-main-ha-gce-example-com" {
   labels = {
     "k8s-io-cluster-name" = "ha-gce-example-com"
-    "k8s-io-etcd-main"    = "a-2fa-2cb-2cc"
+    "k8s-io-etcd-main"    = "a-2fa"
     "k8s-io-role-master"  = "master"
   }
   name = "a-etcd-main-ha-gce-example-com"
@@ -245,7 +261,7 @@ resource "google_compute_disk" "a-etcd-main-ha-gce-example-com" {
 resource "google_compute_disk" "b-etcd-events-ha-gce-example-com" {
   labels = {
     "k8s-io-cluster-name" = "ha-gce-example-com"
-    "k8s-io-etcd-events"  = "b-2fa-2cb-2cc"
+    "k8s-io-etcd-events"  = "b-2fb"
     "k8s-io-role-master"  = "master"
   }
   name = "b-etcd-events-ha-gce-example-com"
@@ -257,7 +273,7 @@ resource "google_compute_disk" "b-etcd-events-ha-gce-example-com" {
 resource "google_compute_disk" "b-etcd-main-ha-gce-example-com" {
   labels = {
     "k8s-io-cluster-name" = "ha-gce-example-com"
-    "k8s-io-etcd-main"    = "b-2fa-2cb-2cc"
+    "k8s-io-etcd-main"    = "b-2fb"
     "k8s-io-role-master"  = "master"
   }
   name = "b-etcd-main-ha-gce-example-com"
@@ -269,7 +285,7 @@ resource "google_compute_disk" "b-etcd-main-ha-gce-example-com" {
 resource "google_compute_disk" "c-etcd-events-ha-gce-example-com" {
   labels = {
     "k8s-io-cluster-name" = "ha-gce-example-com"
-    "k8s-io-etcd-events"  = "c-2fa-2cb-2cc"
+    "k8s-io-etcd-events"  = "c-2fc"
     "k8s-io-role-master"  = "master"
   }
   name = "c-etcd-events-ha-gce-example-com"
@@ -281,7 +297,7 @@ resource "google_compute_disk" "c-etcd-events-ha-gce-example-com" {
 resource "google_compute_disk" "c-etcd-main-ha-gce-example-com" {
   labels = {
     "k8s-io-cluster-name" = "ha-gce-example-com"
-    "k8s-io-etcd-main"    = "c-2fa-2cb-2cc"
+    "k8s-io-etcd-main"    = "c-2fc"
     "k8s-io-role-master"  = "master"
   }
   name = "c-etcd-main-ha-gce-example-com"
@@ -493,10 +509,17 @@ resource "google_compute_firewall" "ssh-external-to-node-ipv6-ha-gce-example-com
 }
 
 resource "google_compute_instance_group_manager" "a-master-us-test1-a-ha-gce-example-com" {
-  base_instance_name             = "master-us-test1-a"
+  base_instance_name = "master-us-test1-a"
+  lifecycle {
+    ignore_changes = [target_size]
+  }
   list_managed_instances_results = "PAGINATED"
   name                           = "a-master-us-test1-a-ha-gce-example-com"
   target_size                    = 1
+  update_policy {
+    minimal_action = "REPLACE"
+    type           = "OPPORTUNISTIC"
+  }
   version {
     instance_template = google_compute_instance_template.master-us-test1-a-ha-gce-example-com.self_link
   }
@@ -504,10 +527,17 @@ resource "google_compute_instance_group_manager" "a-master-us-test1-a-ha-gce-exa
 }
 
 resource "google_compute_instance_group_manager" "a-nodes-ha-gce-example-com" {
-  base_instance_name             = "nodes"
+  base_instance_name = "nodes"
+  lifecycle {
+    ignore_changes = [target_size]
+  }
   list_managed_instances_results = "PAGINATED"
   name                           = "a-nodes-ha-gce-example-com"
   target_size                    = 1
+  update_policy {
+    minimal_action = "REPLACE"
+    type           = "OPPORTUNISTIC"
+  }
   version {
     instance_template = google_compute_instance_template.nodes-ha-gce-example-com.self_link
   }
@@ -515,10 +545,17 @@ resource "google_compute_instance_group_manager" "a-nodes-ha-gce-example-com" {
 }
 
 resource "google_compute_instance_group_manager" "b-master-us-test1-b-ha-gce-example-com" {
-  base_instance_name             = "master-us-test1-b"
+  base_instance_name = "master-us-test1-b"
+  lifecycle {
+    ignore_changes = [target_size]
+  }
   list_managed_instances_results = "PAGINATED"
   name                           = "b-master-us-test1-b-ha-gce-example-com"
   target_size                    = 1
+  update_policy {
+    minimal_action = "REPLACE"
+    type           = "OPPORTUNISTIC"
+  }
   version {
     instance_template = google_compute_instance_template.master-us-test1-b-ha-gce-example-com.self_link
   }
@@ -526,10 +563,17 @@ resource "google_compute_instance_group_manager" "b-master-us-test1-b-ha-gce-exa
 }
 
 resource "google_compute_instance_group_manager" "b-nodes-ha-gce-example-com" {
-  base_instance_name             = "nodes"
+  base_instance_name = "nodes"
+  lifecycle {
+    ignore_changes = [target_size]
+  }
   list_managed_instances_results = "PAGINATED"
   name                           = "b-nodes-ha-gce-example-com"
   target_size                    = 1
+  update_policy {
+    minimal_action = "REPLACE"
+    type           = "OPPORTUNISTIC"
+  }
   version {
     instance_template = google_compute_instance_template.nodes-ha-gce-example-com.self_link
   }
@@ -537,10 +581,17 @@ resource "google_compute_instance_group_manager" "b-nodes-ha-gce-example-com" {
 }
 
 resource "google_compute_instance_group_manager" "c-master-us-test1-c-ha-gce-example-com" {
-  base_instance_name             = "master-us-test1-c"
+  base_instance_name = "master-us-test1-c"
+  lifecycle {
+    ignore_changes = [target_size]
+  }
   list_managed_instances_results = "PAGINATED"
   name                           = "c-master-us-test1-c-ha-gce-example-com"
   target_size                    = 1
+  update_policy {
+    minimal_action = "REPLACE"
+    type           = "OPPORTUNISTIC"
+  }
   version {
     instance_template = google_compute_instance_template.master-us-test1-c-ha-gce-example-com.self_link
   }
@@ -548,10 +599,17 @@ resource "google_compute_instance_group_manager" "c-master-us-test1-c-ha-gce-exa
 }
 
 resource "google_compute_instance_group_manager" "c-nodes-ha-gce-example-com" {
-  base_instance_name             = "nodes"
+  base_instance_name = "nodes"
+  lifecycle {
+    ignore_changes = [target_size]
+  }
   list_managed_instances_results = "PAGINATED"
   name                           = "c-nodes-ha-gce-example-com"
   target_size                    = 0
+  update_policy {
+    minimal_action = "REPLACE"
+    type           = "OPPORTUNISTIC"
+  }
   version {
     instance_template = google_compute_instance_template.nodes-ha-gce-example-com.self_link
   }
@@ -561,23 +619,25 @@ resource "google_compute_instance_group_manager" "c-nodes-ha-gce-example-com" {
 resource "google_compute_instance_template" "master-us-test1-a-ha-gce-example-com" {
   can_ip_forward = true
   disk {
-    auto_delete  = true
-    boot         = true
-    device_name  = "persistent-disks-0"
-    disk_name    = ""
-    disk_size_gb = 64
-    disk_type    = "pd-standard"
-    interface    = ""
-    mode         = "READ_WRITE"
-    source       = ""
-    source_image = "https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/ubuntu-2004-focal-v20221018"
-    type         = "PERSISTENT"
+    auto_delete            = true
+    boot                   = true
+    device_name            = "persistent-disks-0"
+    disk_name              = ""
+    disk_size_gb           = 64
+    disk_type              = "pd-standard"
+    interface              = ""
+    mode                   = "READ_WRITE"
+    provisioned_iops       = 0
+    provisioned_throughput = 0
+    source                 = ""
+    source_image           = "https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/ubuntu-2604-resolute-amd64-v20221018"
+    type                   = "PERSISTENT"
   }
   labels = {
     "k8s-io-cluster-name"       = "ha-gce-example-com"
     "k8s-io-instance-group"     = "master-us-test1-a"
-    "k8s-io-role-control-plane" = ""
-    "k8s-io-role-master"        = ""
+    "k8s-io-role-control-plane" = "control-plane"
+    "k8s-io-role-master"        = "master"
   }
   lifecycle {
     create_before_destroy = true
@@ -613,23 +673,25 @@ resource "google_compute_instance_template" "master-us-test1-a-ha-gce-example-co
 resource "google_compute_instance_template" "master-us-test1-b-ha-gce-example-com" {
   can_ip_forward = true
   disk {
-    auto_delete  = true
-    boot         = true
-    device_name  = "persistent-disks-0"
-    disk_name    = ""
-    disk_size_gb = 64
-    disk_type    = "pd-standard"
-    interface    = ""
-    mode         = "READ_WRITE"
-    source       = ""
-    source_image = "https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/ubuntu-2004-focal-v20221018"
-    type         = "PERSISTENT"
+    auto_delete            = true
+    boot                   = true
+    device_name            = "persistent-disks-0"
+    disk_name              = ""
+    disk_size_gb           = 64
+    disk_type              = "pd-standard"
+    interface              = ""
+    mode                   = "READ_WRITE"
+    provisioned_iops       = 0
+    provisioned_throughput = 0
+    source                 = ""
+    source_image           = "https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/ubuntu-2604-resolute-amd64-v20221018"
+    type                   = "PERSISTENT"
   }
   labels = {
     "k8s-io-cluster-name"       = "ha-gce-example-com"
     "k8s-io-instance-group"     = "master-us-test1-b"
-    "k8s-io-role-control-plane" = ""
-    "k8s-io-role-master"        = ""
+    "k8s-io-role-control-plane" = "control-plane"
+    "k8s-io-role-master"        = "master"
   }
   lifecycle {
     create_before_destroy = true
@@ -665,23 +727,25 @@ resource "google_compute_instance_template" "master-us-test1-b-ha-gce-example-co
 resource "google_compute_instance_template" "master-us-test1-c-ha-gce-example-com" {
   can_ip_forward = true
   disk {
-    auto_delete  = true
-    boot         = true
-    device_name  = "persistent-disks-0"
-    disk_name    = ""
-    disk_size_gb = 64
-    disk_type    = "pd-standard"
-    interface    = ""
-    mode         = "READ_WRITE"
-    source       = ""
-    source_image = "https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/ubuntu-2004-focal-v20221018"
-    type         = "PERSISTENT"
+    auto_delete            = true
+    boot                   = true
+    device_name            = "persistent-disks-0"
+    disk_name              = ""
+    disk_size_gb           = 64
+    disk_type              = "pd-standard"
+    interface              = ""
+    mode                   = "READ_WRITE"
+    provisioned_iops       = 0
+    provisioned_throughput = 0
+    source                 = ""
+    source_image           = "https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/ubuntu-2604-resolute-amd64-v20221018"
+    type                   = "PERSISTENT"
   }
   labels = {
     "k8s-io-cluster-name"       = "ha-gce-example-com"
     "k8s-io-instance-group"     = "master-us-test1-c"
-    "k8s-io-role-control-plane" = ""
-    "k8s-io-role-master"        = ""
+    "k8s-io-role-control-plane" = "control-plane"
+    "k8s-io-role-master"        = "master"
   }
   lifecycle {
     create_before_destroy = true
@@ -717,22 +781,25 @@ resource "google_compute_instance_template" "master-us-test1-c-ha-gce-example-co
 resource "google_compute_instance_template" "nodes-ha-gce-example-com" {
   can_ip_forward = true
   disk {
-    auto_delete  = true
-    boot         = true
-    device_name  = "persistent-disks-0"
-    disk_name    = ""
-    disk_size_gb = 128
-    disk_type    = "pd-standard"
-    interface    = ""
-    mode         = "READ_WRITE"
-    source       = ""
-    source_image = "https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/ubuntu-2004-focal-v20221018"
-    type         = "PERSISTENT"
+    auto_delete            = true
+    boot                   = true
+    device_name            = "persistent-disks-0"
+    disk_name              = ""
+    disk_size_gb           = 128
+    disk_type              = "pd-standard"
+    interface              = ""
+    mode                   = "READ_WRITE"
+    provisioned_iops       = 0
+    provisioned_throughput = 0
+    source                 = ""
+    source_image           = "https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/ubuntu-2604-resolute-amd64-v20221018"
+    type                   = "PERSISTENT"
   }
   labels = {
-    "k8s-io-cluster-name"   = "ha-gce-example-com"
-    "k8s-io-instance-group" = "nodes"
-    "k8s-io-role-node"      = ""
+    "k8s-io-cluster-name"                             = "ha-gce-example-com"
+    "k8s-io-instance-group"                           = "nodes"
+    "k8s-io-role-node"                                = "node"
+    "k8s.io/cluster-autoscaler/node-template/taint/a" = "b:c"
   }
   lifecycle {
     create_before_destroy = true
@@ -741,7 +808,7 @@ resource "google_compute_instance_template" "nodes-ha-gce-example-com" {
   metadata = {
     "cluster-name"                    = "ha-gce.example.com"
     "kops-k8s-io-instance-group-name" = "nodes"
-    "kube-env"                        = "AUTOSCALER_ENV_VARS: os_distribution=ubuntu;arch=amd64;os=linux"
+    "kube-env"                        = "AUTOSCALER_ENV_VARS: os_distribution=ubuntu;arch=amd64;os=linux;node_labels=kops.k8s.io/instancegroup=nodes;node_taints=a=b:c"
     "ssh-keys"                        = "admin: ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQCtWu40XQo8dczLsCq0OWV+hxm9uV3WxeH9Kgh4sMzQxNtoU1pvW0XdjpkBesRKGoolfWeCLXWxpyQb1IaiMkKoz7MdhQ/6UKjMjP66aFWWp3pwD0uj0HuJ7tq4gKHKRYGTaZIRWpzUiANBrjugVgA+Sd7E/mYwc/DMXkIyRZbvhQ=="
     "user-data"                       = file("${path.module}/data/google_compute_instance_template_nodes-ha-gce-example-com_metadata_user-data")
   }

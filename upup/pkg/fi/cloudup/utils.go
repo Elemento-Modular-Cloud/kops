@@ -31,6 +31,7 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/do"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner"
+	"k8s.io/kops/upup/pkg/fi/cloudup/linode"
 	"k8s.io/kops/upup/pkg/fi/cloudup/metal"
 	"k8s.io/kops/upup/pkg/fi/cloudup/openstack"
 	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
@@ -158,9 +159,12 @@ func BuildCloud(cluster *kops.Cluster) (fi.Cloud, error) {
 			}
 
 			cloudTags := map[string]string{azure.TagClusterName: cluster.ObjectMeta.Name}
+			for k, v := range cluster.Spec.CloudLabels {
+				cloudTags[k] = v
+			}
 
 			subscriptionID := cluster.Spec.CloudProvider.Azure.SubscriptionID
-			resourceGroupName := cluster.Spec.CloudProvider.Azure.ResourceGroupName
+			resourceGroupName := cluster.AzureResourceGroupName()
 			azureCloud, err := azure.NewAzureCloud(subscriptionID, resourceGroupName, region, cloudTags)
 			if err != nil {
 				return nil, err
@@ -215,6 +219,24 @@ func BuildCloud(cluster *kops.Cluster) (fi.Cloud, error) {
 			return nil, fmt.Errorf("error initializing Metal cloud: %w", err)
 		}
 		cloud = metalCloud
+
+	case kops.CloudProviderLinode:
+		for _, subnet := range cluster.Spec.Networking.Subnets {
+			if subnet.Region != "" {
+				region = subnet.Region
+				break
+			}
+		}
+		if region == "" {
+			return nil, fmt.Errorf("on Linode (Akamai), subnets must include Regions")
+		}
+
+		linodeCloud, err := linode.NewCloud(region)
+		if err != nil {
+			return nil, fmt.Errorf("error initializing Linode (Akamai) cloud: %w", err)
+		}
+
+		cloud = linodeCloud
 	default:
 		return nil, fmt.Errorf("unknown CloudProvider %q", cluster.GetCloudProvider())
 	}

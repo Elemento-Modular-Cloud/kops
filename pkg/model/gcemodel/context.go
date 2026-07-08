@@ -92,6 +92,28 @@ func (c *GCEModelContext) GCETagForRole(role kops.InstanceGroupRole) string {
 	return gce.TagForRole(c.Cluster.ObjectMeta.Name, role)
 }
 
+// HasAPIServerOnlyInstanceGroups returns true if the cluster has any APIServer-only instance groups.
+func (c *GCEModelContext) HasAPIServerOnlyInstanceGroups() bool {
+	for _, ig := range c.InstanceGroups {
+		if ig.Spec.Role.HasAPIServer() {
+			return true
+		}
+	}
+	return false
+}
+
+// GCETagsForAPIServerTargets returns the network tags that should be used as firewall
+// targets for rules that need to reach API server instances. It always includes the
+// ControlPlane tag, and adds the APIServer tag only when the cluster has dedicated
+// APIServer instance groups.
+func (c *GCEModelContext) GCETagsForAPIServerTargets() []string {
+	tags := []string{c.GCETagForRole(kops.InstanceGroupRoleControlPlane)}
+	if c.HasAPIServerOnlyInstanceGroups() {
+		tags = append(tags, c.GCETagForRole(kops.InstanceGroupRoleAPIServer))
+	}
+	return tags
+}
+
 func (c *GCEModelContext) LinkToTargetPool(id string) *gcetasks.TargetPool {
 	return &gcetasks.TargetPool{Name: s(c.NameForTargetPool(id))}
 }

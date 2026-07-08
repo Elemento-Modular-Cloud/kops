@@ -121,6 +121,10 @@ func (t *LaunchTemplate) RenderAWS(c *awsup.AWSAPITarget, a, e, changes *LaunchT
 			ResourceType: ec2types.ResourceTypeVolume,
 			Tags:         tags,
 		})
+		data.TagSpecifications = append(data.TagSpecifications, ec2types.LaunchTemplateTagSpecificationRequest{
+			ResourceType: ec2types.ResourceTypeNetworkInterface,
+			Tags:         tags,
+		})
 	}
 	// @step: add the userdata
 	if t.UserData != nil {
@@ -412,7 +416,7 @@ type deleteLaunchTemplate struct {
 	lc *ec2types.LaunchTemplate
 }
 
-var _ fi.CloudupDeletion = &deleteLaunchTemplate{}
+var _ fi.CloudupDeletion = (*deleteLaunchTemplate)(nil)
 
 // TaskName returns the task name
 func (d *deleteLaunchTemplate) TaskName() string {

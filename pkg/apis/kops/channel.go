@@ -293,6 +293,7 @@ const (
 	CloudProviderOpenstack CloudProviderID = "openstack"
 	CloudProviderAzure     CloudProviderID = "azure"
 	CloudProviderScaleway  CloudProviderID = "scaleway"
+	CloudProviderLinode    CloudProviderID = "linode"
 	CloudProviderElemento  CloudProviderID = "elemento"
 
 	// Experimental cloud providers
@@ -323,7 +324,7 @@ func (c *Channel) FindImage(provider CloudProviderID, kubernetesVersion semver.V
 			}
 
 			if !versionRange(kubernetesVersion) {
-				klog.V(2).Infof("Kubernetes version %q does not match range: %s", kubernetesVersion, image.KubernetesVersion)
+				klog.V(6).Infof("Kubernetes version %q does not match range: %s", kubernetesVersion, image.KubernetesVersion)
 				continue
 			}
 		}
@@ -376,7 +377,9 @@ func (c *Channel) HasUpstreamImagePrefix(image string) bool {
 		strings.HasPrefix(image, "ubuntu-os-cloud/ubuntu-2404-noble-") ||
 		strings.HasPrefix(image, "Canonical:0001-com-ubuntu-server-focal:20_04-lts-gen2:") ||
 		strings.HasPrefix(image, "Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:") ||
-		strings.HasPrefix(image, "Canonical:ubuntu-24_04-lts:server-gen1:")
+		strings.HasPrefix(image, "Canonical:ubuntu-24_04-lts:server-gen1:") ||
+		strings.HasPrefix(image, "Canonical:ubuntu-24_04-lts:server:") ||
+		strings.HasPrefix(image, "Canonical:ubuntu-24_04-lts:server-arm64:")
 }
 
 // GetPackageVersion returns the version for the package, or an error if could not be found.
@@ -397,15 +400,15 @@ func (c *Channel) GetPackageVersion(name string, kubernetesVersion *semver.Versi
 			}
 
 			if !versionRange(*kubernetesVersion) {
-				klog.V(2).Infof("Kubernetes version %q does not match range: %s", kubernetesVersion, pkg.KubernetesVersion)
+				klog.V(6).Infof("Kubernetes version %q does not match range: %s", kubernetesVersion, pkg.KubernetesVersion)
 				continue
 			}
 		}
 
 		if pkg.KopsVersion != "" {
-			kopsVersion, err := util.ParseVersion(kopsbase.KOPS_RELEASE_VERSION)
+			kopsVersion, err := util.ParseVersion(kopsbase.Version)
 			if err != nil {
-				return nil, fmt.Errorf("parsing kops version %q: %w", kopsbase.KOPS_RELEASE_VERSION, err)
+				return nil, fmt.Errorf("parsing kops version %q: %w", kopsbase.Version, err)
 			}
 
 			versionRange, err := semver.ParseRange(pkg.KopsVersion)

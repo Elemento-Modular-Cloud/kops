@@ -36,7 +36,6 @@ import (
 	"k8s.io/kops/dnsprovider/pkg/dnsprovider"
 	"k8s.io/kops/dnsprovider/pkg/dnsprovider/providers/google/clouddns"
 	"k8s.io/kops/pkg/apis/kops"
-	"k8s.io/kops/pkg/mutexes"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce/gcemetadata"
 )
@@ -60,8 +59,8 @@ type GCECloud interface {
 }
 
 // MutexForProjectIAM returns a mutex to prevent local concurrent operations on project IAM.
-func MutexForProjectIAM(projectID string) mutexes.LocalMutex {
-	return mutexes.InProcess.Get("iam/projects/" + projectID)
+func MutexForProjectIAM(projectID string) LocalMutex {
+	return InProcessMutex.Get("iam/projects/" + projectID)
 }
 
 type gceCloudImplementation struct {
@@ -82,7 +81,7 @@ type gceCloudImplementation struct {
 	labels map[string]string
 }
 
-var _ fi.Cloud = &gceCloudImplementation{}
+var _ fi.Cloud = (*gceCloudImplementation)(nil)
 
 func (c *gceCloudImplementation) ProviderID() kops.CloudProviderID {
 	return kops.CloudProviderGCE
@@ -129,6 +128,8 @@ func NewGCECloud(region string, project string, labels map[string]string) (GCECl
 	if i != nil {
 		return i.(gceCloudInternal).WithLabels(labels), nil
 	}
+
+	klog.V(2).Infof("Building new GCE cloud instance for region %q and project %q", region, project)
 
 	c := &gceCloudImplementation{region: region, project: project}
 
@@ -279,11 +280,7 @@ func (c *gceCloudImplementation) Labels() map[string]string {
 	return tags
 }
 
-// TODO refactor this out of resources
-// this is needed for delete groups and other new methods
-
-// Zones returns the zones in a region
-func (c *gceCloudImplementation) Zones() ([]string, error) {
+func GetZones(c GCECloud) ([]string, error) {
 	var zones []string
 	// TODO: Only zones in api.Cluster object, if we have one?
 	gceZones, err := c.Compute().Zones().List(context.Background(), c.Project())
@@ -306,6 +303,14 @@ func (c *gceCloudImplementation) Zones() ([]string, error) {
 
 	klog.Infof("Scanning zones: %v", zones)
 	return zones, nil
+}
+
+// TODO refactor this out of resources
+// this is needed for delete groups and other new methods
+
+// Zones returns the zones in a region
+func (c *gceCloudImplementation) Zones() ([]string, error) {
+	return GetZones(c)
 }
 
 func (c *gceCloudImplementation) WaitForOp(op *compute.Operation) error {

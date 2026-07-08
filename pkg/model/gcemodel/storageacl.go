@@ -38,7 +38,7 @@ type StorageAclBuilder struct {
 	Lifecycle fi.Lifecycle
 }
 
-var _ fi.CloudupModelBuilder = &NetworkModelBuilder{}
+var _ fi.CloudupModelBuilder = &StorageAclBuilder{}
 
 // Build creates the tasks that set up storage acls
 
@@ -61,8 +61,7 @@ func (b *StorageAclBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			return fmt.Errorf("cannot parse cluster path %q: %w", clusterPath, err)
 		}
 
-		switch p := p.(type) {
-		case *vfs.GSPath:
+		if p, ok := p.(*vfs.GSPath); ok {
 			// It's not ideal that we have to do this at the bucket level,
 			// but GCS doesn't seem to have a way to do subtrees (like AWS IAM does)
 			// Note this permission only lets us list objects, not read them
@@ -121,20 +120,25 @@ func (b *StorageAclBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	}
 
 	type serviceAccountRole struct {
-		Email string
-		Role  kops.InstanceGroupRole
+		ServiceAccount *gcetasks.ServiceAccount
+		Role           kops.InstanceGroupRole
 	}
 	serviceAccountRoles := make(map[serviceAccountRole]bool)
+	serviceAccountEmails := sets.NewString()
 
 	for _, ig := range b.InstanceGroups {
 		serviceAccount := b.LinkToServiceAccount(ig)
-
-		email := *serviceAccount.Email
-		serviceAccountRoles[serviceAccountRole{Email: email, Role: ig.Spec.Role}] = true
+		serviceAccountRoles[serviceAccountRole{ServiceAccount: serviceAccount, Role: ig.Spec.Role}] = true
 	}
 
 	for serviceAccountRole := range serviceAccountRoles {
 		role := serviceAccountRole.Role
+		email := *serviceAccountRole.ServiceAccount.Email
+
+		if serviceAccountEmails.Has(email) {
+			continue
+		}
+		serviceAccountEmails.Insert(email)
 
 		nodeRole, err := iam.BuildNodeRoleSubject(role, false)
 		if err != nil {
@@ -165,11 +169,11 @@ func (b *StorageAclBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			klog.Warningf("adding bucket level write IAM for role %q to gs://%s to support etcd backup", role, bucket)
 
 			c.AddTask(&gcetasks.StorageBucketIAM{
-				Name:      s("objectadmin-" + bucket + "-serviceaccount-" + nameForTask),
-				Lifecycle: b.Lifecycle,
-				Bucket:    s(bucket),
-				Member:    s("serviceAccount:" + serviceAccountRole.Email),
-				Role:      s("roles/storage.objectAdmin"),
+				Name:                 s("objectadmin-" + bucket + "-serviceaccount-" + nameForTask),
+				Lifecycle:            b.Lifecycle,
+				Bucket:               s(bucket),
+				MemberServiceAccount: serviceAccountRole.ServiceAccount,
+				Role:                 s("roles/storage.objectAdmin"),
 			})
 		}
 
@@ -201,11 +205,11 @@ func (b *StorageAclBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			klog.Warningf("adding bucket level read IAM to gs://%s for role %q", bucket, role)
 
 			c.AddTask(&gcetasks.StorageBucketIAM{
-				Name:      s("objectviewer-" + bucket + "-serviceaccount-" + nameForTask),
-				Lifecycle: b.Lifecycle,
-				Bucket:    s(bucket),
-				Member:    s("serviceAccount:" + serviceAccountRole.Email),
-				Role:      s("roles/storage.objectViewer"),
+				Name:                 s("objectviewer-" + bucket + "-serviceaccount-" + nameForTask),
+				Lifecycle:            b.Lifecycle,
+				Bucket:               s(bucket),
+				MemberServiceAccount: serviceAccountRole.ServiceAccount,
+				Role:                 s("roles/storage.objectViewer"),
 			})
 		}
 	}

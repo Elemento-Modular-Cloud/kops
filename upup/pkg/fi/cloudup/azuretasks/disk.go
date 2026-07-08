@@ -67,6 +67,10 @@ func (d *Disk) Find(c *fi.CloudupContext) (*Disk, error) {
 	if found == nil {
 		return nil, nil
 	}
+	if found.Properties != nil && fi.ValueOf(found.Properties.ProvisioningState) == "Failed" {
+		klog.Warningf("found disk %q in failed provisioning state", *d.Name)
+		return nil, nil
+	}
 
 	disk := &Disk{
 		Name:      d.Name,

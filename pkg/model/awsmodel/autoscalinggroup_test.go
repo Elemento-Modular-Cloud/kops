@@ -35,7 +35,7 @@ const (
 )
 
 func buildMinimalCluster() *kops.Cluster {
-	return testutils.BuildMinimalCluster("testcluster.test.com")
+	return testutils.BuildMinimalClusterAWS("testcluster.test.com")
 }
 
 func buildNodeInstanceGroup(subnets ...string) *kops.InstanceGroup {
@@ -210,8 +210,10 @@ func TestAPIServerAdditionalSecurityGroupsWithNLB(t *testing.T) {
 		"apiserver-aggregator-ca",
 		"etcd-clients-ca",
 		"etcd-manager-ca-events",
+		"etcd-manager-ca-leases",
 		"etcd-manager-ca-main",
 		"etcd-peers-ca-events",
+		"etcd-peers-ca-leases",
 		"etcd-peers-ca-main",
 		"service-account",
 	} {
@@ -251,7 +253,7 @@ func TestAPIServerAdditionalSecurityGroupsWithNLB(t *testing.T) {
 	launchTemplateForGroup := func(t *testing.T, ig *kops.InstanceGroup) *awstasks.LaunchTemplate {
 		t.Helper()
 		subdomain := ig.Name
-		if ig.Spec.Role == kops.InstanceGroupRoleControlPlane {
+		if ig.Spec.Role.HasControlPlane() {
 			subdomain = ig.Name + ".masters"
 		}
 		task, ok := c.Tasks[fmt.Sprintf("LaunchTemplate/%s.%s", subdomain, cluster.Name)]

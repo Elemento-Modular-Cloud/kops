@@ -56,7 +56,7 @@ func (b *KubeSchedulerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		return err
 	}
 
-	b.AssetBuilder.StaticFiles = append(b.AssetBuilder.StaticFiles, &assets.StaticFile{
+	b.AssetBuilder.AddStaticFile(&assets.StaticFile{
 		Path:    KubeSchedulerConfigPath,
 		Content: string(configYAML),
 		Roles:   []kops.InstanceGroupRole{kops.InstanceGroupRoleControlPlane, kops.InstanceGroupRoleAPIServer},
@@ -181,7 +181,7 @@ func MapToUnstructured(options interface{}, target *unstructured.Unstructured) e
 					return err
 				}
 				// Clear the field, so we don't set the flag
-				val.Set(reflect.ValueOf(nil))
+				val.Set(reflect.Zero(val.Type()))
 			default:
 				if err := setValue(targetPath, val.Interface()); err != nil {
 					return err

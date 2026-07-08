@@ -259,6 +259,223 @@ func TestValidNodeLabels(t *testing.T) {
 	}
 }
 
+func TestCrossValidateKarpenterInstanceGroup(t *testing.T) {
+	awsCluster := &kops.Cluster{
+		Spec: kops.ClusterSpec{
+			CloudProvider: kops.CloudProviderSpec{
+				AWS: &kops.AWSSpec{},
+			},
+		},
+	}
+	gceCluster := &kops.Cluster{
+		Spec: kops.ClusterSpec{
+			CloudProvider: kops.CloudProviderSpec{
+				GCE: &kops.GCESpec{},
+			},
+		},
+	}
+
+	grid := []struct {
+		desc     string
+		cluster  *kops.Cluster
+		role     kops.InstanceGroupRole
+		image    string
+		expected []string
+	}{
+		{
+			desc:    "ami id",
+			cluster: awsCluster,
+			role:    kops.InstanceGroupRoleNode,
+			image:   "ami-0123456789abcdef0",
+		},
+		{
+			desc:    "ssm parameter",
+			cluster: awsCluster,
+			role:    kops.InstanceGroupRoleNode,
+			image:   "ssm:/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id",
+		},
+		{
+			desc:    "name",
+			cluster: awsCluster,
+			role:    kops.InstanceGroupRoleNode,
+			image:   "kops-node-image",
+		},
+		{
+			desc:    "owner and name",
+			cluster: awsCluster,
+			role:    kops.InstanceGroupRoleNode,
+			image:   "ubuntu/images/hvm-ssd/ubuntu-noble-24.04-amd64-server-*",
+		},
+		{
+			desc:     "not aws",
+			cluster:  gceCluster,
+			role:     kops.InstanceGroupRoleNode,
+			image:    "ami-0123456789abcdef0",
+			expected: []string{"Forbidden::spec.manager"},
+		},
+		{
+			desc:     "not node",
+			cluster:  awsCluster,
+			role:     kops.InstanceGroupRoleAPIServer,
+			image:    "ami-0123456789abcdef0",
+			expected: []string{"Forbidden::spec.role"},
+		},
+		{
+			desc:     "url image",
+			cluster:  awsCluster,
+			role:     kops.InstanceGroupRoleNode,
+			image:    "https://example.com/image",
+			expected: []string{"Invalid value::spec.image"},
+		},
+		{
+			desc:     "empty ssm parameter",
+			cluster:  awsCluster,
+			role:     kops.InstanceGroupRoleNode,
+			image:    "ssm:",
+			expected: []string{"Invalid value::spec.image"},
+		},
+		{
+			desc:     "missing owner",
+			cluster:  awsCluster,
+			role:     kops.InstanceGroupRoleNode,
+			image:    "/missing-owner",
+			expected: []string{"Invalid value::spec.image"},
+		},
+		{
+			desc:     "missing name",
+			cluster:  awsCluster,
+			role:     kops.InstanceGroupRoleNode,
+			image:    "missing-name/",
+			expected: []string{"Invalid value::spec.image"},
+		},
+	}
+
+	for _, g := range grid {
+		t.Run(g.desc, func(t *testing.T) {
+			ig := createMinimalInstanceGroup()
+			ig.Spec.Manager = kops.InstanceManagerKarpenter
+			ig.Spec.Role = g.role
+			ig.Spec.Image = g.image
+
+			errs := CrossValidateInstanceGroup(ig, g.cluster, nil, true)
+			testErrors(t, g.desc, errs, g.expected)
+		})
+	}
+}
+
+func TestValidateKarpenterStaticCapacity(t *testing.T) {
+	grid := []struct {
+		desc         string
+		minSize      *int32
+		maxSize      *int32
+		featureGates string
+		expected     []string
+	}{
+		{
+			desc:         "dynamic",
+			featureGates: "StaticCapacity=false",
+		},
+		{
+			desc:    "static with default feature gates",
+			minSize: fi.PtrTo(int32(4)),
+		},
+		{
+			desc:         "static with custom feature gates",
+			minSize:      fi.PtrTo(int32(4)),
+			featureGates: "NodeRepair=false,StaticCapacity=true",
+		},
+		{
+			desc:         "static with final feature gate enabled",
+			minSize:      fi.PtrTo(int32(4)),
+			featureGates: "StaticCapacity=false,StaticCapacity=true",
+		},
+		{
+			desc:     "zero minSize",
+			minSize:  fi.PtrTo(int32(0)),
+			expected: []string{"Invalid value::spec.minSize"},
+		},
+		{
+			desc:     "negative minSize",
+			minSize:  fi.PtrTo(int32(-1)),
+			expected: []string{"Invalid value::spec.minSize"},
+		},
+		{
+			desc:         "custom feature gates omit static capacity",
+			minSize:      fi.PtrTo(int32(4)),
+			featureGates: "NodeRepair=true",
+			expected:     []string{"Forbidden::spec.minSize"},
+		},
+		{
+			desc:         "whitespace feature gates",
+			minSize:      fi.PtrTo(int32(4)),
+			featureGates: " ",
+			expected:     []string{"Forbidden::spec.minSize"},
+		},
+		{
+			desc:         "static capacity disabled",
+			minSize:      fi.PtrTo(int32(4)),
+			featureGates: "StaticCapacity=false",
+			expected:     []string{"Forbidden::spec.minSize"},
+		},
+		{
+			desc:         "final feature gate disabled",
+			minSize:      fi.PtrTo(int32(4)),
+			featureGates: "StaticCapacity=true,StaticCapacity=false",
+			expected:     []string{"Forbidden::spec.minSize"},
+		},
+		{
+			desc:    "maxSize for dynamic",
+			maxSize: fi.PtrTo(int32(4)),
+		},
+		{
+			desc:    "maxSize for static",
+			minSize: fi.PtrTo(int32(4)),
+			maxSize: fi.PtrTo(int32(4)),
+		},
+		{
+			desc:     "zero maxSize",
+			maxSize:  fi.PtrTo(int32(0)),
+			expected: []string{"Invalid value::spec.maxSize"},
+		},
+		{
+			desc:     "negative maxSize",
+			maxSize:  fi.PtrTo(int32(-1)),
+			expected: []string{"Invalid value::spec.maxSize"},
+		},
+	}
+
+	for _, g := range grid {
+		t.Run(g.desc, func(t *testing.T) {
+			cluster := &kops.Cluster{
+				Spec: kops.ClusterSpec{
+					CloudProvider: kops.CloudProviderSpec{
+						AWS: &kops.AWSSpec{},
+					},
+					Karpenter: &kops.KarpenterConfig{
+						Enabled:      true,
+						FeatureGates: g.featureGates,
+					},
+				},
+			}
+			ig := &kops.InstanceGroup{
+				ObjectMeta: v1.ObjectMeta{
+					Name: "some-ig",
+				},
+				Spec: kops.InstanceGroupSpec{
+					Manager: kops.InstanceManagerKarpenter,
+					Role:    kops.InstanceGroupRoleNode,
+					Image:   "my-image",
+					MinSize: g.minSize,
+					MaxSize: g.maxSize,
+				},
+			}
+
+			errs := CrossValidateInstanceGroup(ig, cluster, nil, true)
+			testErrors(t, g.desc, errs, g.expected)
+		})
+	}
+}
+
 func TestValidateIGCloudLabels(t *testing.T) {
 	grid := []struct {
 		label    string
@@ -380,6 +597,58 @@ func TestIGUpdatePolicy(t *testing.T) {
 			ig.Spec.UpdatePolicy = test.policy
 			errs := ValidateInstanceGroup(ig, nil, true)
 			testErrors(t, test.label, errs, test.expected)
+		})
+	}
+}
+
+func TestValidateInstanceGroupGVisorWorkerOnly(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		role     kops.InstanceGroupRole
+		enabled  *bool
+		expected []string
+	}{
+		{
+			name:    "enabled on worker",
+			role:    kops.InstanceGroupRoleNode,
+			enabled: fi.PtrTo(true),
+		},
+		{
+			name:     "enabled on control plane",
+			role:     kops.InstanceGroupRoleControlPlane,
+			enabled:  fi.PtrTo(true),
+			expected: []string{"Forbidden::spec.containerd.gvisor"},
+		},
+		{
+			name:     "enabled on apiserver",
+			role:     kops.InstanceGroupRoleAPIServer,
+			enabled:  fi.PtrTo(true),
+			expected: []string{"Forbidden::spec.containerd.gvisor"},
+		},
+		{
+			name:     "enabled on bastion",
+			role:     kops.InstanceGroupRoleBastion,
+			enabled:  fi.PtrTo(true),
+			expected: []string{"Forbidden::spec.containerd.gvisor"},
+		},
+		{
+			name:    "disabled on apiserver",
+			role:    kops.InstanceGroupRoleAPIServer,
+			enabled: fi.PtrTo(false),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ig := createMinimalInstanceGroup()
+			ig.Spec.Role = test.role
+			ig.Spec.Subnets = []string{"eu-central-1a"}
+			ig.Spec.Containerd = &kops.ContainerdConfig{
+				GVisor: &kops.GVisorConfig{
+					Enabled: test.enabled,
+				},
+			}
+
+			errs := ValidateInstanceGroup(ig, nil, true)
+			testErrors(t, test.name, errs, test.expected)
 		})
 	}
 }
@@ -509,4 +778,143 @@ func createMinimalInstanceGroup() *kops.InstanceGroup {
 		},
 	}
 	return ig
+}
+
+func TestCrossValidateAPIServerRole(t *testing.T) {
+	noneDNSTopology := &kops.TopologySpec{DNS: kops.DNSTypeNone}
+	grid := []struct {
+		Description    string
+		Cluster        *kops.Cluster
+		ExpectedErrors int
+	}{
+		{
+			Description: "APIServer role allowed on AWS",
+			Cluster: &kops.Cluster{
+				Spec: kops.ClusterSpec{
+					CloudProvider: kops.CloudProviderSpec{
+						AWS: &kops.AWSSpec{},
+					},
+				},
+			},
+			ExpectedErrors: 0,
+		},
+		{
+			Description: "APIServer role allowed on GCE",
+			Cluster: &kops.Cluster{
+				Spec: kops.ClusterSpec{
+					CloudProvider: kops.CloudProviderSpec{
+						GCE: &kops.GCESpec{},
+					},
+				},
+			},
+			ExpectedErrors: 0,
+		},
+		{
+			Description: "APIServer role forbidden on GCE with dns=None",
+			Cluster: &kops.Cluster{
+				Spec: kops.ClusterSpec{
+					CloudProvider: kops.CloudProviderSpec{
+						GCE: &kops.GCESpec{},
+					},
+					Networking: kops.NetworkingSpec{Topology: noneDNSTopology},
+				},
+			},
+			ExpectedErrors: 0,
+		},
+		{
+			Description: "APIServer role forbidden on AWS with dns=None",
+			Cluster: &kops.Cluster{
+				Spec: kops.ClusterSpec{
+					CloudProvider: kops.CloudProviderSpec{
+						AWS: &kops.AWSSpec{},
+					},
+					Networking: kops.NetworkingSpec{Topology: noneDNSTopology},
+				},
+			},
+			ExpectedErrors: 1,
+		},
+		{
+			Description: "APIServer role forbidden on DO",
+			Cluster: &kops.Cluster{
+				Spec: kops.ClusterSpec{
+					CloudProvider: kops.CloudProviderSpec{
+						DO: &kops.DOSpec{},
+					},
+				},
+			},
+			ExpectedErrors: 1,
+		},
+	}
+
+	for _, g := range grid {
+		t.Run(g.Description, func(t *testing.T) {
+			ig := &kops.InstanceGroup{
+				ObjectMeta: v1.ObjectMeta{
+					Name: "apiserver",
+				},
+				Spec: kops.InstanceGroupSpec{
+					Role:    kops.InstanceGroupRoleAPIServer,
+					Subnets: []string{"eu-central-1a"},
+					MaxSize: fi.PtrTo(int32(1)),
+					MinSize: fi.PtrTo(int32(1)),
+					Image:   "my-image",
+				},
+			}
+			g.Cluster.Spec.Networking.Subnets = []kops.ClusterSubnetSpec{
+				{Name: "eu-central-1a", Region: "eu-central-1"},
+			}
+			errs := CrossValidateInstanceGroup(ig, g.Cluster, nil, true)
+			if len(errs) != g.ExpectedErrors {
+				t.Errorf("expected %d errors, got %d: %v", g.ExpectedErrors, len(errs), errs)
+			}
+		})
+	}
+}
+
+func TestValidateInstanceGroupName(t *testing.T) {
+	cases := []struct {
+		name      string
+		input     string
+		wantError bool
+	}{
+		// Empty is rejected; the validator does not have a special-case bypass.
+		// Callers that allow an empty name in a specific branch (e.g. the
+		// CAPI synthesis path in kops-controller) must skip the call.
+		{name: "empty", input: "", wantError: true},
+
+		// Valid DNS1123 subdomain names.
+		{name: "simple", input: "nodes", wantError: false},
+		{name: "with hyphen", input: "nodes-us-east-1a", wantError: false},
+		{name: "control plane", input: "control-plane-us-east-1a", wantError: false},
+		{name: "fqdn style", input: "nodes.example.k8s.local", wantError: false},
+		{name: "numeric", input: "nodes1", wantError: false},
+
+		// Path-traversal payloads.
+		{name: "parent traversal", input: "..", wantError: true},
+		{name: "parent traversal with target", input: "../master-foo", wantError: true},
+		{name: "embedded traversal", input: "nodes/../master-foo", wantError: true},
+		{name: "forward slash", input: "nodes/foo", wantError: true},
+		{name: "backslash", input: "nodes\\foo", wantError: true},
+		{name: "absolute path", input: "/etc/passwd", wantError: true},
+
+		// Other invalid DNS1123 subdomain inputs.
+		{name: "leading dot", input: ".nodes", wantError: true},
+		{name: "trailing dot", input: "nodes.", wantError: true},
+		{name: "uppercase", input: "Nodes", wantError: true},
+		{name: "whitespace", input: "nodes foo", wantError: true},
+		{name: "null byte", input: "nodes\x00", wantError: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := ValidateInstanceGroupName(tc.input, field.NewPath("name"))
+			if tc.wantError {
+				if len(errs) == 0 {
+					t.Fatalf("expected errors for input %q, got none", tc.input)
+				}
+			} else if len(errs) > 0 {
+				t.Fatalf("unexpected errors for input %q: %v", tc.input, errs.ToAggregate())
+			}
+		})
+	}
 }

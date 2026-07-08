@@ -71,12 +71,22 @@ var (
 	VPCSkipEnableDNSSupport = new("VPCSkipEnableDNSSupport", Bool(false))
 	// SkipEtcdVersionCheck will bypass the check that etcd-manager is using a supported etcd version
 	SkipEtcdVersionCheck = new("SkipEtcdVersionCheck", Bool(false))
+	// EtcdEventsHTTP enables HTTP (non-TLS) for the events etcd cluster.
+	// This matches the pattern used by GCE scale tests and can help with
+	// TLS handshake overhead for the ephemeral events data.
+	// The main etcd cluster always uses HTTPS for security.
+	EtcdEventsHTTP = new("EtcdEventsHTTP", Bool(false))
 	// ClusterAddons activates experimental cluster-addons support
 	ClusterAddons = new("ClusterAddons", Bool(false))
 	// Azure toggles the Azure support.
 	Azure = new("Azure", Bool(false))
+	// AzureTerraform toggles the Azure terraform support.
+	AzureTerraform = new("AzureTerraform", Bool(false))
 	// APIServerNodes enables ability to provision nodes that only run the kube-apiserver.
 	APIServerNodes = new("APIServerNodes", Bool(false))
+	// ExperimentalRoles enables the InstanceGroup Role field to have a comma delineated roles list.
+	// It also enables the etcd, scheduler, kube-controller-manager and cloud-controller-manager roles.
+	ExperimentalRoles = new("ExperimentalRoles", Bool(false))
 	// UseAddonOperators activates experimental addon operator support
 	UseAddonOperators = new("UseAddonOperators", Bool(false))
 	// TerraformManagedFiles enables rendering managed files into the Terraform configuration.
@@ -98,6 +108,12 @@ var (
 	Metal = new("Metal", Bool(false))
 	// AWSSingleNodesInstanceGroup enables the creation of a single node instance group instead of one per availability zone.
 	AWSSingleNodesInstanceGroup = new("AWSSingleNodesInstanceGroup", Bool(false))
+	// ClusterAPI enables support for Cluster API (CAPI) resources.
+	ClusterAPI = new("ClusterAPI", Bool(false))
+	// DiscoveryService enables support for OIDC discovery via a hosted service.
+	DiscoveryService = new("DiscoveryService", Bool(false))
+	// Linode toggles the Linode (Akamai) Cloud support.
+	Linode = new("Linode", Bool(false))
 )
 
 // FeatureFlag defines a feature flag
@@ -149,6 +165,7 @@ func ParseFlags(f string) {
 	defer flagsMutex.Unlock()
 
 	f = strings.TrimSpace(f)
+	var parsed, unknown int
 	for _, s := range strings.Split(f, ",") {
 		s = strings.TrimSpace(s)
 		if s == "" {
@@ -167,9 +184,14 @@ func ParseFlags(f string) {
 		if ff != nil {
 			klog.Infof("FeatureFlag %q=%v", ff.Key, enabled)
 			ff.enabled = &enabled
+			parsed++
 		} else {
 			klog.Infof("Unknown FeatureFlag %q", s)
+			unknown++
 		}
+	}
+	if f != "" {
+		klog.Infof("ParseFlags: parsed %d flags from %q (unknown=%d, registered=%d)", parsed, f, unknown, len(flags))
 	}
 }
 

@@ -24,6 +24,7 @@ import (
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers"
 	"github.com/gophercloud/gophercloud/v2/pagination"
 	"k8s.io/klog/v2"
+	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/protokube/pkg/gossip"
 	"k8s.io/kops/upup/pkg/fi/cloudup/openstack"
 )
@@ -52,6 +53,11 @@ func (p *SeedProvider) GetSeeds() ([]string, error) {
 			if clusterName, ok := server.Metadata[openstack.TagClusterName]; ok {
 				// verify that the instance is from the same cluster
 				if clusterName != p.clusterName {
+					continue
+				}
+
+				// Seed only from control-plane nodes; workers do not run gossip.
+				if !kops.InstanceGroupRole(server.Metadata[openstack.TagKopsRole]).HasControlPlane() {
 					continue
 				}
 

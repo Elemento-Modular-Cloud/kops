@@ -57,6 +57,8 @@ func awsValidateCluster(c *kops.Cluster, strict bool) field.ErrorList {
 
 	allErrs = append(allErrs, awsValidateEBSCSIDriver(c)...)
 
+	allErrs = append(allErrs, awsValidateNLBSecurityGroupMode(c)...)
+
 	if c.Spec.Authentication != nil && c.Spec.Authentication.AWS != nil {
 		allErrs = append(allErrs, awsValidateIAMAuthenticator(field.NewPath("spec", "authentication", "aws"), c.Spec.Authentication.AWS)...)
 	}
@@ -70,6 +72,16 @@ func awsValidateEBSCSIDriver(cluster *kops.Cluster) (allErrs field.ErrorList) {
 	fldPath := field.NewPath("spec", "cloudProvider", "aws", "ebsCSIDriver", "enabled")
 	if c.CloudProvider.AWS.EBSCSIDriver != nil && c.CloudProvider.AWS.EBSCSIDriver.Enabled != nil && !*c.CloudProvider.AWS.EBSCSIDriver.Enabled {
 		allErrs = append(allErrs, field.Forbidden(fldPath, "must not be disabled"))
+	}
+	return allErrs
+}
+
+func awsValidateNLBSecurityGroupMode(cluster *kops.Cluster) (allErrs field.ErrorList) {
+	c := cluster.Spec
+
+	fldPath := field.NewPath("spec", "cloudProvider", "aws", "nlbSecurityGroupMode")
+	if c.CloudProvider.AWS.NLBSecurityGroupMode != nil {
+		allErrs = append(allErrs, IsValidValue(fldPath, c.CloudProvider.AWS.NLBSecurityGroupMode, []string{"Managed"})...)
 	}
 	return allErrs
 }
@@ -167,9 +179,6 @@ func awsValidateSecurityGroupOverride(fieldPath *field.Path, lbSpec *kops.LoadBa
 	}
 	if !strings.HasPrefix(override, "sg-") {
 		allErrs = append(allErrs, field.Invalid(fieldPath, override, "security group override does not match the expected AWS format"))
-	}
-	if lbSpec.Class == kops.LoadBalancerClassNetwork {
-		allErrs = append(allErrs, field.Forbidden(fieldPath, "security group override cannot be specified for a Network Load Balancer"))
 	}
 
 	return allErrs

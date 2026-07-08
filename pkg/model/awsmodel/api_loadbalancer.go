@@ -174,15 +174,28 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			nlbListeners = append(nlbListeners, listener443)
 		}
 
-		if b.Cluster.UsesNoneDNS() {
-			nlbListener := &awstasks.NetworkLoadBalancerListener{
-				Name:                fi.PtrTo(b.NLBListenerName("api", wellknownports.KopsControllerPort)),
-				Lifecycle:           b.Lifecycle,
-				NetworkLoadBalancer: b.LinkToNLB("api"),
-				Port:                wellknownports.KopsControllerPort,
-				TargetGroup:         b.LinkToTargetGroup("kops-controller"),
+		if b.Cluster.UsesLoadBalancerForKopsController() {
+			{
+				nlbListener := &awstasks.NetworkLoadBalancerListener{
+					Name:                fi.PtrTo(b.NLBListenerName("api", wellknownports.KopsControllerPort)),
+					Lifecycle:           b.Lifecycle,
+					NetworkLoadBalancer: b.LinkToNLB("api"),
+					Port:                wellknownports.KopsControllerPort,
+					TargetGroup:         b.LinkToTargetGroup("kops-controller"),
+				}
+				nlbListeners = append(nlbListeners, nlbListener)
 			}
-			nlbListeners = append(nlbListeners, nlbListener)
+
+			if b.Cluster.Spec.Networking.Cilium != nil && b.Cluster.Spec.Networking.Cilium.EtcdManaged {
+				nlbListener := &awstasks.NetworkLoadBalancerListener{
+					Name:                fi.PtrTo(b.NLBListenerName("etcd-cilium", wellknownports.EtcdCiliumClientPort)),
+					Lifecycle:           b.Lifecycle,
+					NetworkLoadBalancer: b.LinkToNLB("api"),
+					Port:                wellknownports.EtcdCiliumClientPort,
+					TargetGroup:         b.LinkToTargetGroup("etcd-cilium"),
+				}
+				nlbListeners = append(nlbListeners, nlbListener)
+			}
 		}
 
 		if lbSpec.SecurityGroupOverride != nil {
@@ -212,9 +225,10 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			Type:              elbv2types.LoadBalancerTypeEnumNetwork,
 		}
 
-		// Wait for all load balancer components to be created (including network interfaces needed for NoneDNS).
-		// Limiting this to clusters using NoneDNS because load balancer creation is quite slow.
-		if b.Cluster.UsesNoneDNS() {
+		// Wait for all load balancer components to be created (including network interfaces needed to
+		// bake NLB ENI IPs into worker nodeup configs). Limiting this to clusters that actually need
+		// those IPs because load balancer creation is quite slow.
+		if b.Cluster.UsesLoadBalancerForKopsController() {
 			nlb.SetWaitForLoadBalancerReady(true)
 		}
 
@@ -251,7 +265,7 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			WellKnownServices: []wellknownservices.WellKnownService{wellknownservices.KubeAPIServer},
 		}
 
-		if b.Cluster.UsesNoneDNS() {
+		if b.Cluster.UsesLoadBalancerForKopsController() {
 			lbSpec.CrossZoneLoadBalancing = fi.PtrTo(true)
 		} else if lbSpec.CrossZoneLoadBalancing == nil {
 			lbSpec.CrossZoneLoadBalancing = fi.PtrTo(false)
@@ -311,45 +325,76 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 				groupTags["Name"] = groupName
 
 				tg := &awstasks.TargetGroup{
-					Name:               fi.PtrTo(groupName),
-					Lifecycle:          b.Lifecycle,
-					VPC:                b.LinkToVPC(),
-					Tags:               groupTags,
-					Protocol:           elbv2types.ProtocolEnumTcp,
-					Port:               fi.PtrTo(int32(443)),
-					Attributes:         groupAttrs,
-					Interval:           fi.PtrTo(int32(10)),
-					HealthyThreshold:   fi.PtrTo(int32(2)),
-					UnhealthyThreshold: fi.PtrTo(int32(2)),
-					Shared:             fi.PtrTo(false),
+					Name:                fi.PtrTo(groupName),
+					Lifecycle:           b.Lifecycle,
+					VPC:                 b.LinkToVPC(),
+					Tags:                groupTags,
+					Protocol:            elbv2types.ProtocolEnumTcp,
+					Port:                fi.PtrTo(int32(443)),
+					Attributes:          groupAttrs,
+					Interval:            fi.PtrTo(int32(10)),
+					HealthyThreshold:    fi.PtrTo(int32(2)),
+					UnhealthyThreshold:  fi.PtrTo(int32(2)),
+					HealthCheckProtocol: elbv2types.ProtocolEnumTcp,
+					Shared:              fi.PtrTo(false),
 				}
 				tg.CreateNewRevisionsWith(nlb)
 				c.AddTask(tg)
 			}
 
-			if b.Cluster.UsesNoneDNS() {
-				groupName := b.NLBTargetGroupName("kops-controller")
-				groupTags := b.CloudTags(groupName, false)
+			if b.Cluster.UsesLoadBalancerForKopsController() {
+				{
+					groupName := b.NLBTargetGroupName("kops-controller")
+					groupTags := b.CloudTags(groupName, false)
 
-				// Override the returned name to be the expected NLB TG name
-				groupTags["Name"] = groupName
+					// Override the returned name to be the expected NLB TG name
+					groupTags["Name"] = groupName
 
-				tg := &awstasks.TargetGroup{
-					Name:               fi.PtrTo(groupName),
-					Lifecycle:          b.Lifecycle,
-					VPC:                b.LinkToVPC(),
-					Tags:               groupTags,
-					Protocol:           elbv2types.ProtocolEnumTcp,
-					Port:               fi.PtrTo(int32(wellknownports.KopsControllerPort)),
-					Attributes:         groupAttrs,
-					Interval:           fi.PtrTo(int32(10)),
-					HealthyThreshold:   fi.PtrTo(int32(2)),
-					UnhealthyThreshold: fi.PtrTo(int32(2)),
-					Shared:             fi.PtrTo(false),
+					tg := &awstasks.TargetGroup{
+						Name:                fi.PtrTo(groupName),
+						Lifecycle:           b.Lifecycle,
+						VPC:                 b.LinkToVPC(),
+						Tags:                groupTags,
+						Protocol:            elbv2types.ProtocolEnumTcp,
+						Port:                fi.PtrTo(int32(wellknownports.KopsControllerPort)),
+						Attributes:          groupAttrs,
+						Interval:            fi.PtrTo(int32(10)),
+						HealthyThreshold:    fi.PtrTo(int32(2)),
+						UnhealthyThreshold:  fi.PtrTo(int32(2)),
+						HealthCheckProtocol: elbv2types.ProtocolEnumHttps,
+						HealthCheckPath:     fi.PtrTo("/healthz"),
+						Shared:              fi.PtrTo(false),
+					}
+					tg.CreateNewRevisionsWith(nlb)
+
+					c.AddTask(tg)
 				}
-				tg.CreateNewRevisionsWith(nlb)
 
-				c.AddTask(tg)
+				if b.Cluster.Spec.Networking.Cilium != nil && b.Cluster.Spec.Networking.Cilium.EtcdManaged {
+					groupName := b.NLBTargetGroupName("etcd-cilium")
+					groupTags := b.CloudTags(groupName, false)
+
+					// Override the returned name to be the expected NLB TG name
+					groupTags["Name"] = groupName
+
+					tg := &awstasks.TargetGroup{
+						Name:                fi.PtrTo(groupName),
+						Lifecycle:           b.Lifecycle,
+						VPC:                 b.LinkToVPC(),
+						Tags:                groupTags,
+						Protocol:            elbv2types.ProtocolEnumTcp,
+						Port:                fi.PtrTo(int32(wellknownports.EtcdCiliumClientPort)),
+						Attributes:          groupAttrs,
+						Interval:            fi.PtrTo(int32(10)),
+						HealthyThreshold:    fi.PtrTo(int32(2)),
+						UnhealthyThreshold:  fi.PtrTo(int32(2)),
+						HealthCheckProtocol: elbv2types.ProtocolEnumTcp,
+						Shared:              fi.PtrTo(false),
+					}
+					tg.CreateNewRevisionsWith(nlb)
+
+					c.AddTask(tg)
+				}
 			}
 
 			if lbSpec.SSLCertificate != "" {
@@ -359,17 +404,18 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 				// Override the returned name to be the expected NLB TG name
 				tlsGroupTags["Name"] = tlsGroupName
 				secondaryTG := &awstasks.TargetGroup{
-					Name:               fi.PtrTo(tlsGroupName),
-					Lifecycle:          b.Lifecycle,
-					VPC:                b.LinkToVPC(),
-					Tags:               tlsGroupTags,
-					Protocol:           elbv2types.ProtocolEnumTls,
-					Port:               fi.PtrTo(int32(443)),
-					Attributes:         groupAttrs,
-					Interval:           fi.PtrTo(int32(10)),
-					HealthyThreshold:   fi.PtrTo(int32(2)),
-					UnhealthyThreshold: fi.PtrTo(int32(2)),
-					Shared:             fi.PtrTo(false),
+					Name:                fi.PtrTo(tlsGroupName),
+					Lifecycle:           b.Lifecycle,
+					VPC:                 b.LinkToVPC(),
+					Tags:                tlsGroupTags,
+					Protocol:            elbv2types.ProtocolEnumTls,
+					Port:                fi.PtrTo(int32(443)),
+					Attributes:          groupAttrs,
+					Interval:            fi.PtrTo(int32(10)),
+					HealthyThreshold:    fi.PtrTo(int32(2)),
+					UnhealthyThreshold:  fi.PtrTo(int32(2)),
+					HealthCheckProtocol: elbv2types.ProtocolEnumTcp,
+					Shared:              fi.PtrTo(false),
 				}
 				secondaryTG.CreateNewRevisionsWith(nlb)
 				c.AddTask(secondaryTG)
@@ -489,7 +535,7 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		}
 	}
 
-	if b.Cluster.UsesNoneDNS() {
+	if b.Cluster.UsesLoadBalancerForKopsController() {
 		nodeGroups, err := b.GetSecurityGroups(kops.InstanceGroupRoleNode)
 		if err != nil {
 			return err
@@ -575,19 +621,35 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 				SourceGroup:   masterGroup.Task,
 				ToPort:        fi.PtrTo(int32(4)),
 			})
-			if b.Cluster.UsesNoneDNS() {
-				nlb.WellKnownServices = append(nlb.WellKnownServices, wellknownservices.KopsController)
-				clb.WellKnownServices = append(clb.WellKnownServices, wellknownservices.KopsController)
+			if b.Cluster.UsesLoadBalancerForKopsController() {
+				{
+					nlb.WellKnownServices = append(nlb.WellKnownServices, wellknownservices.KopsController)
+					clb.WellKnownServices = append(clb.WellKnownServices, wellknownservices.KopsController)
 
-				c.AddTask(&awstasks.SecurityGroupRule{
-					Name:          fi.PtrTo(fmt.Sprintf("kops-controller-elb-to-cp%s", suffix)),
-					Lifecycle:     b.SecurityLifecycle,
-					FromPort:      fi.PtrTo(int32(wellknownports.KopsControllerPort)),
-					Protocol:      fi.PtrTo("tcp"),
-					SecurityGroup: masterGroup.Task,
-					ToPort:        fi.PtrTo(int32(wellknownports.KopsControllerPort)),
-					SourceGroup:   lbSG,
-				})
+					c.AddTask(&awstasks.SecurityGroupRule{
+						Name:          fi.PtrTo(fmt.Sprintf("kops-controller-elb-to-cp%s", suffix)),
+						Lifecycle:     b.SecurityLifecycle,
+						FromPort:      fi.PtrTo(int32(wellknownports.KopsControllerPort)),
+						Protocol:      fi.PtrTo("tcp"),
+						SecurityGroup: masterGroup.Task,
+						ToPort:        fi.PtrTo(int32(wellknownports.KopsControllerPort)),
+						SourceGroup:   lbSG,
+					})
+				}
+
+				if b.Cluster.Spec.Networking.Cilium != nil && b.Cluster.Spec.Networking.Cilium.EtcdManaged {
+					nlb.WellKnownServices = append(nlb.WellKnownServices, wellknownservices.EtcdCilium)
+
+					c.AddTask(&awstasks.SecurityGroupRule{
+						Name:          fi.PtrTo(fmt.Sprintf("etcd-cilium-elb-to-cp%s", suffix)),
+						Lifecycle:     b.SecurityLifecycle,
+						FromPort:      fi.PtrTo(int32(wellknownports.EtcdCiliumClientPort)),
+						Protocol:      fi.PtrTo("tcp"),
+						SecurityGroup: masterGroup.Task,
+						ToPort:        fi.PtrTo(int32(wellknownports.EtcdCiliumClientPort)),
+						SourceGroup:   lbSG,
+					})
+				}
 			}
 		}
 	}
@@ -607,7 +669,7 @@ func (a ByScoreDescending) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
 func (a ByScoreDescending) Less(i, j int) bool {
 	if a[i].score != a[j].score {
 		// ! to sort highest score first
-		return !(a[i].score < a[j].score)
+		return a[i].score >= a[j].score
 	}
 	// Use name to break ties consistently
 	return a[i].subnet.Name < a[j].subnet.Name

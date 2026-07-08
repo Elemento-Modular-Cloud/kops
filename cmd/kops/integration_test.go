@@ -22,6 +22,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"os"
@@ -74,6 +75,15 @@ type integrationTest struct {
 	nthRebalance bool
 	// enable GCE startup script
 	startupScript bool
+	// verify "kops get assets" functionality
+	testGetAssets bool
+	// gceAPIServerIGs is a list of APIServer instance group names and their zones for GCE
+	gceAPIServerIGs []gceAPIServerIG
+}
+
+type gceAPIServerIG struct {
+	name string
+	zone string
 }
 
 func newIntegrationTest(clusterName, srcDir string) *integrationTest {
@@ -86,6 +96,11 @@ func newIntegrationTest(clusterName, srcDir string) *integrationTest {
 		nth:            true,
 		sshKey:         true,
 	}
+}
+
+func (i *integrationTest) withTestGetAssets() *integrationTest {
+	i.testGetAssets = true
+	return i
 }
 
 func (i *integrationTest) withStartupScript() *integrationTest {
@@ -140,6 +155,11 @@ func (i *integrationTest) withBastionUserData() *integrationTest {
 
 func (i *integrationTest) withCiliumEtcd() *integrationTest {
 	i.ciliumEtcd = true
+	return i
+}
+
+func (i *integrationTest) withGCEDedicatedAPIServer(name, zone string) *integrationTest {
+	i.gceAPIServerIGs = append(i.gceAPIServerIGs, gceAPIServerIG{name: name, zone: zone})
 	return i
 }
 
@@ -215,7 +235,6 @@ const (
 	scwCSIAddon = "scaleway-csi-driver.addons.k8s.io-k8s-1.24"
 
 	calicoAddon  = "networking.projectcalico.org-k8s-1.25"
-	canalAddon   = "networking.projectcalico.org.canal-k8s-1.25"
 	ciliumAddon  = "networking.cilium.io-k8s-1.16"
 	flannelAddon = "networking.flannel-k8s-1.25"
 	kindnetAddon = "networking.kindnet-k8s-1.32"
@@ -227,53 +246,45 @@ const (
 	nodeProblemDetectorAddon = "node-problem-detector.addons.k8s.io-k8s-1.17"
 )
 
+// TestMinimalGossipAWS runs the test on a minimum gossip configuration on AWS
+func TestMinimalGossipAWS(t *testing.T) {
+	newIntegrationTest("gossip.k8s.local", "gossip-aws").
+		withAddons(
+			awsEBSCSIAddon,
+			dnsControllerAddon,
+			awsCCMAddon,
+		).
+		runTestTerraformAWS(t)
+}
+
+// TestMinimalGossipAzure runs the test on a minimum gossip configuration on Azure
+func TestMinimalGossipAzure(t *testing.T) {
+	newIntegrationTest("gossip.k8s.local", "gossip-azure").
+		runTestTerraformAzure(t)
+}
+
+// TestMinimalGossipGCE runs the test on a minimum gossip configuration on GCE
+func TestMinimalGossipGCE(t *testing.T) {
+	newIntegrationTest("gossip.k8s.local", "gossip-gce").
+		withAddons(
+			dnsControllerAddon,
+			gcpCCMAddon,
+			gcpPDCSIAddon,
+		).
+		runTestTerraformGCE(t)
+}
+
+// TestMinimalGossipHetzner runs the test on a minimum gossip configuration on Hetzner
+func TestMinimalGossipHetzner(t *testing.T) {
+	t.Setenv("HCLOUD_TOKEN", "REDACTED")
+	newIntegrationTest("gossip.k8s.local", "gossip-hetzner").
+		withAddons(dnsControllerAddon).
+		runTestTerraformHetzner(t)
+}
+
 // TestMinimalAWS runs the test on a minimum configuration, similar to kops create cluster minimal.example.com --zones us-west-1a
 func TestMinimalAWS(t *testing.T) {
 	newIntegrationTest("minimal-aws.example.com", "minimal-aws").
-		withAddons(
-			awsEBSCSIAddon,
-			dnsControllerAddon,
-			awsCCMAddon,
-		).
-		runTestTerraformAWS(t)
-}
-
-// TestMinimal runs the test on a minimum configuration
-func TestMinimal_v1_27(t *testing.T) {
-	newIntegrationTest("minimal.example.com", "minimal-1.27").
-		withAddons(
-			awsEBSCSIAddon,
-			dnsControllerAddon,
-			awsCCMAddon,
-		).
-		runTestTerraformAWS(t)
-}
-
-// TestMinimal runs the test on a minimum configuration
-func TestMinimal_v1_28(t *testing.T) {
-	newIntegrationTest("minimal.example.com", "minimal-1.28").
-		withAddons(
-			awsEBSCSIAddon,
-			dnsControllerAddon,
-			awsCCMAddon,
-		).
-		runTestTerraformAWS(t)
-}
-
-// TestMinimal runs the test on a minimum configuration
-func TestMinimal_v1_29(t *testing.T) {
-	newIntegrationTest("minimal.example.com", "minimal-1.29").
-		withAddons(
-			awsEBSCSIAddon,
-			dnsControllerAddon,
-			awsCCMAddon,
-		).
-		runTestTerraformAWS(t)
-}
-
-// TestMinimal runs the test on a minimum configuration
-func TestMinimal_v1_30(t *testing.T) {
-	newIntegrationTest("minimal.example.com", "minimal-1.30").
 		withAddons(
 			awsEBSCSIAddon,
 			dnsControllerAddon,
@@ -304,6 +315,57 @@ func TestMinimal_v1_32(t *testing.T) {
 		runTestTerraformAWS(t)
 }
 
+// TestMinimal runs the test on a minimum configuration
+func TestMinimal_v1_33(t *testing.T) {
+	newIntegrationTest("minimal.example.com", "minimal-1.33").
+		withAddons(
+			awsEBSCSIAddon,
+			dnsControllerAddon,
+			awsCCMAddon,
+		).
+		runTestTerraformAWS(t)
+}
+
+// TestMinimal runs the test on a minimum configuration
+func TestMinimal_v1_34(t *testing.T) {
+	newIntegrationTest("minimal.example.com", "minimal-1.34").
+		withAddons(
+			awsEBSCSIAddon,
+			dnsControllerAddon,
+			awsCCMAddon,
+		).
+		runTestTerraformAWS(t)
+}
+
+// TestMinimal runs the test on a minimum configuration
+func TestMinimal_v1_35(t *testing.T) {
+	newIntegrationTest("minimal.example.com", "minimal-1.35").
+		withAddons(
+			awsEBSCSIAddon,
+			dnsControllerAddon,
+			awsCCMAddon,
+		).
+		runTestTerraformAWS(t)
+}
+
+// TestMinimal runs the test on a minimum configuration
+func TestMinimal_v1_36(t *testing.T) {
+	newIntegrationTest("minimal.example.com", "minimal-1.36").
+		withAddons(
+			awsEBSCSIAddon,
+			dnsControllerAddon,
+			awsCCMAddon,
+		).
+		runTestTerraformAWS(t)
+}
+
+// TestMinimalAzure runs the test on a minimum Azure configuration.
+func TestMinimalAzure(t *testing.T) {
+	newIntegrationTest("minimal-azure.example.com", "minimal_azure").
+		withVersion("v1alpha3").
+		runTestTerraformAzure(t)
+}
+
 // TestMinimal_NoneDNS runs the test on a minimum configuration with --dns=none
 func TestMinimal_NoneDNS(t *testing.T) {
 	newIntegrationTest("minimal.example.com", "minimal-dns-none").
@@ -318,6 +380,7 @@ func TestMinimal_NoneDNS(t *testing.T) {
 func TestHetzner(t *testing.T) {
 	t.Setenv("HCLOUD_TOKEN", "REDACTED")
 	newIntegrationTest("minimal.example.com", "minimal_hetzner").
+		withAddons(clusterAutoscalerAddon).
 		runTestTerraformHetzner(t)
 }
 
@@ -364,7 +427,6 @@ func TestMinimalGCE(t *testing.T) {
 		withAddons(
 			dnsControllerAddon,
 			gcpCCMAddon,
-			gcpPDCSIAddon,
 		).
 		runTestTerraformGCE(t)
 }
@@ -391,6 +453,20 @@ func TestMinimalGCEInternalLoadBalancer(t *testing.T) {
 		runTestTerraformGCE(t)
 }
 
+// TestMinimalGCEInternalLoadBalancerCiliumEtcd runs tests on a minimal GCE configuration with an internal load balancer and cilium-etcd.
+func TestMinimalGCEInternalLoadBalancerCiliumEtcd(t *testing.T) {
+	newIntegrationTest("minimal-gce-ilb-cilium-etcd.example.com", "minimal_gce_ilb_cilium_etcd").
+		withCiliumEtcd().
+		withManagedFiles("etcd-cluster-spec-cilium", "manifests-etcdmanager-cilium-master-us-test1-a").
+		withAddons(
+			ciliumAddon,
+			dnsControllerAddon,
+			gcpCCMAddon,
+			gcpPDCSIAddon,
+		).
+		runTestTerraformGCE(t)
+}
+
 // TestMinimalGCEPublicLoadBalancer runs tests on a minimal GCE configuration with a public load balancer.
 func TestMinimalGCEPublicLoadBalancer(t *testing.T) {
 	newIntegrationTest("minimal-gce-plb.example.com", "minimal_gce_plb").
@@ -399,6 +475,21 @@ func TestMinimalGCEPublicLoadBalancer(t *testing.T) {
 			gcpCCMAddon,
 			gcpPDCSIAddon,
 		).
+		runTestTerraformGCE(t)
+}
+
+// TestMinimalGCEPublicLoadBalancerAPIServer runs tests on a minimal GCE configuration with a public load balancer and an APIServer instance group.
+func TestMinimalGCEPublicLoadBalancerAPIServer(t *testing.T) {
+	featureflag.ParseFlags("+APIServerNodes")
+	defer featureflag.ParseFlags("-APIServerNodes")
+
+	newIntegrationTest("minimal-gce-plb-apiserver.example.com", "minimal_gce_plb_apiserver").
+		withAddons(
+			dnsControllerAddon,
+			gcpCCMAddon,
+			gcpPDCSIAddon,
+		).
+		withGCEDedicatedAPIServer("apiserver-us-test1-a", "us-test1-a").
 		runTestTerraformGCE(t)
 }
 
@@ -463,6 +554,7 @@ func TestHA(t *testing.T) {
 func TestHighAvailabilityGCE(t *testing.T) {
 	newIntegrationTest("ha-gce.example.com", "ha_gce").withZones(3).
 		withAddons(
+			clusterAutoscalerAddon,
 			dnsControllerAddon,
 			gcpCCMAddon,
 			gcpPDCSIAddon,
@@ -578,7 +670,7 @@ func TestMinimalGp3(t *testing.T) {
 
 // TestMinimal runs the test on a minimum configuration, similar to kops create cluster minimal.example.com --zones us-west-1a
 func TestMinimalLongClusterName(t *testing.T) {
-	newIntegrationTest("this.is.truly.a.really.really.long.cluster-name.minimal.example.com", "minimal-longclustername").
+	newIntegrationTest("this.is.truly.a.really.really.really.really.really.long.cluster-name.minimal.example.com", "minimal-longclustername").
 		withAddons(
 			awsEBSCSIAddon,
 			dnsControllerAddon,
@@ -692,15 +784,6 @@ func TestPrivateCiliumENI(t *testing.T) {
 		runTestTerraformAWS(t)
 }
 
-// TestPrivateCanal runs the test on a configuration with private topology, canal networking
-func TestPrivateCanal(t *testing.T) {
-	newIntegrationTest("privatecanal.example.com", "privatecanal").
-		withPrivate().
-		withDefaultAddons30().
-		withAddons(canalAddon).
-		runTestTerraformAWS(t)
-}
-
 const kopeioNetworkingAddon = "networking.kope.io-k8s-1.12"
 
 // TestPrivateKopeio runs the test on a configuration with private topology, kopeio networking
@@ -761,6 +844,7 @@ func TestPrivateDns1(t *testing.T) {
 			awsEBSCSIAddon,
 			dnsControllerAddon,
 		).
+		withTestGetAssets().
 		runTestTerraformAWS(t)
 }
 
@@ -806,7 +890,7 @@ func TestAWSLBController(t *testing.T) {
 		withServiceAccountRole("aws-cloud-controller-manager.kube-system", true).
 		withServiceAccountRole("aws-node-termination-handler.kube-system", true).
 		withServiceAccountRole("ebs-csi-controller-sa.kube-system", true).
-		withAddons("aws-load-balancer-controller.addons.k8s.io-k8s-1.19",
+		withAddons("aws-load-balancer-controller.addons.k8s.io-k8s-1.19-irsa",
 			"certmanager.io-k8s-1.16",
 			awsEBSCSIAddon,
 			dnsControllerAddon,
@@ -843,7 +927,7 @@ func TestManyAddonsCCMIRSA(t *testing.T) {
 		withServiceAccountRole("ebs-csi-controller-sa.kube-system", true).
 		withAddons(
 			"aws-ebs-csi-driver.addons.k8s.io-k8s-1.17",
-			"aws-load-balancer-controller.addons.k8s.io-k8s-1.19",
+			"aws-load-balancer-controller.addons.k8s.io-k8s-1.19-irsa",
 			"certmanager.io-k8s-1.16",
 			"cluster-autoscaler.addons.k8s.io-k8s-1.15",
 			"networking.amazon-vpc-routed-eni-k8s-1.16",
@@ -915,11 +999,11 @@ func TestKarpenter(t *testing.T) {
 		withOIDCDiscovery().
 		withDefaults24().
 		withAddons("karpenter.sh-k8s-1.19").
-		withServiceAccountRole("aws-node-termination-handler.kube-system", true).
+		withoutNTH().
 		withServiceAccountRole("karpenter.kube-system", true)
 	test.expectTerraformFilenames = append(test.expectTerraformFilenames,
-		"aws_launch_template_karpenter-nodes-single-machinetype.minimal.example.com_user_data",
-		"aws_launch_template_karpenter-nodes-default.minimal.example.com_user_data",
+		"aws_s3_object_nodeupscript-karpenter-nodes-single-machinetype_content",
+		"aws_s3_object_nodeupscript-karpenter-nodes-default_content",
 		"aws_s3_object_nodeupconfig-karpenter-nodes-single-machinetype_content",
 		"aws_s3_object_nodeupconfig-karpenter-nodes-default_content",
 	)
@@ -1040,6 +1124,7 @@ func TestContainerd(t *testing.T) {
 			dnsControllerAddon,
 			awsCCMAddon,
 		).
+		withTestGetAssets().
 		runTestTerraformAWS(t)
 }
 
@@ -1200,13 +1285,23 @@ func (i *integrationTest) runTest(t *testing.T, ctx context.Context, h *testutil
 
 		// We don't test it here, and it adds a dependency on kubectl
 		options.CreateKubecfg = false
+		options.IgnoreKubeletVersionSkew = true
 		options.ClusterName = i.clusterName
 		options.LifecycleOverrides = i.lifecycleOverrides
 
-		_, err := RunUpdateCluster(ctx, factory, &stdout, options)
+		updateClusterResults, err := RunUpdateCluster(ctx, factory, &stdout, options)
 		if err != nil {
 			t.Fatalf("error running update cluster %q: %v", i.clusterName, err)
 		}
+
+		// Verify that we can print all the tasks
+		// Catches bugs like https://github.com/kubernetes/kops/issues/17316
+		for key, task := range updateClusterResults.TaskMap {
+			if _, err := json.Marshal(task); err != nil {
+				t.Errorf("unable to marshal task %q of type %T to json: %v", key, task, err)
+			}
+		}
+
 	}
 
 	// Compare main files
@@ -1309,6 +1404,22 @@ func (i *integrationTest) runTest(t *testing.T, ctx context.Context, h *testutil
 			}
 		}
 	}
+
+	if i.testGetAssets {
+		options := &GetAssetsOptions{}
+		options.GetOptions = &GetOptions{}
+		options.Output = "yaml"
+		options.ClusterName = i.clusterName
+
+		var assetsOut bytes.Buffer
+		err := RunGetAssets(ctx, factory, &assetsOut, options)
+		if err != nil {
+			t.Fatalf("error running get assets %q: %v", i.clusterName, err)
+		}
+
+		wantPath := filepath.Join(i.srcDir, "assets.yaml")
+		golden.AssertMatchesFile(t, assetsOut.String(), wantPath)
+	}
 }
 
 func (i *integrationTest) setupCluster(t *testing.T, ctx context.Context, inputYAML string, stdout bytes.Buffer) *util.Factory {
@@ -1390,6 +1501,18 @@ func (i *integrationTest) setupCluster(t *testing.T, ctx context.Context, inputY
 		secondaryCertificate: "-----BEGIN CERTIFICATE-----\nMIIBfDCCASagAwIBAgIMFo+bQ+Eq69jgzpKwMA0GCSqGSIb3DQEBCwUAMB8xHTAb\nBgNVBAMTFGV0Y2QtcGVlcnMtY2EtZXZlbnRzMB4XDTIxMDcwNTIwMTE0NloXDTMx\nMDcwNTIwMTE0NlowHzEdMBsGA1UEAxMUZXRjZC1wZWVycy1jYS1ldmVudHMwXDAN\nBgkqhkiG9w0BAQEFAANLADBIAkEAo5Nj2CjX1qp3mEPw1H5nHAFWLoGNSLSlRFJW\n03NxaNPMFzL5PrCoyOXrX8/MWczuZYw0Crf8EPOOQWi2+W0XLwIDAQABo0IwQDAO\nBgNVHQ8BAf8EBAMCAQYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUxauhhKQh\ncvdZND78rHe0RQVTTiswDQYJKoZIhvcNAQELBQADQQB+cq4jIS9q0zXslaRa+ViI\nJ+dviA3sMygbmSJO0s4DxYmoazKJblux5q0ASSvS9iL1l9ShuZ1dWyp2tpZawHyb\n-----END CERTIFICATE-----",
 	})
 	storeKeyset(t, ctx, keyStore, "etcd-peers-ca-main", &testingKeyset{
+		primaryKey:           "-----BEGIN RSA PRIVATE KEY-----\nMIIBOwIBAAJBALJFpdanCA3og1CrCz2n8G88SUm/ZGej11VMWGVCoMBpQld7swGa\nI7g0lxbvoSjN4GHnO1Hf/g0TUUzbHxOKxLcCAwEAAQJBAI418S1i4ZH2wYpAaB8v\nMSYLOYuTGk1y7fwlgv6EQCg8esJcMCeDsqT5V5sUicT6jT5m3KdpKA4v4kpZJzHo\nr8ECIQDRtEmpTSmTQ1FAVPu34j6ZU0W5zT8RMaoUFPCXPJ/M9QIhANmg7bTqNNBY\nd7TUxmgm2NW5GDn0yyg1WqoIL4wOJz97AiBvrCad9e1x8qNOMvNpVR4o4GN9MoOn\nUF9WGmCU6T/gEQIgdhnEBdK3eH0Z8TMqvKigMVNyFzmF6jsSCYXJr7qah/MCIQCy\npxPa6cKMC0n9t61B+1f7O2yCvwllormxaFYVm9J4xw==\n-----END RSA PRIVATE KEY-----",
+		primaryCertificate:   "-----BEGIN CERTIFICATE-----\nMIIBeDCCASKgAwIBAgIMFo+bKjmuLDDLcDHsMA0GCSqGSIb3DQEBCwUAMB0xGzAZ\nBgNVBAMTEmV0Y2QtcGVlcnMtY2EtbWFpbjAeFw0yMTA3MDUyMDA5NTZaFw0zMTA3\nMDUyMDA5NTZaMB0xGzAZBgNVBAMTEmV0Y2QtcGVlcnMtY2EtbWFpbjBcMA0GCSqG\nSIb3DQEBAQUAA0sAMEgCQQCyRaXWpwgN6INQqws9p/BvPElJv2Rno9dVTFhlQqDA\naUJXe7MBmiO4NJcW76EozeBh5ztR3/4NE1FM2x8TisS3AgMBAAGjQjBAMA4GA1Ud\nDwEB/wQEAwIBBjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBQtE1d49uSvpURf\nOQ25Vlu6liY20DANBgkqhkiG9w0BAQsFAANBAAgLVaetJZcfOA3OIMMvQbz2Ydrt\nuWF9BKkIad8jrcIrm3IkOtR8bKGmDIIaRKuG/ZUOL6NMe2fky3AAfKwleL4=\n-----END CERTIFICATE-----",
+		secondaryKey:         "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBALE1vJwNk3HlXVk6JfFlK9oWkdHAp4cN9y4xSK12g+2dpUyUxMYN\nYAy4JWYUcUBaiEhjKd6YR6CZmRnXlLsASt8CAwEAAQJABeku812Yj3IBHRrNbTHc\ntpeOIZr1e5HBru7B59dOKzzKrI2SozD+wKmhi2r+8yPkdU1nq4DE1Pboc1BmPh9C\n0QIhAMiAQ+yZRuThl8qOCZ+D9Frmml102DIf5d1NjGGQD84FAiEA4kMJCM194VPV\n2W7QsLH+szbwRHXg1dOlR9WQHJ8rZpMCIF/F7SwyV0vzerdVu8EHngxhxPDJZJAk\n7n8UkO71iqclAiEAypza9z4E7oWDZ507Vi9edJ/K0pN4jiJjzIrq7SZ/1+8CID2K\nAMbqYsKhlMt8zM+hSUg+u8wcWs8CVBb4ozQY2Xyb\n-----END RSA PRIVATE KEY-----",
+		secondaryCertificate: "-----BEGIN CERTIFICATE-----\nMIIBeDCCASKgAwIBAgIMFo+bQ+EuVthBfuZvMA0GCSqGSIb3DQEBCwUAMB0xGzAZ\nBgNVBAMTEmV0Y2QtcGVlcnMtY2EtbWFpbjAeFw0yMTA3MDUyMDExNDZaFw0zMTA3\nMDUyMDExNDZaMB0xGzAZBgNVBAMTEmV0Y2QtcGVlcnMtY2EtbWFpbjBcMA0GCSqG\nSIb3DQEBAQUAA0sAMEgCQQCxNbycDZNx5V1ZOiXxZSvaFpHRwKeHDfcuMUitdoPt\nnaVMlMTGDWAMuCVmFHFAWohIYynemEegmZkZ15S7AErfAgMBAAGjQjBAMA4GA1Ud\nDwEB/wQEAwIBBjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBTAjQ8T4HclPIsC\nqipEfUIcLP6jqTANBgkqhkiG9w0BAQsFAANBAJdZ17TN3HlWrH7HQgfR12UBwz8K\nG9DurDznVaBVUYaHY8Sg5AvAXeb+yIF2JMmRR+bK+/G1QYY2D3/P31Ic2Oo=\n-----END CERTIFICATE-----",
+	})
+	storeKeyset(t, ctx, keyStore, "etcd-manager-ca-leases", &testingKeyset{
+		primaryKey:           "-----BEGIN RSA PRIVATE KEY-----\nMIIBOwIBAAJBAMW5A2xmJgkkoaURt6/pc0zhbo8rq7kX4zoWJmUV+MNVLXecut3V\nHPfLI3PRhlGDB3ftJNapf2uPLRoZyujeoycCAwEAAQJBALIOHMEfdB1DubW3MN3f\ns4+Ga1PPFgPHOT9z9vuNP8pWcRWGACXdln4T/VM5LQYrwTQ/i9EMZycl3ISbTUfy\nEPECIQD5RWUR1dF4S2VGFtxhttbZbP6m3Nk/eiOmT3wPv4TJDQIhAMsPY9YgTmfV\nuZwykVu/UopdjVY/vFAiFYwA2Km8b2gDAiB9jdiUnTA++SrvnMAwb5nUNjQl9ANx\nF6IxOMPyYrMNWQIhALb2wANRCrSeq+ak3bqockwALXi4ZwphG78RiCewhUVXAiA+\n4yljHjbbEGQje8VuxmA3ITMeCwAkIqjXY1Z5DUTnDA==\n-----END RSA PRIVATE KEY-----",
+		primaryCertificate:   "-----BEGIN CERTIFICATE-----\nMIIBfDCCASagAwIBAgIMFo+bKjm1c3jfv6hIMA0GCSqGSIb3DQEBCwUAMB8xHTAb\nBgNVBAMTFGV0Y2QtbWFuYWdlci1jYS1tYWluMB4XDTIxMDcwNTIwMDk1NloXDTMx\nMDcwNTIwMDk1NlowHzEdMBsGA1UEAxMUZXRjZC1tYW5hZ2VyLWNhLW1haW4wXDAN\nBgkqhkiG9w0BAQEFAANLADBIAkEAxbkDbGYmCSShpRG3r+lzTOFujyuruRfjOhYm\nZRX4w1Utd5y63dUc98sjc9GGUYMHd+0k1ql/a48tGhnK6N6jJwIDAQABo0IwQDAO\nBgNVHQ8BAf8EBAMCAQYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUWZLkbBFx\nGAgPU4i62c52unSo7RswDQYJKoZIhvcNAQELBQADQQAj6Pgd0va/8FtkyMlnohLu\nGf4v8RJO6zk3Y6jJ4+cwWziipFM1ielMzSOZfFcCZgH3m5Io40is4hPSqyq2TOA6\n-----END CERTIFICATE-----",
+		secondaryKey:         "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAMN9483Hf4qLDdOG9Fl2w7ewdHN7Cd2mn3Biz7xt8UQfTeW2K/fq\nmQKt5swBZMbHJ+I9XHuW9fxikwxAApZmYHUCAwEAAQJAOOGfcBe1L52oRz0ESie5\naPBJ4fQR+dFqoOvPYBdpVRV4h8PcLGhH7H0RO0pJf9ni0MxWDMn2R8Nw6/I7zSgr\n/QIhAN432G6YOItNGj0wrNBgZerFIOVdnHe+higgAhJOtNFbAiEA4TXsL5ALyAYI\nVDS66EbriI15z5XxiauBk0zAbqun7m8CIQDUK+Ichn7GkpGRBx6ZvtDQvfNQzHaO\n5nzVZupTbI68rQIgLzkNU1PTBJgvOujroDTuwm1X820vfnyV6PsZBpu71MUCIAPQ\nTjwL4gGtCZtHXHqAUS9vgf4sQ40oBqNb3NhshheB\n-----END RSA PRIVATE KEY-----",
+		secondaryCertificate: "-----BEGIN CERTIFICATE-----\nMIIBfDCCASagAwIBAgIMFo+bQ+Eg8Si30gr4MA0GCSqGSIb3DQEBCwUAMB8xHTAb\nBgNVBAMTFGV0Y2QtbWFuYWdlci1jYS1tYWluMB4XDTIxMDcwNTIwMTE0NloXDTMx\nMDcwNTIwMTE0NlowHzEdMBsGA1UEAxMUZXRjZC1tYW5hZ2VyLWNhLW1haW4wXDAN\nBgkqhkiG9w0BAQEFAANLADBIAkEAw33jzcd/iosN04b0WXbDt7B0c3sJ3aafcGLP\nvG3xRB9N5bYr9+qZAq3mzAFkxscn4j1ce5b1/GKTDEAClmZgdQIDAQABo0IwQDAO\nBgNVHQ8BAf8EBAMCAQYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUE/h+3gDP\nDvKwHRyiYlXM8voZ1wowDQYJKoZIhvcNAQELBQADQQBXuimeEoAOu5HN4hG7NqL9\nt40K3ZRhRZv3JQWnRVJCBDjg1rD0GQJR/n+DoWvbeijI5C9pNjr2pWSIYR1eYCvd\n-----END CERTIFICATE-----",
+	})
+	storeKeyset(t, ctx, keyStore, "etcd-peers-ca-leases", &testingKeyset{
 		primaryKey:           "-----BEGIN RSA PRIVATE KEY-----\nMIIBOwIBAAJBALJFpdanCA3og1CrCz2n8G88SUm/ZGej11VMWGVCoMBpQld7swGa\nI7g0lxbvoSjN4GHnO1Hf/g0TUUzbHxOKxLcCAwEAAQJBAI418S1i4ZH2wYpAaB8v\nMSYLOYuTGk1y7fwlgv6EQCg8esJcMCeDsqT5V5sUicT6jT5m3KdpKA4v4kpZJzHo\nr8ECIQDRtEmpTSmTQ1FAVPu34j6ZU0W5zT8RMaoUFPCXPJ/M9QIhANmg7bTqNNBY\nd7TUxmgm2NW5GDn0yyg1WqoIL4wOJz97AiBvrCad9e1x8qNOMvNpVR4o4GN9MoOn\nUF9WGmCU6T/gEQIgdhnEBdK3eH0Z8TMqvKigMVNyFzmF6jsSCYXJr7qah/MCIQCy\npxPa6cKMC0n9t61B+1f7O2yCvwllormxaFYVm9J4xw==\n-----END RSA PRIVATE KEY-----",
 		primaryCertificate:   "-----BEGIN CERTIFICATE-----\nMIIBeDCCASKgAwIBAgIMFo+bKjmuLDDLcDHsMA0GCSqGSIb3DQEBCwUAMB0xGzAZ\nBgNVBAMTEmV0Y2QtcGVlcnMtY2EtbWFpbjAeFw0yMTA3MDUyMDA5NTZaFw0zMTA3\nMDUyMDA5NTZaMB0xGzAZBgNVBAMTEmV0Y2QtcGVlcnMtY2EtbWFpbjBcMA0GCSqG\nSIb3DQEBAQUAA0sAMEgCQQCyRaXWpwgN6INQqws9p/BvPElJv2Rno9dVTFhlQqDA\naUJXe7MBmiO4NJcW76EozeBh5ztR3/4NE1FM2x8TisS3AgMBAAGjQjBAMA4GA1Ud\nDwEB/wQEAwIBBjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBQtE1d49uSvpURf\nOQ25Vlu6liY20DANBgkqhkiG9w0BAQsFAANBAAgLVaetJZcfOA3OIMMvQbz2Ydrt\nuWF9BKkIad8jrcIrm3IkOtR8bKGmDIIaRKuG/ZUOL6NMe2fky3AAfKwleL4=\n-----END CERTIFICATE-----",
 		secondaryKey:         "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBALE1vJwNk3HlXVk6JfFlK9oWkdHAp4cN9y4xSK12g+2dpUyUxMYN\nYAy4JWYUcUBaiEhjKd6YR6CZmRnXlLsASt8CAwEAAQJABeku812Yj3IBHRrNbTHc\ntpeOIZr1e5HBru7B59dOKzzKrI2SozD+wKmhi2r+8yPkdU1nq4DE1Pboc1BmPh9C\n0QIhAMiAQ+yZRuThl8qOCZ+D9Frmml102DIf5d1NjGGQD84FAiEA4kMJCM194VPV\n2W7QsLH+szbwRHXg1dOlR9WQHJ8rZpMCIF/F7SwyV0vzerdVu8EHngxhxPDJZJAk\n7n8UkO71iqclAiEAypza9z4E7oWDZ507Vi9edJ/K0pN4jiJjzIrq7SZ/1+8CID2K\nAMbqYsKhlMt8zM+hSUg+u8wcWs8CVBb4ozQY2Xyb\n-----END RSA PRIVATE KEY-----",
@@ -1477,7 +1600,7 @@ func (i *integrationTest) runTestTerraformAWS(t *testing.T) {
 	h := testutils.NewIntegrationTestHarness(t)
 	defer h.Close()
 
-	h.MockKopsVersion("1.21.0-alpha.1")
+	h.MockKopsVersion("1.34.0-beta.1")
 	h.SetupMockAWS()
 
 	expectedFilenames := i.expectTerraformFilenames
@@ -1487,6 +1610,7 @@ func (i *integrationTest) runTestTerraformAWS(t *testing.T) {
 		"aws_s3_object_etcd-cluster-spec-events_content",
 		"aws_s3_object_etcd-cluster-spec-main_content",
 		"aws_s3_object_kops-version.txt_content",
+		"aws_s3_object_manifests-channels-kops-channels_content",
 		"aws_s3_object_manifests-static-kube-apiserver-healthcheck_content",
 		"aws_s3_object_nodeupconfig-nodes_content",
 		"aws_s3_object_"+i.clusterName+"-addons-bootstrap_content",
@@ -1543,13 +1667,14 @@ func (i *integrationTest) runTestTerraformAWS(t *testing.T) {
 		}
 	}
 	if i.nth {
+		queueName := truncate.TruncateString(strings.ReplaceAll(i.clusterName, ".", "-"), truncate.TruncateStringOptions{MaxLength: 75, AlwaysAddHash: false})
 		expectedFilenames = append(expectedFilenames, []string{
 			"aws_s3_object_" + i.clusterName + "-addons-node-termination-handler.aws-k8s-1.11_content",
 			"aws_cloudwatch_event_rule_" + awsup.GetClusterName40(i.clusterName) + "-ASGLifecycle_event_pattern",
 			"aws_cloudwatch_event_rule_" + awsup.GetClusterName40(i.clusterName) + "-SpotInterruption_event_pattern",
 			"aws_cloudwatch_event_rule_" + awsup.GetClusterName40(i.clusterName) + "-InstanceStateChange_event_pattern",
 			"aws_cloudwatch_event_rule_" + awsup.GetClusterName40(i.clusterName) + "-InstanceScheduledChange_event_pattern",
-			"aws_sqs_queue_" + strings.Replace(i.clusterName, ".", "-", -1) + "-nth_policy",
+			"aws_sqs_queue_" + queueName + "-nth_policy",
 		}...)
 	}
 	if i.nthRebalance {
@@ -1567,7 +1692,7 @@ func (i *integrationTest) runTestPhase(t *testing.T, phase cloudup.Phase) {
 	h := testutils.NewIntegrationTestHarness(t)
 	defer h.Close()
 
-	h.MockKopsVersion("1.21.0-alpha.1")
+	h.MockKopsVersion("1.34.0-beta.1")
 	h.SetupMockAWS()
 	phaseName := string(phase)
 	if phaseName == "" {
@@ -1577,7 +1702,8 @@ func (i *integrationTest) runTestPhase(t *testing.T, phase cloudup.Phase) {
 
 	expectedFilenames := i.expectTerraformFilenames
 
-	if phase == cloudup.PhaseSecurity {
+	switch phase {
+	case cloudup.PhaseSecurity:
 		expectedFilenames = []string{
 			"aws_iam_role_masters." + i.clusterName + "_policy",
 			"aws_iam_role_nodes." + i.clusterName + "_policy",
@@ -1592,7 +1718,7 @@ func (i *integrationTest) runTestPhase(t *testing.T, phase cloudup.Phase) {
 				"aws_launch_template_bastion." + i.clusterName + "_user_data",
 			}...)
 		}
-	} else if phase == cloudup.PhaseCluster {
+	case cloudup.PhaseCluster:
 		expectedFilenames = []string{
 			"aws_launch_template_nodes." + i.clusterName + "_user_data",
 		}
@@ -1614,7 +1740,7 @@ func (i *integrationTest) runTestTerraformGCE(t *testing.T) {
 	h := testutils.NewIntegrationTestHarness(t)
 	defer h.Close()
 
-	h.MockKopsVersion("1.21.0-alpha.1")
+	h.MockKopsVersion("1.34.0-beta.1")
 	h.SetupMockGCE()
 
 	expectedFilenames := i.expectTerraformFilenames
@@ -1631,6 +1757,7 @@ func (i *integrationTest) runTestTerraformGCE(t *testing.T) {
 		"aws_s3_object_etcd-cluster-spec-events_content",
 		"aws_s3_object_etcd-cluster-spec-main_content",
 		"aws_s3_object_kops-version.txt_content",
+		"aws_s3_object_manifests-channels-kops-channels_content",
 		"aws_s3_object_manifests-static-kube-apiserver-healthcheck_content",
 		"aws_s3_object_nodeupconfig-nodes_content",
 		"aws_s3_object_"+i.clusterName+"-addons-bootstrap_content",
@@ -1656,7 +1783,122 @@ func (i *integrationTest) runTestTerraformGCE(t *testing.T) {
 		}
 	}
 
+	for _, ig := range i.gceAPIServerIGs {
+		expectedFilenames = append(expectedFilenames, "aws_s3_object_nodeupconfig-"+ig.name+"_content")
+
+		prefix := "google_compute_instance_template_" + ig.name + "-" + gce.SafeClusterName(i.clusterName) + "_metadata_"
+		if !i.startupScript {
+			expectedFilenames = append(expectedFilenames, prefix+"user-data")
+		} else {
+			expectedFilenames = append(expectedFilenames, prefix+"startup-script")
+		}
+	}
+
 	i.runTest(t, ctx, h, expectedFilenames, "", "", nil)
+}
+
+func (i *integrationTest) runTestTerraformAzure(t *testing.T) {
+	t.Setenv("KOPS_RUN_TOO_NEW_VERSION", "1")
+
+	featureflag.ParseFlags("+Azure,+AzureTerraform")
+	defer featureflag.ParseFlags("-Azure,-AzureTerraform")
+
+	ctx := testcontext.ForTest(t)
+	h := testutils.NewIntegrationTestHarness(t)
+	defer h.Close()
+
+	h.MockKopsVersion("1.34.0-beta.1")
+	h.SetupMockAzure(i.clusterName)
+
+	var stdout bytes.Buffer
+
+	i.srcDir = updateClusterTestBase + i.srcDir
+	inputYAML := "in-" + i.version + ".yaml"
+
+	factory := i.setupCluster(t, ctx, inputYAML, stdout)
+
+	options := &UpdateClusterOptions{}
+	options.InitDefaults()
+	options.Target = "terraform"
+	options.OutDir = path.Join(h.TempDir, "out")
+	options.RunTasksOptions.MaxTaskDuration = 30 * time.Second
+	options.CreateKubecfg = false
+	options.ClusterName = i.clusterName
+
+	updateClusterResults, err := RunUpdateCluster(ctx, factory, &stdout, options)
+	if err != nil {
+		t.Fatalf("error running update cluster %q: %v", i.clusterName, err)
+	}
+
+	for key, task := range updateClusterResults.TaskMap {
+		if _, err := json.Marshal(task); err != nil {
+			t.Errorf("unable to marshal task %q of type %T to json: %v", key, task, err)
+		}
+	}
+
+	files, err := os.ReadDir(path.Join(h.TempDir, "out"))
+	if err != nil {
+		t.Fatalf("failed to read dir: %v", err)
+	}
+
+	var fileNames []string
+	for _, f := range files {
+		fileNames = append(fileNames, f.Name())
+	}
+	sort.Strings(fileNames)
+	if actual, expected := strings.Join(fileNames, ","), "data,kubernetes.tf"; actual != expected {
+		t.Fatalf("unexpected files.  actual=%q, expected=%q, test=%q", actual, expected, "kubernetes.tf")
+	}
+
+	actualTF, err := os.ReadFile(path.Join(h.TempDir, "out", "kubernetes.tf"))
+	if err != nil {
+		t.Fatalf("unexpected error reading actual terraform output: %v", err)
+	}
+	golden.AssertMatchesFile(t, string(actualTF), path.Join(i.srcDir, "kubernetes.tf"))
+
+	actualDataDir := filepath.Join(h.TempDir, "out", "data")
+	actualDataFiles, err := os.ReadDir(actualDataDir)
+	if err != nil {
+		t.Fatalf("failed to read data dir %q: %v", actualDataDir, err)
+	}
+
+	var actualDataFilenames []string
+	for _, f := range actualDataFiles {
+		actualDataFilenames = append(actualDataFilenames, f.Name())
+	}
+	sort.Strings(actualDataFilenames)
+
+	expectedDataDir := filepath.Join(i.srcDir, "data")
+	expectedDataFilenames := actualDataFilenames
+	if !golden.UpdateExpectedOutput() {
+		expectedDataFiles, err := os.ReadDir(expectedDataDir)
+		if err != nil {
+			t.Fatalf("failed to read data dir %q: %v", expectedDataDir, err)
+		}
+		expectedDataFilenames = make([]string, 0, len(expectedDataFiles))
+		for _, f := range expectedDataFiles {
+			expectedDataFilenames = append(expectedDataFilenames, f.Name())
+		}
+		sort.Strings(expectedDataFilenames)
+	}
+
+	for _, filename := range expectedDataFilenames {
+		expectedPath := filepath.Join(expectedDataDir, filename)
+		actualPath := filepath.Join(actualDataDir, filename)
+		actualDataContent, err := os.ReadFile(actualPath)
+		if err != nil {
+			t.Errorf("failed to read actual data file %q: %v", actualPath, err)
+			continue
+		}
+		golden.AssertMatchesFile(t, string(actualDataContent), expectedPath)
+	}
+
+	if !reflect.DeepEqual(actualDataFilenames, expectedDataFilenames) {
+		actual := strings.Join(actualDataFilenames, "\n")
+		expected := strings.Join(expectedDataFilenames, "\n")
+		t.Log(diff.FormatDiff(actual, expected))
+		t.Error("unexpected data files.")
+	}
 }
 
 func (i *integrationTest) runTestTerraformHetzner(t *testing.T) {
@@ -1666,7 +1908,7 @@ func (i *integrationTest) runTestTerraformHetzner(t *testing.T) {
 	h := testutils.NewIntegrationTestHarness(t)
 	defer h.Close()
 
-	h.MockKopsVersion("1.21.0-alpha.1")
+	h.MockKopsVersion("1.34.0-beta.1")
 
 	expectedFilenames := i.expectTerraformFilenames
 
@@ -1675,6 +1917,7 @@ func (i *integrationTest) runTestTerraformHetzner(t *testing.T) {
 		"aws_s3_object_etcd-cluster-spec-events_content",
 		"aws_s3_object_etcd-cluster-spec-main_content",
 		"aws_s3_object_kops-version.txt_content",
+		"aws_s3_object_manifests-channels-kops-channels_content",
 		"aws_s3_object_manifests-etcdmanager-events-master-fsn1_content",
 		"aws_s3_object_manifests-etcdmanager-main-master-fsn1_content",
 		"aws_s3_object_manifests-static-kube-apiserver-healthcheck_content",
@@ -1683,6 +1926,7 @@ func (i *integrationTest) runTestTerraformHetzner(t *testing.T) {
 		"aws_s3_object_"+i.clusterName+"-addons-bootstrap_content",
 		"aws_s3_object_"+i.clusterName+"-addons-coredns.addons.k8s.io-k8s-1.12_content",
 		"aws_s3_object_"+i.clusterName+"-addons-hcloud-cloud-controller.addons.k8s.io-k8s-1.22_content",
+		"aws_s3_object_"+i.clusterName+"-addons-hcloud-config.addons.k8s.io-k8s-1.22_content",
 		"aws_s3_object_"+i.clusterName+"-addons-hcloud-csi-driver.addons.k8s.io-k8s-1.22_content",
 		"aws_s3_object_"+i.clusterName+"-addons-kops-controller.addons.k8s.io-k8s-1.16_content",
 		"aws_s3_object_"+i.clusterName+"-addons-kubelet-api.rbac.addons.k8s.io-k8s-1.9_content",
@@ -1707,7 +1951,7 @@ func (i *integrationTest) runTestTerraformScaleway(t *testing.T) {
 	h := testutils.NewIntegrationTestHarness(t)
 	defer h.Close()
 
-	h.MockKopsVersion("1.21.0-alpha.1")
+	h.MockKopsVersion("1.34.0-beta.1")
 
 	expectedFilenames := i.expectTerraformFilenames
 
@@ -1716,6 +1960,7 @@ func (i *integrationTest) runTestTerraformScaleway(t *testing.T) {
 		"aws_s3_object_etcd-cluster-spec-events_content",
 		"aws_s3_object_etcd-cluster-spec-main_content",
 		"aws_s3_object_kops-version.txt_content",
+		"aws_s3_object_manifests-channels-kops-channels_content",
 		"aws_s3_object_manifests-etcdmanager-events-control-plane-fr-par-1_content",
 		"aws_s3_object_manifests-etcdmanager-main-control-plane-fr-par-1_content",
 		"aws_s3_object_manifests-static-kube-apiserver-healthcheck_content",
@@ -1735,7 +1980,7 @@ func (i *integrationTest) runTestTerraformScaleway(t *testing.T) {
 }
 
 func MakeSSHKeyPair(publicKeyPath string, privateKeyPath string) error {
-	privateKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return err
 	}
@@ -1745,7 +1990,7 @@ func MakeSSHKeyPair(publicKeyPath string, privateKeyPath string) error {
 	if err := pem.Encode(&privateKeyBytes, privateKeyPEM); err != nil {
 		return err
 	}
-	if err := os.WriteFile(privateKeyPath, privateKeyBytes.Bytes(), os.FileMode(0o700)); err != nil {
+	if err := os.WriteFile(privateKeyPath, privateKeyBytes.Bytes(), os.FileMode(0o600)); err != nil {
 		return err
 	}
 
@@ -1754,7 +1999,7 @@ func MakeSSHKeyPair(publicKeyPath string, privateKeyPath string) error {
 		return err
 	}
 	publicKeyBytes := ssh.MarshalAuthorizedKey(publicKey)
-	if err := os.WriteFile(publicKeyPath, publicKeyBytes, os.FileMode(0o744)); err != nil {
+	if err := os.WriteFile(publicKeyPath, publicKeyBytes, os.FileMode(0o644)); err != nil {
 		return err
 	}
 

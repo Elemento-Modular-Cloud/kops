@@ -238,7 +238,7 @@ func buildDeleteSecurityGroupRule(rule ec2types.SecurityGroupRule) *deleteSecuri
 	return d
 }
 
-var _ fi.CloudupDeletion = &deleteSecurityGroupRule{}
+var _ fi.CloudupDeletion = (*deleteSecurityGroupRule)(nil)
 
 func (d *deleteSecurityGroupRule) Delete(t fi.CloudupTarget) error {
 	ctx := context.TODO()
@@ -334,10 +334,14 @@ func (e *SecurityGroup) FindDeletions(c *fi.CloudupContext) ([]fi.CloudupDeletio
 
 	cloud := awsup.GetCloud(c)
 
+	filters := make([]ec2types.Filter, 0)
+	if e.ID != nil {
+		filters = append(filters, awsup.NewEC2Filter("group-id", *e.ID))
+	} else {
+		return nil, nil
+	}
 	request := &ec2.DescribeSecurityGroupRulesInput{
-		Filters: []ec2types.Filter{
-			awsup.NewEC2Filter("group-id", *e.ID),
-		},
+		Filters: filters,
 	}
 
 	response, err := cloud.EC2().DescribeSecurityGroupRules(ctx, request)
@@ -431,7 +435,7 @@ type PortRemovalRule struct {
 	ToPort   int
 }
 
-var _ RemovalRule = &PortRemovalRule{}
+var _ RemovalRule = (*PortRemovalRule)(nil)
 
 func (r *PortRemovalRule) String() string {
 	return fi.DebugAsJsonString(r)

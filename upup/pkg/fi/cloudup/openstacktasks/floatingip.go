@@ -19,10 +19,7 @@ package openstacktasks
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
-
-	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/ports"
 
 	l3floatingip "github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/layer3/floatingips"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -46,7 +43,7 @@ type FloatingIP struct {
 	WellKnownServices []wellknownservices.WellKnownService
 }
 
-var _ fi.HasAddress = &FloatingIP{}
+var _ fi.HasAddress = (*FloatingIP)(nil)
 
 var readBackoff = wait.Backoff{
 	Duration: time.Second,
@@ -129,7 +126,7 @@ func (e *FloatingIP) GetDependencies(tasks map[string]fi.CloudupTask) []fi.Cloud
 	return deps
 }
 
-var _ fi.CompareWithID = &FloatingIP{}
+var _ fi.CompareWithID = (*FloatingIP)(nil)
 
 func (e *FloatingIP) CompareWithID() *string {
 	return e.ID
@@ -179,37 +176,6 @@ func (e *FloatingIP) Find(c *fi.CloudupContext) (*FloatingIP, error) {
 		}
 	}
 
-	if len(fips) == 0 {
-		// If we fail to find an IP address we need to look for IP addresses attached to a port with similar name
-		// TODO: remove this in kops 1.21 where we can expect that the description field has been added
-		portname := "port-" + strings.TrimPrefix(fipname, "fip-")
-
-		ports, err := cloud.ListPorts(ports.ListOpts{
-			Name: portname,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to list ports: %v", err)
-		}
-
-		if len(ports) == 1 {
-
-			fip, err := findFipByPortID(cloud, ports[0].ID)
-			if err != nil {
-				return nil, fmt.Errorf("failed to find floating ip: %v", err)
-			}
-			if fip == nil {
-				return nil, nil
-			}
-			actual := &FloatingIP{
-				Name:      fi.PtrTo(fip.Description),
-				ID:        fi.PtrTo(fip.ID),
-				Lifecycle: e.Lifecycle,
-			}
-			e.ID = actual.ID
-			return actual, nil
-		}
-
-	}
 	return nil, nil
 }
 
@@ -242,12 +208,9 @@ func (_ *FloatingIP) CheckChanges(a, e, changes *FloatingIP) error {
 		if changes.ID != nil {
 			return fi.CannotChangeField("ID")
 		}
-		//TODO: add back into kops 1.21
-		/*
-			if changes.Name != nil && fi.ValueOf(a.Name) != "" {
-				return fi.CannotChangeField("Name")
-			}
-		*/
+		if changes.Name != nil && fi.ValueOf(a.Name) != "" {
+			return fi.CannotChangeField("Name")
+		}
 	}
 	return nil
 }

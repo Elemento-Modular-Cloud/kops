@@ -1,7 +1,6 @@
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: cluster-autoscaler.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -22,7 +21,6 @@ apiVersion: v1
 automountServiceAccountToken: true
 kind: ServiceAccount
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: cluster-autoscaler.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -37,7 +35,6 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: cluster-autoscaler.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -84,6 +81,16 @@ rules:
   - list
   - get
   - update
+- apiGroups:
+  - resource.k8s.io
+  resources:
+  - resourceslices
+  - deviceclasses
+  - resourceclaims
+  verbs:
+  - watch
+  - list
+  - get
 - apiGroups:
   - ""
   resources:
@@ -149,6 +156,7 @@ rules:
   - csinodes
   - csidrivers
   - csistoragecapacities
+  - volumeattachments
   verbs:
   - watch
   - list
@@ -160,6 +168,7 @@ rules:
   verbs:
   - list
   - watch
+  - get
 - apiGroups:
   - coordination.k8s.io
   resources:
@@ -181,7 +190,6 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: cluster-autoscaler.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -203,7 +211,6 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: cluster-autoscaler.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -235,7 +242,6 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: cluster-autoscaler.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -258,7 +264,6 @@ subjects:
 apiVersion: v1
 kind: Service
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: cluster-autoscaler.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -282,7 +287,6 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: cluster-autoscaler.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -306,7 +310,6 @@ spec:
         prometheus.io/port: "8085"
         prometheus.io/scrape: "true"
         testAnnotation: testAnnotation
-      creationTimestamp: null
       labels:
         app: cluster-autoscaler
         app.kubernetes.io/name: cluster-autoscaler
@@ -350,7 +353,7 @@ spec:
         env:
         - name: AWS_REGION
           value: us-test-1
-        image: registry.k8s.io/autoscaling/cluster-autoscaler:v1.30.0
+        image: registry.k8s.io/autoscaling/cluster-autoscaler:v1.32.7
         imagePullPolicy: IfNotPresent
         livenessProbe:
           failureThreshold: 3

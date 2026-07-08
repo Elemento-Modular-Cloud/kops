@@ -24,6 +24,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	compute "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute"
 	network "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/network/armnetwork"
+	"k8s.io/kops/upup/pkg/fi/cloudup/azure"
 )
 
 type mockClient struct {
@@ -59,32 +60,45 @@ func newTestInterfaces(ip string) []*network.Interface {
 
 func TestGetSeeds(t *testing.T) {
 	const (
-		clusterTag  = "KubernetesCluster"
-		clusterName = "test-cluster"
+		clusterTag      = "KubernetesCluster"
+		clusterName     = "test-cluster"
+		controlPlaneTag = azure.TagNameRolePrefix + "control-plane"
+		nodeTag         = azure.TagNameRolePrefix + "node"
 	)
 
-	vmssNames := []string{"vmss0", "vmss1", "vmss"}
-	ips := []string{"ip0", "ip1", "ip2"}
+	vmssNames := []string{"control-plane-0", "control-plane-1", "unrelated", "nodes"}
+	ips := []string{"ip0", "ip1", "ip2", "ip3"}
 	client := &mockClient{
 		vmss: []*compute.VirtualMachineScaleSet{
 			{
 				Name: to.Ptr(vmssNames[0]),
 				Tags: map[string]*string{
-					clusterTag: to.Ptr(clusterName),
+					clusterTag:      to.Ptr(clusterName),
+					controlPlaneTag: to.Ptr("1"),
 				},
 			},
 			{
 				Name: to.Ptr(vmssNames[1]),
 				Tags: map[string]*string{
 					clusterTag:             to.Ptr(clusterName),
+					controlPlaneTag:        to.Ptr("1"),
 					"not-relevant-tag-key": to.Ptr("val"),
 				},
 			},
 			{
-				// Irrelevalent VM that has no matching tag.
+				// Irrelevant VM that has no matching cluster tag.
 				Name: to.Ptr(vmssNames[2]),
 				Tags: map[string]*string{
 					"not-relevant-tag-key": to.Ptr("val"),
+				},
+			},
+			{
+				// Worker scale set: same cluster, but not control-plane, so it
+				// does not run gossip and must not be used as a seed.
+				Name: to.Ptr(vmssNames[3]),
+				Tags: map[string]*string{
+					clusterTag: to.Ptr(clusterName),
+					nodeTag:    to.Ptr("1"),
 				},
 			},
 		},
@@ -92,6 +106,7 @@ func TestGetSeeds(t *testing.T) {
 			vmssNames[0]: newTestInterfaces(ips[0]),
 			vmssNames[1]: newTestInterfaces(ips[1]),
 			vmssNames[2]: newTestInterfaces(ips[2]),
+			vmssNames[3]: newTestInterfaces(ips[3]),
 		},
 	}
 	provider := SeedProvider{

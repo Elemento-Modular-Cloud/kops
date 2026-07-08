@@ -59,12 +59,7 @@ func (b *NTPBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 		ntpHost = ""
 	}
 
-	if !b.RunningOnGCE() && !b.RunningOnAzure() && b.Distribution.IsUbuntu() && b.Distribution.Version() <= 20.04 {
-		if ntpHost != "" {
-			c.AddTask(b.buildTimesyncdConf("/etc/systemd/timesyncd.conf", ntpHost))
-		}
-		c.AddTask((&nodetasks.Service{Name: "systemd-timesyncd"}).InitDefaults())
-	} else if b.Distribution.IsDebianFamily() {
+	if b.Distribution.IsDebianFamily() {
 		c.AddTask(&nodetasks.Package{Name: "chrony"})
 		if ntpHost != "" {
 			c.AddTask(b.buildChronydConf("/etc/chrony/chrony.conf", ntpHost))
@@ -94,20 +89,6 @@ logdir /var/log/chrony
 makestep 1.0 3
 maxupdateskew 100.0
 rtcsync
-`
-	return &nodetasks.File{
-		Path:     path,
-		Contents: fi.NewStringResource(conf),
-		Type:     nodetasks.FileType_File,
-		Mode:     s("0644"),
-	}
-}
-
-func (b *NTPBuilder) buildTimesyncdConf(path string, host string) *nodetasks.File {
-	conf := `# Built by Kops - do NOT edit
-
-[Time]
-NTP=` + host + `
 `
 	return &nodetasks.File{
 		Path:     path,

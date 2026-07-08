@@ -16,13 +16,22 @@ limitations under the License.
 
 package kops
 
+import "strings"
+
 // Version can be replaced by build tooling
 var Version = KOPS_RELEASE_VERSION
 
+// KopsVersionImageTag is like Version, but with + replaced by - (so it can be used in docker tags)
+func KopsVersionImageTag() string {
+	tag := Version
+	// We replace + with - so that we can use the tag in docker image tags
+	return strings.ReplaceAll(tag, "+", "-")
+}
+
 // These constants are parsed by build tooling - be careful about changing the formats
 const (
-	KOPS_RELEASE_VERSION = "1.32.0-beta.1"
-	KOPS_CI_VERSION      = "1.32.0-beta.2"
+	KOPS_RELEASE_VERSION = "1.36.0-elemento.1"
+	KOPS_CI_VERSION      = "1.36.0-elemento.2"
 )
 
 // GitVersion should be replaced by the makefile

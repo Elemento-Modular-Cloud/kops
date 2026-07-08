@@ -37,8 +37,8 @@ import (
 	"k8s.io/kops/pkg/bootstrap"
 )
 
-const AWSAuthenticationTokenPrefixV1 = "x-aws-sts "
-const AWSAuthenticationTokenPrefixV2 = "x-aws-sts-v2 "
+const AWSAuthenticationTokenPrefixV1 = "x-aws-sts "    //nolint:gosec // This is an authentication scheme prefix, not a credential.
+const AWSAuthenticationTokenPrefixV2 = "x-aws-sts-v2 " //nolint:gosec // This is an authentication scheme prefix, not a credential.
 
 type awsAuthenticator struct {
 	// sts holds the AWS STS client, for signing V2 requests
@@ -51,7 +51,7 @@ type awsAuthenticator struct {
 	credentialsProvider aws.CredentialsProvider
 }
 
-var _ bootstrap.Authenticator = &awsAuthenticator{}
+var _ bootstrap.Authenticator = (*awsAuthenticator)(nil)
 
 // RegionFromMetadata returns the current region from the aws metdata
 func RegionFromMetadata(ctx context.Context) (string, error) {

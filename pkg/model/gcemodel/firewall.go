@@ -65,7 +65,7 @@ func (b *FirewallModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 				"209.85.204.0/22",
 				"209.85.152.0/22",
 			},
-			TargetTags: []string{b.GCETagForRole(kops.InstanceGroupRoleControlPlane)},
+			TargetTags: b.GCETagsForAPIServerTargets(),
 			Allowed:    []string{"tcp"},
 		})
 	}
@@ -93,12 +93,13 @@ func (b *FirewallModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		if err != nil {
 			return err
 		}
+		cpTags := append(b.GCETagsForAPIServerTargets(), b.GCETagForRole("Master"))
 		t := &gcetasks.FirewallRule{
 			Name:       s(b.NameForFirewallRule("master-to-master")),
 			Lifecycle:  b.Lifecycle,
 			Network:    network,
-			SourceTags: []string{b.GCETagForRole(kops.InstanceGroupRoleControlPlane), b.GCETagForRole("Master")},
-			TargetTags: []string{b.GCETagForRole(kops.InstanceGroupRoleControlPlane), b.GCETagForRole("Master")},
+			SourceTags: cpTags,
+			TargetTags: cpTags,
 			Allowed:    allProtocols,
 		}
 		c.AddTask(t)
@@ -114,7 +115,7 @@ func (b *FirewallModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			Name:       s(b.NameForFirewallRule("master-to-node")),
 			Lifecycle:  b.Lifecycle,
 			Network:    network,
-			SourceTags: []string{b.GCETagForRole(kops.InstanceGroupRoleControlPlane), b.GCETagForRole("Master")},
+			SourceTags: append(b.GCETagsForAPIServerTargets(), b.GCETagForRole("Master")),
 			TargetTags: []string{b.GCETagForRole(kops.InstanceGroupRoleNode)},
 			Allowed:    allProtocols,
 		}
@@ -132,7 +133,7 @@ func (b *FirewallModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			Lifecycle:  b.Lifecycle,
 			Network:    network,
 			SourceTags: []string{b.GCETagForRole(kops.InstanceGroupRoleNode)},
-			TargetTags: []string{b.GCETagForRole(kops.InstanceGroupRoleControlPlane), b.GCETagForRole("Master")},
+			TargetTags: append(b.GCETagsForAPIServerTargets(), b.GCETagForRole("Master")),
 			Allowed: []string{
 				fmt.Sprintf("tcp:%d", wellknownports.KubeAPIServer),
 				fmt.Sprintf("tcp:%d", wellknownports.KubeletAPI),
@@ -147,12 +148,19 @@ func (b *FirewallModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		}
 		if b.NetworkingIsCalico() {
 			t.Allowed = append(t.Allowed, "ipip")
+			t.Allowed = append(t.Allowed, fmt.Sprintf("tcp:%d", wellknownports.BGP))
 		}
 		if b.NetworkingIsCilium() {
 			t.Allowed = append(t.Allowed, fmt.Sprintf("udp:%d", wellknownports.VxlanUDP))
 			if model.UseCiliumEtcd(b.Cluster) {
 				t.Allowed = append(t.Allowed, fmt.Sprintf("tcp:%d", wellknownports.EtcdCiliumClientPort))
 			}
+		}
+		if b.NetworkingIsIPAlias() {
+			t.Allowed = append(t.Allowed, fmt.Sprintf("tcp:%d", wellknownports.KubeControllerManagerMetricsPort))
+			t.Allowed = append(t.Allowed, fmt.Sprintf("tcp:%d", wellknownports.KubeSchedulerMetricsPort))
+			t.Allowed = append(t.Allowed, fmt.Sprintf("tcp:%d", wellknownports.KubeProxyMetricsPort))
+			t.Allowed = append(t.Allowed, fmt.Sprintf("tcp:%d", wellknownports.EtcdMetricsPort))
 		}
 		c.AddTask(t)
 	}

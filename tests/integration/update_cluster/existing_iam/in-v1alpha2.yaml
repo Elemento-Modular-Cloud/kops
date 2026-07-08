@@ -68,7 +68,7 @@ metadata:
 spec:
   iam:
     profile: arn:aws-test:iam::4222917490108:instance-profile/kops-custom-master-role
-  image: ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20220404
+  image: ubuntu/images/hvm-ssd-gp3/ubuntu-resolute-26.04-amd64-server-20220404
   machineType: m3.medium
   maxSize: 1
   minSize: 1
@@ -88,7 +88,7 @@ metadata:
 spec:
   iam:
     profile: arn:aws-test:iam::4222917490108:instance-profile/kops-custom-master-role
-  image: ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20220404
+  image: ubuntu/images/hvm-ssd-gp3/ubuntu-resolute-26.04-amd64-server-20220404
   machineType: m3.medium
   maxSize: 1
   minSize: 1
@@ -108,7 +108,7 @@ metadata:
 spec:
   iam:
     profile: arn:aws-test:iam::4222917490108:instance-profile/kops-custom-master-role
-  image: ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20220404
+  image: ubuntu/images/hvm-ssd-gp3/ubuntu-resolute-26.04-amd64-server-20220404
   machineType: m3.medium
   maxSize: 1
   minSize: 1
@@ -128,7 +128,7 @@ metadata:
 spec:
   iam:
     profile: arn:aws-test:iam::422917490108:instance-profile/kops-custom-node-role
-  image: ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20220404
+  image: ubuntu/images/hvm-ssd-gp3/ubuntu-resolute-26.04-amd64-server-20220404
   machineType: t2.medium
   maxSize: 2
   minSize: 2

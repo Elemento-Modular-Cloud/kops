@@ -19,6 +19,7 @@ package awstasks
 import (
 	"context"
 	"fmt"
+	"maps"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,7 +40,7 @@ import (
 )
 
 // NetworkLoadBalancer manages an NLB.  We find the existing NLB using the Name tag.
-var _ DNSTarget = &NetworkLoadBalancer{}
+var _ DNSTarget = (*NetworkLoadBalancer)(nil)
 
 // +kops:fitask
 type NetworkLoadBalancer struct {
@@ -97,9 +98,9 @@ func (e *NetworkLoadBalancer) SetWaitForLoadBalancerReady(v bool) {
 	e.waitForLoadBalancerReady = v
 }
 
-var _ fi.CompareWithID = &NetworkLoadBalancer{}
-var _ fi.CloudupTaskNormalize = &NetworkLoadBalancer{}
-var _ fi.CloudupProducesDeletions = &NetworkLoadBalancer{}
+var _ fi.CompareWithID = (*NetworkLoadBalancer)(nil)
+var _ fi.CloudupTaskNormalize = (*NetworkLoadBalancer)(nil)
+var _ fi.CloudupProducesDeletions = (*NetworkLoadBalancer)(nil)
 
 func (e *NetworkLoadBalancer) CompareWithID() *string {
 	return e.Name
@@ -341,7 +342,7 @@ func (e *NetworkLoadBalancer) Find(c *fi.CloudupContext) (*NetworkLoadBalancer, 
 	return actual, nil
 }
 
-var _ fi.HasAddress = &NetworkLoadBalancer{}
+var _ fi.HasAddress = (*NetworkLoadBalancer)(nil)
 
 // GetWellKnownServices implements fi.HasAddress::GetWellKnownServices.
 // It indicates which services we support with this load balancer.
@@ -370,7 +371,7 @@ func (e *NetworkLoadBalancer) FindAddresses(c *fi.CloudupContext) ([]string, err
 				addresses = append(addresses, fi.ValueOf(lb.LoadBalancer.DNSName))
 			}
 
-			if cluster.UsesNoneDNS() {
+			if cluster.UsesLoadBalancerForKopsController() {
 				nis, err := cloud.FindELBV2NetworkInterfacesByName(fi.ValueOf(e.VPC.ID), aws.ToString(lb.LoadBalancer.LoadBalancerName))
 				if err != nil {
 					return nil, fmt.Errorf("failed to find network interfaces matching %q: %w", aws.ToString(lb.LoadBalancer.LoadBalancerName), err)
@@ -441,17 +442,26 @@ func (*NetworkLoadBalancer) CheckChanges(a, e, changes *NetworkLoadBalancer) err
 		if len(changes.SubnetMappings) > 0 {
 			expectedSubnets := make(map[string]*string)
 			for _, s := range e.SubnetMappings {
+				subnetID := fi.ValueOf(s.Subnet.ID)
+				if subnetID == "" {
+					return fmt.Errorf("Subnet ID is required for subnet name=%v", fi.ValueOf(s.Subnet.Name))
+				}
 				if s.AllocationID != nil {
-					expectedSubnets[*s.Subnet.ID] = s.AllocationID
+					expectedSubnets[subnetID] = s.AllocationID
 				} else if s.PrivateIPv4Address != nil {
-					expectedSubnets[*s.Subnet.ID] = s.PrivateIPv4Address
+					expectedSubnets[subnetID] = s.PrivateIPv4Address
 				} else {
-					expectedSubnets[*s.Subnet.ID] = nil
+					expectedSubnets[subnetID] = nil
 				}
 			}
 
 			for _, s := range a.SubnetMappings {
-				eIP, ok := expectedSubnets[*s.Subnet.ID]
+				subnetID := fi.ValueOf(s.Subnet.ID)
+				if subnetID == "" {
+					return fmt.Errorf("Subnet ID is required for subnet name=%v", fi.ValueOf(s.Subnet.Name))
+				}
+
+				eIP, ok := expectedSubnets[subnetID]
 				if !ok {
 					return fmt.Errorf("network load balancers do not support detaching subnets")
 				}
@@ -471,10 +481,9 @@ func (_ *NetworkLoadBalancer) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *Ne
 
 	revision := e.revision
 
-	// TODO: Use maps.Clone when we are >= go1.21 on supported branches
-	tags := make(map[string]string)
-	for k, v := range e.Tags {
-		tags[k] = v
+	tags := maps.Clone(e.Tags)
+	if tags == nil {
+		tags = make(map[string]string)
 	}
 
 	// We removed revision for the diff/plan, but we want to set it
@@ -689,7 +698,7 @@ func (_ *NetworkLoadBalancer) RenderTerraform(t *terraform.TerraformTarget, a, e
 }
 
 func (e *NetworkLoadBalancer) TerraformName() string {
-	tfName := strings.Replace(fi.ValueOf(e.Name), ".", "-", -1)
+	tfName := strings.ReplaceAll(fi.ValueOf(e.Name), ".", "-")
 	return tfName
 }
 
@@ -765,13 +774,7 @@ type deleteNLB struct {
 	obj *awsup.LoadBalancerInfo
 }
 
-func buildDeleteNLB(obj *awsup.LoadBalancerInfo) *deleteNLB {
-	d := &deleteNLB{}
-	d.obj = obj
-	return d
-}
-
-var _ fi.CloudupDeletion = &deleteNLB{}
+var _ fi.CloudupDeletion = (*deleteNLB)(nil)
 
 func (d *deleteNLB) Delete(t fi.CloudupTarget) error {
 	ctx := context.TODO()

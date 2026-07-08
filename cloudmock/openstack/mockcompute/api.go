@@ -52,6 +52,7 @@ func CreateClient(networkClient *gophercloud.ServiceClient) *MockClient {
 	m.mockServers()
 	m.mockKeyPairs()
 	m.mockFlavors()
+	m.mockInstanceActions()
 	m.Server = httptest.NewServer(m.Mux)
 	m.networkClient = networkClient
 	return m

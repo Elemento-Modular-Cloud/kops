@@ -20,10 +20,12 @@ import (
 	"context"
 	"crypto/x509/pkix"
 	"fmt"
+	"net"
 	"os/user"
 	"sort"
 	"time"
 
+	"github.com/spf13/pflag"
 	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/pki"
@@ -42,22 +44,55 @@ type CreateKubecfgOptions struct {
 	// User is the user to use in the kubeconfig
 	User string
 
+	// OverrideAPIServer overrides the API endpoint to use in the kubeconfig
+	// This takes precedence over the Internal option (if set)
+	OverrideAPIServer string
+
 	// Internal is whether to use the internal API endpoint
 	Internal bool
 
 	// UseKopsAuthenticationPlugin controls whether we should use the kOps auth helper instead of a static credential
 	UseKopsAuthenticationPlugin bool
+
+	// UseKubeconfig controls whether to use the local kubeconfig instead of generating a new one.
+	// See issue https://github.com/kubernetes/kops/issues/17262
+	UseKubeconfig bool
+}
+
+// AddCommonFlags adds the common flags to the flagset
+// These are the flags that are used when building an internal connection to the cluster.
+// For the export command, we don't want to expose the use-kubeconfig flag, use AddFlagsForExport instead.
+func (o *CreateKubecfgOptions) AddCommonFlags(flagset *pflag.FlagSet) {
+	o.addCommonFlags(flagset, false)
+}
+
+// AddFlagsForExport adds the common flags to the flagset
+// This is used by the export command to avoid exposing the use-kubeconfig flag.
+func (o *CreateKubecfgOptions) AddFlagsForExport(flagset *pflag.FlagSet) {
+	o.addCommonFlags(flagset, true)
+}
+
+// addCommonFlags adds the flags to the flagset
+// These are the flags that are used when building an internal connection to the cluster.
+// If forExport is true, the flagset is used for the export command, and we don't want to expose the use-kubeconfig flag.
+func (o *CreateKubecfgOptions) addCommonFlags(flagset *pflag.FlagSet, forExport bool) {
+	flagset.StringVar(&o.OverrideAPIServer, "api-server", o.OverrideAPIServer, "Override the API server used when communicating with the cluster kube-apiserver")
+	if !forExport {
+		flagset.BoolVar(&o.UseKubeconfig, "use-kubeconfig", o.UseKubeconfig, "Use the server endpoint from the local kubeconfig instead of inferring from cluster name")
+	}
 }
 
 func BuildKubecfg(ctx context.Context, cluster *kops.Cluster, keyStore fi.KeystoreReader, secretStore fi.SecretStore, cloud fi.Cloud, options CreateKubecfgOptions, kopsStateStore string) (*KubeconfigBuilder, error) {
 	clusterName := cluster.ObjectMeta.Name
 
 	var server string
-	if options.Internal {
+	if options.OverrideAPIServer != "" {
+		server = options.OverrideAPIServer
+	} else if options.Internal {
 		server = "https://" + cluster.APIInternalName()
 	} else {
 		if cluster.Spec.API.PublicName != "" {
-			server = "https://" + cluster.Spec.API.PublicName
+			server = "https://" + wrapIPv6Address(cluster.Spec.API.PublicName)
 		} else {
 			server = "https://api." + clusterName
 		}
@@ -98,7 +133,7 @@ func BuildKubecfg(ctx context.Context, cluster *kops.Cluster, keyStore fi.Keysto
 				if len(targets) != 1 {
 					klog.Warningf("Found multiple API endpoints (%v), choosing arbitrarily", targets)
 				}
-				server = "https://" + targets[0]
+				server = "https://" + wrapIPv6Address(targets[0])
 			}
 		}
 	}
@@ -186,4 +221,15 @@ func BuildKubecfg(ctx context.Context, cluster *kops.Cluster, keyStore fi.Keysto
 	}
 
 	return b, nil
+}
+
+// wrapIPv6Address will wrap IPv6 addresses in square brackets,
+// for use in URLs; other endpoints are unchanged.
+func wrapIPv6Address(endpoint string) string {
+	ip := net.ParseIP(endpoint)
+	// IPv6 addresses are wrapped in square brackets in URLs
+	if ip != nil && ip.To4() == nil {
+		return "[" + endpoint + "]"
+	}
+	return endpoint
 }

@@ -17,12 +17,16 @@ limitations under the License.
 package nodetasks
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/backoff"
@@ -31,6 +35,11 @@ import (
 	"k8s.io/kops/upup/pkg/fi/utils"
 	"k8s.io/kops/util/pkg/hashing"
 )
+
+// errCtrImport tags failures returned by the ctr import command, so the
+// caller can skip DoGlobalBackoff — that backoff is meant to throttle
+// repeated downloads, not failures inside containerd.
+var errCtrImport = errors.New("ctr import failed")
 
 // LoadImageTask is responsible for downloading a docker image
 type LoadImageTask struct {
@@ -61,7 +70,7 @@ func (t *LoadImageTask) GetDependencies(tasks map[string]fi.NodeupTask) []fi.Nod
 	return deps
 }
 
-var _ fi.HasName = &LoadImageTask{}
+var _ fi.HasName = (*LoadImageTask)(nil)
 
 func (t *LoadImageTask) GetName() *string {
 	if t.Name == "" {
@@ -88,6 +97,8 @@ func (_ *LoadImageTask) CheckChanges(a, e, changes *LoadImageTask) error {
 }
 
 func (_ *LoadImageTask) RenderLocal(t *local.LocalTarget, a, e, changes *LoadImageTask) error {
+	// Not adding ctx to signature as RenderLocal seems to be part of a common interface
+	ctx := context.TODO()
 	hash, err := hashing.FromString(e.Hash)
 	if err != nil {
 		return err
@@ -95,63 +106,68 @@ func (_ *LoadImageTask) RenderLocal(t *local.LocalTarget, a, e, changes *LoadIma
 
 	urls := e.Sources
 	if len(urls) == 0 {
-		return fmt.Errorf("no sources specified: %v", err)
+		return fmt.Errorf("no sources specified")
 	}
 
-	// We assume the first url is the "main" url, and download to a local file based on that _name_, wherever we get it from
-	primaryURL := urls[0]
-	key := path.Base(primaryURL)
-	localFile := filepath.Join(t.CacheDir, hash.String()+"_"+utils.SanitizeString(key))
+	if !isContainerdReady() {
+		return fi.NewTryAgainLaterError("waiting for containerd to be ready")
+	}
 
 	for _, url := range urls {
-		_, err = fi.DownloadURL(url, localFile, hash)
-		if err != nil {
-			klog.Warningf("error downloading url %q: %v", url, err)
-			continue
-		} else {
-			break
+		err = importContainerImage(ctx, url, hash, t.CacheDir)
+		if err == nil {
+			return nil
+		}
+		klog.Warningf("error importing image from url %q: %v", url, err)
+		if errors.Is(err, errCtrImport) {
+			return err
 		}
 	}
-	if err != nil {
-		// Hack to try to avoid failed downloads causing massive bandwidth bills
-		backoff.DoGlobalBackoff(fmt.Errorf("failed to download image %s: %v", primaryURL, err))
+
+	// All sources failed at download. Throttle to avoid runaway bandwidth costs.
+	backoff.DoGlobalBackoff(err)
+	return err
+}
+
+func isContainerdReady() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "ctr", "version")
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return cmd.Run() == nil
+}
+
+func importContainerImage(ctx context.Context, url string, expectedHash *hashing.Hash, cacheDir string) error {
+	// Phase 1: fetch (or reuse cached) verified bytes. fi.DownloadURL writes via a
+	// temp-file + atomic rename and short-circuits if cacheFile already matches the hash,
+	// so a re-run of nodeup that already populated the cache skips the network round-trip.
+	cacheFile := filepath.Join(cacheDir, expectedHash.Hex()+"_"+utils.SanitizeString(path.Base(url)))
+	if _, err := fi.DownloadURL(ctx, url, cacheFile, expectedHash); err != nil {
 		return err
 	}
 
-	// containerd can't import gzipped container images, if the image is gzipped extract it to tmp dir
-	// TODO: Improve the naive gzip format detection by checking the content type bytes "\x1F\x8B\x08"
-	var tarFile string
-	if strings.HasSuffix(localFile, "gz") {
-		tmpDir, err := os.MkdirTemp("", "loadimage")
-		if err != nil {
-			return fmt.Errorf("error creating temp dir: %v", err)
-		}
-		defer func() {
-			if err := os.RemoveAll(tmpDir); err != nil {
-				klog.Warningf("error deleting temp dir %q: %v", tmpDir, err)
-			}
-		}()
-		tarFile = path.Join(tmpDir, utils.SanitizeString(primaryURL))
-		err = utils.UngzipFile(localFile, tarFile)
-		if err != nil {
-			return fmt.Errorf("error ungzipping container image: %v", err)
-		}
-	} else {
-		// Assume container image is tar file alerady
-		tarFile = localFile
+	// Phase 2: stream verified bytes (transparently gunzipped) to ctr.
+	file, err := os.Open(cacheFile)
+	if err != nil {
+		return fmt.Errorf("error opening verified image file: %v", err)
 	}
+	defer file.Close()
 
-	// Load the container image
-	var args []string
-	args = []string{"ctr", "--namespace", "k8s.io", "images", "import", tarFile}
+	reader, err := maybeGzipReader(file)
+	if err != nil {
+		return fmt.Errorf("error decoding image archive from %q: %v", url, err)
+	}
+	defer reader.Close()
+
+	args := []string{"ctr", "--namespace", "k8s.io", "images", "import", "-"}
 	human := strings.Join(args, " ")
 
 	klog.Infof("running command %s", human)
 	cmd := exec.Command(args[0], args[1:]...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("error loading docker image with '%s': %v: %s", human, err, string(output))
+	cmd.Stdin = reader
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%w: error loading docker image with '%s': %v: %s", errCtrImport, human, err, string(output))
 	}
-
 	return nil
 }

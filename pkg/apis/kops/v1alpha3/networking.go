@@ -152,7 +152,11 @@ type CalicoNetworkingSpec struct {
 	// AWSSrcDstCheck enables/disables ENI source/destination checks (AWS IPv4 only)
 	// Options: Disable (default for IPv4), Enable, or DoNothing
 	AWSSrcDstCheck string `json:"awsSrcDstCheck,omitempty"`
-	// BPFEnabled enables the eBPF dataplane mode.
+	// BPFEnabled enables the eBPF dataplane mode. When set to true, kube-proxy
+	// must be disabled (spec.kubeProxy.enabled=false); kops will default it
+	// at cluster creation. Calico's BPF mode replaces kube-proxy and from
+	// v3.31 binds the kube-proxy healthz port (10256), so running both
+	// produces a port conflict.
 	BPFEnabled bool `json:"bpfEnabled,omitempty"`
 	// BPFExternalServiceMode controls how traffic from outside the cluster to NodePorts and ClusterIPs is handled.
 	// In Tunnel mode, packet is tunneled from the ingress host to the host with the backing pod and back again.
@@ -206,6 +210,9 @@ type CalicoNetworkingSpec struct {
 	LogSeverityScreen string `json:"logSeverityScreen,omitempty"`
 	// MTU to be set in the cni-network-config for calico.
 	MTU *int32 `json:"mtu,omitempty"`
+	// NFTablesMode configures nftables support in Felix
+	// Options: Disabled, Enabled, Auto
+	NFTablesMode string `json:"nftablesMode,omitempty"`
 	// PrometheusMetricsEnabled can be set to enable the experimental Prometheus
 	// metrics server (default: false)
 	PrometheusMetricsEnabled bool `json:"prometheusMetricsEnabled,omitempty"`
@@ -232,7 +239,7 @@ type CalicoNetworkingSpec struct {
 	VXLANMode string `json:"vxlanMode,omitempty"`
 	// WireguardEnabled enables WireGuard encryption for all on-the-wire pod-to-pod traffic
 	// (default: false)
-	WireguardEnabled bool `json:"wireguardEnabled,omitempty"`
+	WireguardEnabled *bool `json:"wireguardEnabled,omitempty"`
 }
 
 // CanalNetworkingSpec declares that we want Canal networking
@@ -345,6 +352,9 @@ type CiliumNetworkingSpec struct {
 	// EnableEndpointHealthChecking enables connectivity health checking between virtual endpoints.
 	// Default: true
 	EnableEndpointHealthChecking *bool `json:"enableEndpointHealthChecking,omitempty"`
+	// EnableHostFirewall enables the host firewall in the Cilium agent.
+	// Default: false
+	EnableHostFirewall *bool `json:"enableHostFirewall,omitempty"`
 	// EnablePrometheusMetrics enables the Cilium "/metrics" endpoint for both the agent and the operator.
 	EnablePrometheusMetrics bool `json:"enablePrometheusMetrics,omitempty"`
 	// EnableEncryption enables Cilium Encryption.
@@ -401,6 +411,9 @@ type CiliumNetworkingSpec struct {
 	// BPFLBMapMax is the maximum number of entries in bpf lb service, backend and affinity maps.
 	// Default: 65536
 	BPFLBMapMax int `json:"bpfLBMapMax,omitempty"`
+	// BPFLBSock enables socket-based LB for E/W traffic.
+	// Default: false
+	BPFLBSock bool `json:"bpfLBSock,omitempty"`
 	// BPFLBSockHostNSOnly enables skipping socket LB for services when inside a pod namespace,
 	// in favor of service LB at the pod interface. Socket LB is still used when in the host namespace.
 	// Required by service mesh (e.g., Istio, Linkerd).
@@ -459,6 +472,9 @@ type CiliumNetworkingSpec struct {
 	// EnableUnreachableRoutes enables unreachable routes on pod deletion.
 	// Default: false
 	EnableUnreachableRoutes *bool `json:"enableUnreachableRoutes,omitempty"`
+	// CniExclusive configures whether to remove other CNI configuration files.
+	// Default: true
+	CniExclusive *bool `json:"cniExclusive,omitempty"`
 	// Hubble configures the Hubble service on the Cilium agent.
 	Hubble *HubbleSpec `json:"hubble,omitempty"`
 
@@ -470,6 +486,13 @@ type CiliumNetworkingSpec struct {
 
 	// Ingress specifies the configuration for Cilium Ingress settings.
 	Ingress *CiliumIngressSpec `json:"ingress,omitempty"`
+
+	// GatewayAPI specifies the configuration for Cilium Gateway API settings.
+	GatewayAPI *CiliumGatewayAPISpec `json:"gatewayAPI,omitempty"`
+
+	// ExtraConfig is appended to the cilium-config ConfigMap. Keys here override any value
+	// rendered by kops. All values must be strings (e.g. "true", not true).
+	ExtraConfig map[string]string `json:"extraConfig,omitempty"`
 }
 
 // CiliumIngressSpec configures Cilium Ingress settings.
@@ -497,6 +520,16 @@ type CiliumIngressSpec struct {
 	// SharedLoadBalancerServiceName specifies the name of the shared load balancer service.
 	// Default: cilium-ingress
 	SharedLoadBalancerServiceName string `json:"sharedLoadBalancerServiceName,omitempty"`
+}
+
+// CiliumGatewayAPISpec configures Cilium Gateway API settings.
+type CiliumGatewayAPISpec struct {
+	// Enabled specifies whether Cilium Gateway API is enabled.
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// EnableSecretsSync specifies whether synchronization of secrets is enabled.
+	// Default: true
+	EnableSecretsSync *bool `json:"enableSecretsSync,omitempty"`
 }
 
 // HubbleSpec configures the Hubble service on the Cilium agent.

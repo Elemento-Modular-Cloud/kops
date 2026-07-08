@@ -1,48 +1,53 @@
 kind: Addons
 metadata:
-  creationTimestamp: null
   name: bootstrap
 spec:
   addons:
   - id: k8s-1.16
     manifest: kops-controller.addons.k8s.io/k8s-1.16.yaml
-    manifestHash: 1d89d986e7ab217bf0a4eedae4a75c90f5446935402e9c25b8ced38a25cf9e8e
+    manifestHash: bc6d3ec51739764572058d2ed42a1dfe3c1393b1ea1512265cba75c2fee9e9aa
     name: kops-controller.addons.k8s.io
     needsRollingUpdate: control-plane
     selector:
       k8s-addon: kops-controller.addons.k8s.io
-    version: 9.99.0
   - id: k8s-1.12
     manifest: coredns.addons.k8s.io/k8s-1.12.yaml
-    manifestHash: e3edf4d59baa037a5b2ffd48548c83d426a7e62380f4efc037402ebfb4b7c3c3
+    manifestHash: 7819d987608538d7bbe34153867a847a0b7e8529d64f7b064aa5ee97f487fb83
     name: coredns.addons.k8s.io
     selector:
       k8s-addon: coredns.addons.k8s.io
-    version: 9.99.0
   - id: k8s-1.9
     manifest: kubelet-api.rbac.addons.k8s.io/k8s-1.9.yaml
-    manifestHash: 01c120e887bd98d82ef57983ad58a0b22bc85efb48108092a24c4b82e4c9ea81
+    manifestHash: da91eb5cf9a29f1b03510007d6d54603aef2fc23a305abc9ba496c510dfd3bc7
     name: kubelet-api.rbac.addons.k8s.io
     selector:
       k8s-addon: kubelet-api.rbac.addons.k8s.io
-    version: 9.99.0
   - manifest: limit-range.addons.k8s.io/v1.5.0.yaml
-    manifestHash: 2d55c3bc5e354e84a3730a65b42f39aba630a59dc8d32b30859fcce3d3178bc2
+    manifestHash: 686cc69e559a1c6f5e8b94e38de54a575a25c432ed5ceec565244b965fb5f07f
     name: limit-range.addons.k8s.io
     selector:
       k8s-addon: limit-range.addons.k8s.io
-    version: 9.99.0
+  - id: k8s-1.15
+    manifest: cluster-autoscaler.addons.k8s.io/k8s-1.15.yaml
+    manifestHash: 43f620a4cd2eb6ebb7c87b3def7c6988cb6dc45d13e90a4ff3c3aa595a64cd4e
+    name: cluster-autoscaler.addons.k8s.io
+    selector:
+      k8s-addon: cluster-autoscaler.addons.k8s.io
+  - id: k8s-1.22
+    manifest: hcloud-config.addons.k8s.io/k8s-1.22.yaml
+    manifestHash: 52209e0e000e180a4d452fffb6f12b76515a73ad1fc6a89696481dfd4faa738d
+    name: hcloud-config.addons.k8s.io
+    selector:
+      k8s-addon: hcloud-config.addons.k8s.io
   - id: k8s-1.22
     manifest: hcloud-cloud-controller.addons.k8s.io/k8s-1.22.yaml
-    manifestHash: 734a1bfdeb92881a6fee5079b13805bb25a519ab7dc2b13f8b192c9107b1faa4
+    manifestHash: df56e8c18f23d0d883691039a2dc6527e4b76a44ee447df8acef28d0528d3bc3
     name: hcloud-cloud-controller.addons.k8s.io
     selector:
       k8s-addon: hcloud-cloud-controller.addons.k8s.io
-    version: 9.99.0
   - id: k8s-1.22
     manifest: hcloud-csi-driver.addons.k8s.io/k8s-1.22.yaml
-    manifestHash: 17957f9bc33c605a2dca8ce3ff59844023fc8079bb1a4f08025eb5e18d0c2968
+    manifestHash: 5240b97318ace0273069ffab923bd157c43638ee845311421736dd2d269f182b
     name: hcloud-csi-driver.addons.k8s.io
     selector:
       k8s-addon: hcloud-csi-driver.addons.k8s.io
-    version: 9.99.0

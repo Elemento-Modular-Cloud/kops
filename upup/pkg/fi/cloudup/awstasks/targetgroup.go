@@ -64,9 +64,11 @@ type TargetGroup struct {
 
 	Attributes map[string]string
 
-	Interval           *int32
-	HealthyThreshold   *int32
-	UnhealthyThreshold *int32
+	Interval            *int32
+	HealthyThreshold    *int32
+	UnhealthyThreshold  *int32
+	HealthCheckProtocol elbv2types.ProtocolEnum
+	HealthCheckPath     *string
 
 	info     *awsup.TargetGroupInfo
 	revision string
@@ -81,7 +83,7 @@ func (e *TargetGroup) CreateNewRevisionsWith(nlb *NetworkLoadBalancer) {
 	e.networkLoadBalancer = nlb
 }
 
-var _ fi.CloudupHasDependencies = &TargetGroup{}
+var _ fi.CloudupHasDependencies = (*TargetGroup)(nil)
 
 // GetDependencies returns the dependencies of the TargetGroup task
 // We need to do this because we hide the networkLoadBalancer field
@@ -92,7 +94,7 @@ func (e *TargetGroup) GetDependencies(tasks map[string]fi.CloudupTask) []fi.Clou
 	return deps
 }
 
-var _ fi.CompareWithID = &TargetGroup{}
+var _ fi.CompareWithID = (*TargetGroup)(nil)
 
 func (e *TargetGroup) CompareWithID() *string {
 	if e.ARN != nil {
@@ -124,7 +126,7 @@ func (e *TargetGroup) findLatestTargetGroupByName(ctx context.Context, cloud aws
 		} else {
 			n, err := strconv.Atoi(revisionTag)
 			if err != nil {
-				klog.Warningf("ignoring target group %q with revision %q", targetGroup.ARN, revision)
+				klog.Warningf("ignoring target group %q with revision %d", targetGroup.ARN, revision)
 				continue
 			}
 			revision = n
@@ -237,14 +239,16 @@ func (e *TargetGroup) Find(c *fi.CloudupContext) (*TargetGroup, error) {
 	tg := targetGroupInfo.TargetGroup
 
 	actual := &TargetGroup{
-		Name:               tg.TargetGroupName,
-		Port:               tg.Port,
-		Protocol:           tg.Protocol,
-		ARN:                tg.TargetGroupArn,
-		Interval:           tg.HealthCheckIntervalSeconds,
-		HealthyThreshold:   tg.HealthyThresholdCount,
-		UnhealthyThreshold: tg.UnhealthyThresholdCount,
-		VPC:                &VPC{ID: tg.VpcId},
+		Name:                tg.TargetGroupName,
+		Port:                tg.Port,
+		Protocol:            tg.Protocol,
+		ARN:                 tg.TargetGroupArn,
+		Interval:            tg.HealthCheckIntervalSeconds,
+		HealthyThreshold:    tg.HealthyThresholdCount,
+		UnhealthyThreshold:  tg.UnhealthyThresholdCount,
+		HealthCheckProtocol: tg.HealthCheckProtocol,
+		HealthCheckPath:     tg.HealthCheckPath,
+		VPC:                 &VPC{ID: tg.VpcId},
 	}
 	actual.info = targetGroupInfo
 	e.info = targetGroupInfo
@@ -361,6 +365,8 @@ func (_ *TargetGroup) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *TargetGrou
 			HealthCheckIntervalSeconds: e.Interval,
 			HealthyThresholdCount:      e.HealthyThreshold,
 			UnhealthyThresholdCount:    e.UnhealthyThreshold,
+			HealthCheckProtocol:        e.HealthCheckProtocol,
+			HealthCheckPath:            e.HealthCheckPath,
 			Tags:                       awsup.ELBv2Tags(tags),
 		}
 
@@ -385,6 +391,26 @@ func (_ *TargetGroup) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *TargetGrou
 			}
 			if err := ModifyTargetGroupAttributes(ctx, t.Cloud, a.ARN, e.Attributes); err != nil {
 				return err
+			}
+			// Health check settings are only applied on create, so reconcile them here for an existing target group.
+			if changes.HealthCheckProtocol != "" || changes.HealthCheckPath != nil ||
+				changes.HealthyThreshold != nil || changes.UnhealthyThreshold != nil {
+				klog.V(2).Infof("Modifying Target Group health check for NLB")
+				proto := e.HealthCheckProtocol
+				request := &elbv2.ModifyTargetGroupInput{
+					TargetGroupArn:          a.ARN,
+					HealthCheckProtocol:     proto,
+					HealthyThresholdCount:   e.HealthyThreshold,
+					UnhealthyThresholdCount: e.UnhealthyThreshold,
+				}
+				// HTTP/HTTPS health checks need a path and matcher, 200-399 matches the NLB create default.
+				if proto == elbv2types.ProtocolEnumHttp || proto == elbv2types.ProtocolEnumHttps {
+					request.HealthCheckPath = e.HealthCheckPath
+					request.Matcher = &elbv2types.Matcher{HttpCode: fi.PtrTo("200-399")}
+				}
+				if _, err := t.Cloud.ELBV2().ModifyTargetGroup(ctx, request); err != nil {
+					return fmt.Errorf("modifying NLB target group health check: %w", err)
+				}
 			}
 		}
 	}
@@ -434,6 +460,7 @@ type terraformTargetGroupHealthCheck struct {
 	HealthyThreshold   int32                   `cty:"healthy_threshold"`
 	UnhealthyThreshold int32                   `cty:"unhealthy_threshold"`
 	Protocol           elbv2types.ProtocolEnum `cty:"protocol"`
+	Path               *string                 `cty:"path"`
 }
 
 func (_ *TargetGroup) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *TargetGroup) error {
@@ -456,7 +483,8 @@ func (_ *TargetGroup) RenderTerraform(t *terraform.TerraformTarget, a, e, change
 			Interval:           *e.Interval,
 			HealthyThreshold:   *e.HealthyThreshold,
 			UnhealthyThreshold: *e.UnhealthyThreshold,
-			Protocol:           elbv2types.ProtocolEnumTcp,
+			Protocol:           e.HealthCheckProtocol,
+			Path:               e.HealthCheckPath,
 		},
 	}
 
@@ -484,7 +512,7 @@ func (e *TargetGroup) TerraformLink() *terraformWriter.Literal {
 	return terraformWriter.LiteralProperty("aws_lb_target_group", *e.Name, "id")
 }
 
-var _ fi.CloudupProducesDeletions = &TargetGroup{}
+var _ fi.CloudupProducesDeletions = (*TargetGroup)(nil)
 
 // FindDeletions is responsible for finding launch templates which can be deleted
 func (e *TargetGroup) FindDeletions(c *fi.CloudupContext) ([]fi.CloudupDeletion, error) {
@@ -505,7 +533,7 @@ func buildDeleteTargetGroup(obj *awsup.TargetGroupInfo) *deleteTargetGroup {
 	return d
 }
 
-var _ fi.CloudupDeletion = &deleteTargetGroup{}
+var _ fi.CloudupDeletion = (*deleteTargetGroup)(nil)
 
 func (d *deleteTargetGroup) Delete(t fi.CloudupTarget) error {
 	ctx := context.TODO()

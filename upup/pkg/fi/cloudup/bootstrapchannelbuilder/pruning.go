@@ -30,28 +30,13 @@ import (
 	"k8s.io/kops/pkg/model/components/addonmanifests"
 )
 
-func (b *BootstrapChannelBuilder) addPruneDirectives(addons *AddonList) error {
-	for _, addon := range addons.Items {
-		if !addon.BuildPrune {
-			continue
-		}
-
-		id := *addon.Spec.Name
-
-		if err := b.addPruneDirectivesForAddon(addon); err != nil {
-			return fmt.Errorf("failed to configure pruning for %s: %w", id, err)
-		}
-	}
-	return nil
-}
-
-func (b *BootstrapChannelBuilder) addPruneDirectivesForAddon(addon *Addon) error {
-	addon.Spec.Prune = &channelsapi.PruneSpec{}
+func buildPruneDirectives(spec *channelsapi.AddonSpec, manifestData []byte) error {
+	spec.Prune = &channelsapi.PruneSpec{}
 
 	// We add these labels to all objects we manage, so we reuse them for pruning.
 	selectorMap := map[string]string{
 		"app.kubernetes.io/managed-by":   "kops",
-		addonmanifests.KopsAddonLabelKey: *addon.Spec.Name,
+		addonmanifests.KopsAddonLabelKey: *spec.Name,
 	}
 	selector, err := labels.ValidatedSelectorFromSet(selectorMap)
 	if err != nil {
@@ -75,6 +60,12 @@ func (b *BootstrapChannelBuilder) addPruneDirectivesForAddon(addon *Addon) error
 		{Group: "rbac.authorization.k8s.io", Kind: "RoleBinding"},
 		{Group: "policy", Kind: "PodDisruptionBudget"},
 	}
+	if *spec.Name == "karpenter.sh" {
+		alwaysPruneGroupKinds = append(alwaysPruneGroupKinds,
+			schema.GroupKind{Group: "karpenter.k8s.aws", Kind: "EC2NodeClass"},
+			schema.GroupKind{Group: "karpenter.sh", Kind: "NodePool"},
+		)
+	}
 	pruneGroupKind := make(map[schema.GroupKind]bool)
 	for _, gk := range alwaysPruneGroupKinds {
 		pruneGroupKind[gk] = true
@@ -91,7 +82,7 @@ func (b *BootstrapChannelBuilder) addPruneDirectivesForAddon(addon *Addon) error
 	}
 
 	// Parse the manifest; we use this to scope pruning to namespaces
-	objects, err := kubemanifest.LoadObjectsFrom(addon.ManifestData)
+	objects, err := kubemanifest.LoadObjectsFrom(manifestData)
 	if err != nil {
 		return fmt.Errorf("failed to parse manifest: %w", err)
 	}
@@ -147,7 +138,7 @@ func (b *BootstrapChannelBuilder) addPruneDirectivesForAddon(addon *Addon) error
 
 		pruneSpec.LabelSelector = selector.String()
 
-		addon.Spec.Prune.Kinds = append(addon.Spec.Prune.Kinds, pruneSpec)
+		spec.Prune.Kinds = append(spec.Prune.Kinds, pruneSpec)
 	}
 
 	return nil

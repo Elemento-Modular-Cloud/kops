@@ -237,6 +237,37 @@ type terraformMemFSFile struct {
 }
 
 func (p *MemFSPath) RenderTerraform(w *terraformWriter.TerraformWriter, name string, data io.Reader, acl ACL) error {
+	if w.Providers != nil && w.Providers["azurerm"] != nil {
+		return p.renderTerraformAzure(w, name, data)
+	}
+	return p.renderTerraformS3(w, name, data, acl)
+}
+
+func (p *MemFSPath) renderTerraformAzure(w *terraformWriter.TerraformWriter, name string, data io.Reader) error {
+	bytes, err := io.ReadAll(data)
+	if err != nil {
+		return fmt.Errorf("reading data: %v", err)
+	}
+
+	source, err := w.AddFilePath("azurerm_storage_blob", name, "source", bytes, false)
+	if err != nil {
+		return fmt.Errorf("rendering Azure Blob file: %w", err)
+	}
+
+	// memfs:// paths don't encode an Azure account or container, so this
+	// fallback (only used in integration tests) hard-codes test placeholders.
+	tf := &terraformAzureBlobFile{
+		Name:                 p.location,
+		StorageAccountName:   "teststorage",
+		StorageContainerName: "testcontainer",
+		Type:                 "Block",
+		Source:               source,
+		Provider:             terraformWriter.LiteralTokens("azurerm", "files"),
+	}
+	return w.RenderResource("azurerm_storage_blob", name, tf)
+}
+
+func (p *MemFSPath) renderTerraformS3(w *terraformWriter.TerraformWriter, name string, data io.Reader, acl ACL) error {
 	bytes, err := io.ReadAll(data)
 	if err != nil {
 		return fmt.Errorf("reading data: %v", err)

@@ -19,13 +19,12 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
@@ -36,7 +35,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
-	"k8s.io/kops/pkg/apis/kops/util"
 	"k8s.io/kops/pkg/commands/commandutils"
 	"k8s.io/kops/pkg/dump"
 	"k8s.io/kops/pkg/resources"
@@ -65,11 +63,12 @@ type ToolboxDumpOptions struct {
 
 	ClusterName string
 
-	Dir          string
-	PrivateKey   string
-	SSHUser      string
-	MaxNodes     int
-	K8sResources bool
+	Dir             string
+	PrivateKey      string
+	SSHUser         string
+	MaxNodes        int
+	NodeDumpTimeout time.Duration
+	K8sResources    bool
 
 	// CloudResources controls whether we dump the cloud resources
 	CloudResources bool
@@ -80,6 +79,7 @@ func (o *ToolboxDumpOptions) InitDefaults() {
 	o.PrivateKey = "~/.ssh/id_rsa"
 	o.SSHUser = "ubuntu"
 	o.MaxNodes = 500
+	o.NodeDumpTimeout = time.Minute
 	o.K8sResources = k8sResources != ""
 	o.CloudResources = true
 }
@@ -110,6 +110,7 @@ func NewCmdToolboxDump(f commandutils.Factory, out io.Writer) *cobra.Command {
 	cmd.Flags().BoolVar(&options.K8sResources, "k8s-resources", options.K8sResources, "Include k8s resources in the dump")
 	cmd.Flags().BoolVar(&options.CloudResources, "cloud-resources", options.CloudResources, "Include cloud resources in the dump")
 	cmd.Flags().IntVar(&options.MaxNodes, "max-nodes", options.MaxNodes, "The maximum number of nodes from which to dump logs")
+	cmd.Flags().DurationVar(&options.NodeDumpTimeout, "node-dump-timeout", options.NodeDumpTimeout, "Timeout for connecting to and dumping logs from a single node")
 	cmd.Flags().StringVar(&options.PrivateKey, "private-key", options.PrivateKey, "File containing private key to use for SSH access to instances")
 	cmd.Flags().StringVar(&options.SSHUser, "ssh-user", options.SSHUser, "The remote user for SSH access to instances")
 	cmd.RegisterFlagCompletionFunc("ssh-user", cobra.NoFileCompletions)
@@ -195,18 +196,13 @@ func RunToolboxDump(ctx context.Context, f commandutils.Factory, out io.Writer, 
 			}
 		}
 
-		err = truncateNodeList(&nodes, options.MaxNodes)
-		if err != nil {
-			klog.Warningf("not limiting number of nodes dumped: %v", err)
-		}
-
 		sshConfig := &ssh.ClientConfig{
 			Config: ssh.Config{},
 			User:   options.SSHUser,
 			Auth: []ssh.AuthMethod{
 				ssh.PublicKeys(signer),
 			},
-			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+			HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // toolbox dump connects to cluster nodes without managed host keys.
 		}
 
 		klog.Infof("will SSH using username %q", sshConfig.User)
@@ -239,24 +235,19 @@ func RunToolboxDump(ctx context.Context, f commandutils.Factory, out io.Writer, 
 					}
 				}
 			}
-		}
-		dumper := dump.NewLogDumper(bastionAddress, sshConfig, keyRing, options.Dir)
-
-		var additionalIPs []string
-		var additionalPrivateIPs []string
-		if cloudResources != nil {
-			for _, instance := range cloudResources.Instances {
-				if len(instance.PublicAddresses) != 0 {
-					additionalIPs = append(additionalIPs, instance.PublicAddresses[0])
-				} else if len(instance.PrivateAddresses) != 0 {
-					additionalPrivateIPs = append(additionalPrivateIPs, instance.PrivateAddresses[0])
-				} else {
-					klog.Warningf("no IP for instance %q", instance.Name)
+			// If we don't have a bastion, use a control plane instance that has public IPs
+			if bastionAddress == "" {
+				for _, instance := range cloudResources.Instances {
+					if strings.Contains(instance.Name, "control-plane") && len(instance.PublicAddresses) > 0 {
+						bastionAddress = instance.PublicAddresses[0]
+					}
 				}
 			}
 		}
 
-		if err := dumper.DumpAllNodes(ctx, nodes, options.MaxNodes, additionalIPs, additionalPrivateIPs); err != nil {
+		dumper := dump.NewLogDumper(bastionAddress, sshConfig, keyRing, options.Dir, options.NodeDumpTimeout)
+
+		if err := dumper.DumpAllNodes(ctx, nodes, options.MaxNodes, cloudResources); err != nil {
 			klog.Warningf("error dumping nodes: %v", err)
 		}
 
@@ -306,23 +297,6 @@ func RunToolboxDump(ctx context.Context, f commandutils.Factory, out io.Writer, 
 		default:
 			return fmt.Errorf("unsupported output format: %q", options.Output)
 		}
-	}
-	return nil
-}
-
-func truncateNodeList(nodes *corev1.NodeList, max int) error {
-	if max < 0 {
-		return errors.New("--max-nodes must be greater than zero")
-	}
-	// Move control plane nodes to the start of the list and truncate the remainder
-	slices.SortFunc[[]corev1.Node](nodes.Items, func(a corev1.Node, e corev1.Node) int {
-		if role := util.GetNodeRole(&a); role == "control-plane" || role == "apiserver" {
-			return -1
-		}
-		return 1
-	})
-	if len(nodes.Items) > max {
-		nodes.Items = nodes.Items[:max]
 	}
 	return nil
 }

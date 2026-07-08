@@ -62,20 +62,20 @@ func (b *VMScaleSetModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		}
 		c.AddTask(vmss)
 
-		if ig.IsControlPlane() || b.Cluster.UsesLegacyGossip() {
+		if ig.IsControlPlane() {
 			// Create tasks for assigning built-in roles to VM Scale Sets.
 			// See https://docs.microsoft.com/en-us/azure/role-based-access-control/built-in-roles
 			resourceGroupID := fmt.Sprintf("/subscriptions/%s/resourceGroups/%s",
 				b.Cluster.Spec.CloudProvider.Azure.SubscriptionID,
-				b.Cluster.Spec.CloudProvider.Azure.ResourceGroupName,
+				b.Cluster.AzureResourceGroupName(),
 			)
 			c.AddTask(&azuretasks.RoleAssignment{
-				Name:       to.Ptr(fmt.Sprintf("%s-%s", *vmss.Name, "owner")),
+				Name:       to.Ptr(fmt.Sprintf("%s-%s", *vmss.Name, "contributor")),
 				Lifecycle:  b.Lifecycle,
 				Scope:      to.Ptr(resourceGroupID),
 				VMScaleSet: vmss,
-				// Owner
-				RoleDefID: to.Ptr("8e3af657-a8ff-443c-a75c-2fe8c4bcb635"),
+				// Contributor
+				RoleDefID: to.Ptr("b24988ac-6180-42a0-ab88-20f7382dd24c"),
 			})
 			c.AddTask(&azuretasks.RoleAssignment{
 				Name:       to.Ptr(fmt.Sprintf("%s-%s", *vmss.Name, "blob")),
@@ -170,7 +170,7 @@ func (b *VMScaleSetModelBuilder) buildVMScaleSetTask(
 		return nil, fmt.Errorf("unexpected subnet type: for InstanceGroup %q; type was %s", ig.Name, subnet.Type)
 	}
 
-	if ig.Spec.Role == kops.InstanceGroupRoleControlPlane && b.Cluster.Spec.API.LoadBalancer != nil {
+	if ig.Spec.Role.HasControlPlane() && b.Cluster.Spec.API.LoadBalancer != nil {
 		t.LoadBalancer = &azuretasks.LoadBalancer{
 			Name: to.Ptr(b.NameForLoadBalancer()),
 		}
@@ -187,12 +187,12 @@ func getCapacity(spec *kops.InstanceGroupSpec) (*int64, error) {
 	maxSize := int32(1)
 	if spec.MinSize != nil {
 		minSize = fi.ValueOf(spec.MinSize)
-	} else if spec.Role == kops.InstanceGroupRoleNode {
+	} else if spec.Role.HasNode() {
 		minSize = 2
 	}
 	if spec.MaxSize != nil {
 		maxSize = *spec.MaxSize
-	} else if spec.Role == kops.InstanceGroupRoleNode {
+	} else if spec.Role.HasNode() {
 		maxSize = 2
 	}
 	if minSize != maxSize {

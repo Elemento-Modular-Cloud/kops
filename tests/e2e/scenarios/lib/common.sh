@@ -37,15 +37,8 @@ fi
 
 export KOPS_BASE_URL
 export KOPS
-export CHANNELS
 
 export KOPS_RUN_TOO_NEW_VERSION=1
-
-if [[ -z "${DISCOVERY_STORE-}" ]]; then
-    DISCOVERY_STORE="${KOPS_STATE_STORE-}"
-fi
-
-export GO111MODULE=on
 
 if [[ -z "${AWS_SSH_PRIVATE_KEY_FILE-}" ]]; then
     export AWS_SSH_PRIVATE_KEY_FILE="${HOME}/.ssh/id_rsa"
@@ -55,16 +48,33 @@ if [[ -z "${AWS_SSH_PUBLIC_KEY_FILE-}" ]]; then
 fi
 
 KUBETEST2="kubetest2 kops -v=2 --cloud-provider=${CLOUD_PROVIDER} --cluster-name=${CLUSTER_NAME:-} --kops-root=${REPO_ROOT}"
-KUBETEST2="${KUBETEST2} --admin-access=${ADMIN_ACCESS:-}"
-
+if [[ -n "${ADMIN_ACCESS-}" ]]; then
+  KUBETEST2="${KUBETEST2} --admin-access=${ADMIN_ACCESS}"
+fi
 if [[ -n "${GCP_PROJECT-}" ]]; then
   KUBETEST2="${KUBETEST2} --gcp-project=${GCP_PROJECT}"
 fi
 
 # Always tear-down the cluster when we're done
 function kops-finish {
+    # The env file persists the kops binary used for --up. After an A->B upgrade
+    # that is the older binary, so keep the one the test last selected.
+    local down_kops="${KOPS-}"
+    # If we failed to start the cluster, we might not have sourced KOPS_STATE_STORE, so try to source it if we have an env file
+    if [[ -z "${ENV_FILE-}" ]]; then
+        ENV_FILE="${WORKSPACE}/env"
+    fi
+    if [[ -f "${ENV_FILE}" ]]; then
+        # shellcheck disable=SC1090
+        . "${ENV_FILE}"
+        export KOPS_STATE_STORE
+    fi
+    if [[ -n "${down_kops}" ]]; then
+        KOPS="${down_kops}"
+    fi
+
     # shellcheck disable=SC2153
-    ${KUBETEST2} --kops-binary-path="${KOPS}" --down || echo "kubetest2 down failed"
+    ${KUBETEST2} --kops-binary-path="${KOPS-}" --down || echo "kubetest2 down failed"
 }
 trap kops-finish EXIT
 
@@ -86,14 +96,6 @@ function kops-download-from-base() {
     echo "${kops}"
 }
 
-function kops-channels-download-from-base() {
-    local channels
-    channels=$(mktemp -t channels.XXXXXXXXX)
-    wget -qO "${channels}" "$KOPS_BASE_URL/$(go env GOOS)/$(go env GOARCH)/channels"
-    chmod +x "${channels}"
-    echo "${channels}"
-}
-
 function kops-base-from-marker() {
     if [[ "${1}" =~ ^https: ]]; then
         curl -fs "${1}"
@@ -109,14 +111,12 @@ function kops-acquire-latest() {
     if [[ "${JOB_TYPE-}" == "periodic" ]]; then
         KOPS_BASE_URL="$(curl -fs https://storage.googleapis.com/k8s-staging-kops/kops/releases/markers/master/latest-ci-updown-green.txt)"
         KOPS=$(kops-download-from-base)
-        CHANNELS=$(kops-channels-download-from-base)
     else
          if [[ -n "${KOPS_BASE_URL-}" ]]; then
             KOPS_BASE_URL=""
          fi
          $KUBETEST2 --build
          KOPS="${REPO_ROOT}/.build/dist/linux/amd64/kops"
-         CHANNELS="${REPO_ROOT}/.build/dist/linux/amd64/channels"
          KOPS_BASE_URL=$(cat "${REPO_ROOT}/.kubetest2/kops-base-url")
          export KOPS_BASE_URL
          echo "KOPS_BASE_URL=$KOPS_BASE_URL"
@@ -133,21 +133,30 @@ function kops-up() {
         K8S_VERSION="$(curl -fs -L https://dl.k8s.io/release/stable.txt)"
     fi
 
-    if [[ ${KOPS_IRSA-} = true ]]; then
-        create_args="${create_args} --discovery-store=${DISCOVERY_STORE}/${CLUSTER_NAME}/discovery"
-    fi
-
     # TODO: Switch scripts to use KOPS_CONTROL_PLANE_COUNT
     if [[ -n "${KOPS_CONTROL_PLANE_SIZE:-}" ]]; then
       echo "Recognized (deprecated) KOPS_CONTROL_PLANE_SIZE=${KOPS_CONTROL_PLANE_SIZE}, please set KOPS_CONTROL_PLANE_COUNT instead"
       KOPS_CONTROL_PLANE_COUNT=${KOPS_CONTROL_PLANE_SIZE}
     fi
 
+    if [[ -z "${ENV_FILE-}" ]]; then
+        ENV_FILE="${WORKSPACE}/env"
+    fi
+
     ${KUBETEST2} \
         --up \
+        --env-file="${ENV_FILE}" \
         --kops-binary-path="${KOPS}" \
         --kubernetes-version="${K8S_VERSION}" \
         --create-args="${create_args}" \
         --control-plane-count="${KOPS_CONTROL_PLANE_COUNT:-1}" \
         --template-path="${KOPS_TEMPLATE-}"
+
+    # Source the env file to get exported variables, in particular KOPS_STATE_STORE
+    . "${ENV_FILE}"
+    export KOPS_STATE_STORE
+    if [[ -n "${GCP_PROJECT:-}" ]]; then
+        export GCP_PROJECT
+        gcloud config set project "${GCP_PROJECT}"
+    fi
 }

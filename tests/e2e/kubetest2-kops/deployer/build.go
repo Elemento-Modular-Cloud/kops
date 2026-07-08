@@ -47,6 +47,8 @@ func (d *deployer) Build() error {
 	if results.KopsBaseURL != "" {
 		klog.Infof("setting kops base url to %q from build results", results.KopsBaseURL)
 		d.KopsBaseURL = results.KopsBaseURL
+		// In PreTestCmd, we need KOPS_BASE_URL to be set for kops calls
+		os.Setenv("KOPS_BASE_URL", d.KopsBaseURL)
 	}
 
 	if results.KubernetesBaseURL != "" {
@@ -115,7 +117,7 @@ func (d *deployer) verifyBuildFlags() error {
 	} else if d.boskos != nil {
 		d.StageLocation = d.stagingStore()
 		klog.Infof("creating staging bucket %s to hold kops/kubernetes build artifacts", d.StageLocation)
-		if err := gce.EnsureGCSBucket(d.StageLocation, d.GCPProject, true); err != nil {
+		if err := gce.EnsureGCSBucket(d.StageLocation, d.region, d.GCPProject, true); err != nil {
 			return err
 		}
 	} else {
@@ -125,7 +127,7 @@ func (d *deployer) verifyBuildFlags() error {
 		}
 		d.StageLocation = stageLocation
 	}
-	if d.KopsBaseURL == "" && os.Getenv("KOPS_BASE_URL") == "" {
+	if !d.BuildOptions.BuildKubernetes && d.KopsBaseURL == "" && os.Getenv("KOPS_BASE_URL") == "" {
 		d.KopsBaseURL = strings.Replace(d.StageLocation, "gs://", "https://storage.googleapis.com/", 1)
 	}
 

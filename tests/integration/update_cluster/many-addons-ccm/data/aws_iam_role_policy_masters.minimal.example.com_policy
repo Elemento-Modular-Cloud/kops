@@ -100,8 +100,55 @@
         "StringEquals": {
           "aws:RequestTag/KubernetesCluster": "minimal.example.com",
           "ec2:CreateAction": [
-            "CreateVolume",
             "CreateSnapshot"
+          ]
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws-test:ec2:*:*:snapshot/*",
+        "arn:aws-test:ec2:*:*:volume/*"
+      ]
+    },
+    {
+      "Action": [
+        "ec2:CreateTags",
+        "ec2:DeleteTags"
+      ],
+      "Condition": {
+        "Null": {
+          "aws:RequestTag/KubernetesCluster": "true"
+        },
+        "StringEquals": {
+          "aws:ResourceTag/KubernetesCluster": "minimal.example.com"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws-test:ec2:*:*:snapshot/*",
+        "arn:aws-test:ec2:*:*:volume/*"
+      ]
+    },
+    {
+      "Action": "ec2:CreateVolume",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/KubernetesCluster": "minimal.example.com"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws-test:ec2:*:*:snapshot/*"
+      ]
+    },
+    {
+      "Action": "ec2:CreateTags",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/KubernetesCluster": "minimal.example.com",
+          "ec2:CreateAction": [
+            "CopyVolumes",
+            "CreateVolume"
           ]
         }
       },
@@ -207,6 +254,24 @@
     },
     {
       "Action": [
+        "kms:Decrypt",
+        "kms:Encrypt",
+        "kms:GenerateDataKey*",
+        "kms:ReEncrypt*"
+      ],
+      "Condition": {
+        "StringLike": {
+          "kms:ViaService": [
+            "ec2.us-test-1.amazonaws.com",
+            "s3.*.amazonaws.com"
+          ]
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "*"
+    },
+    {
+      "Action": [
         "acm:DescribeCertificate",
         "acm:ListCertificates",
         "autoscaling:DescribeAutoScalingGroups",
@@ -223,6 +288,7 @@
         "ec2:DescribeAccountAttributes",
         "ec2:DescribeAvailabilityZones",
         "ec2:DescribeImages",
+        "ec2:DescribeInstanceTopology",
         "ec2:DescribeInstanceTypes",
         "ec2:DescribeInstances",
         "ec2:DescribeInternetGateways",
@@ -234,14 +300,18 @@
         "ec2:DescribeSnapshots",
         "ec2:DescribeSubnets",
         "ec2:DescribeTags",
+        "ec2:DescribeVolumeStatus",
         "ec2:DescribeVolumes",
         "ec2:DescribeVolumesModifications",
         "ec2:DescribeVpcPeeringConnections",
         "ec2:DescribeVpcs",
         "ec2:DetachNetworkInterface",
         "ec2:GetInstanceTypesFromInstanceRequirements",
+        "ec2:GetSecurityGroupsForVpc",
         "ec2:ModifyNetworkInterfaceAttribute",
         "ec2:UnassignPrivateIpAddresses",
+        "elasticloadbalancing:DescribeCapacityReservation",
+        "elasticloadbalancing:DescribeListenerAttributes",
         "elasticloadbalancing:DescribeListenerCertificates",
         "elasticloadbalancing:DescribeListeners",
         "elasticloadbalancing:DescribeLoadBalancerAttributes",
@@ -252,16 +322,11 @@
         "elasticloadbalancing:DescribeTargetGroupAttributes",
         "elasticloadbalancing:DescribeTargetGroups",
         "elasticloadbalancing:DescribeTargetHealth",
+        "elasticloadbalancing:DescribeTrustStores",
+        "elasticloadbalancing:SetRulePriorities",
         "iam:CreateServiceLinkedRole",
-        "iam:GetServerCertificate",
-        "iam:ListServerCertificates",
         "kms:CreateGrant",
-        "kms:Decrypt",
         "kms:DescribeKey",
-        "kms:Encrypt",
-        "kms:GenerateDataKey*",
-        "kms:GenerateRandom",
-        "kms:ReEncrypt*",
         "sqs:DeleteMessage",
         "sqs:ReceiveMessage"
       ],
@@ -279,6 +344,7 @@
         "ec2:DeleteSnapshot",
         "ec2:DeleteVolume",
         "ec2:DetachVolume",
+        "ec2:EnableFastSnapshotRestores",
         "ec2:ModifyInstanceAttribute",
         "ec2:ModifyVolume",
         "ec2:RevokeSecurityGroupIngress",
@@ -297,7 +363,9 @@
         "elasticloadbalancing:DeregisterInstancesFromLoadBalancer",
         "elasticloadbalancing:DeregisterTargets",
         "elasticloadbalancing:DetachLoadBalancerFromSubnets",
+        "elasticloadbalancing:ModifyCapacityReservation",
         "elasticloadbalancing:ModifyListener",
+        "elasticloadbalancing:ModifyListenerAttributes",
         "elasticloadbalancing:ModifyLoadBalancerAttributes",
         "elasticloadbalancing:ModifyRule",
         "elasticloadbalancing:ModifyTargetGroup",
@@ -322,6 +390,7 @@
     },
     {
       "Action": [
+        "ec2:CopyVolumes",
         "ec2:CreateSecurityGroup",
         "ec2:CreateSnapshot",
         "ec2:CreateVolume",

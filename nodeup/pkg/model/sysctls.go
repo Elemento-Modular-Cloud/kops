@@ -111,11 +111,10 @@ func (b *SysctlBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 			"fs.file-max = 2097152",
 			"",
 
-			"# Max number of inotify instances and watches for a user",
+			"# Max number of inotify instances for a user",
 			"# Since dockerd runs as a single user, the default instances value of 128 per user is too low",
 			"# e.g. uses of inotify: nginx ingress controller, kubectl logs -f",
 			"fs.inotify.max_user_instances = 8192",
-			"fs.inotify.max_user_watches = 524288",
 
 			"# Additional sysctl flags that kubelet expects",
 			"vm.overcommit_memory = 1",
@@ -132,19 +131,6 @@ func (b *SysctlBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 			"# Issue #23395",
 			"net.ipv4.neigh.default.gc_thresh1=0",
 			"")
-	}
-
-	// Running Flannel on Amazon Linux 2 needs custom settings
-	if b.NodeupConfig.Networking.Flannel != nil && b.Distribution == distributions.DistributionAmazonLinux2 && b.NodeupConfig.KubeProxy != nil {
-		proxyMode := b.NodeupConfig.KubeProxy.ProxyMode
-		if proxyMode == "" || proxyMode == "iptables" {
-			sysctls = append(sysctls,
-				"# Flannel settings on Amazon Linux 2",
-				"# Issue https://github.com/coreos/flannel/issues/902",
-				"net.bridge.bridge-nf-call-ip6tables=1",
-				"net.bridge.bridge-nf-call-iptables=1",
-				"")
-		}
 	}
 
 	if b.IsIPv6Only() {

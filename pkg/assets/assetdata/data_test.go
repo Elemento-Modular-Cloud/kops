@@ -27,8 +27,8 @@ func TestGetHash(t *testing.T) {
 		Hash string
 	}{
 		{
-			Name: "https://dl.k8s.io/release/v1.26.0/bin/linux/amd64/kubelet",
-			Hash: "b64949fe696c77565edbe4100a315b6bf8f0e2325daeb762f7e865f16a6e54b5",
+			Name: "https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubelet",
+			Hash: "39e7f1c61c8389ea7680690f8bd5dd733672fa16875ae598df0fd8c205df57a9",
 		},
 		{
 			Name: "https://github.com/opencontainers/runc/releases/download/v1.1.0/runc.amd64",

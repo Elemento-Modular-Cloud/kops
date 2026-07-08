@@ -2,7 +2,6 @@ contents: |
   apiVersion: v1
   kind: Pod
   metadata:
-    creationTimestamp: null
     labels:
       k8s-app: kube-scheduler
     name: kube-scheduler
@@ -14,6 +13,8 @@ contents: |
       - --also-stdout
       - /usr/local/bin/kube-scheduler
       - --authentication-kubeconfig=/var/lib/kube-scheduler/kubeconfig
+      - --authentication-skip-lookup=false
+      - --authentication-tolerate-lookup-failure=false
       - --authorization-kubeconfig=/var/lib/kube-scheduler/kubeconfig
       - --config=/var/lib/kube-scheduler/config.yaml
       - --leader-elect=true

@@ -88,7 +88,7 @@ func (b *ServerGroupModelBuilder) buildInstances(c *fi.CloudupModelBuilderContex
 		return err
 	}
 
-	sshKeyName := strings.Replace(sshKeyNameFull, ":", "_", -1)
+	sshKeyName := strings.ReplaceAll(sshKeyNameFull, ":", "_")
 
 	igMeta := make(map[string]string)
 	cloudTags, err := b.KopsModelContext.CloudTagsForInstanceGroup(ig)
@@ -101,7 +101,7 @@ func (b *ServerGroupModelBuilder) buildInstances(c *fi.CloudupModelBuilderContex
 		)
 		igMeta[sanitizedLabel] = labelVal
 	}
-	if ig.Spec.Role != kops.InstanceGroupRoleBastion {
+	if !ig.Spec.Role.HasBastion() {
 		// Bastion does not belong to the cluster and will not be running protokube.
 
 		igMeta[openstack.TagClusterName] = b.ClusterName()
@@ -134,7 +134,7 @@ func (b *ServerGroupModelBuilder) buildInstances(c *fi.CloudupModelBuilderContex
 	securityGroupName := b.SecurityGroupName(ig.Spec.Role)
 	securityGroups = append(securityGroups, b.LinkToSecurityGroup(securityGroupName))
 
-	if b.Cluster.Spec.CloudProvider.Openstack.Loadbalancer == nil && ig.Spec.Role == kops.InstanceGroupRoleControlPlane {
+	if b.Cluster.Spec.CloudProvider.Openstack.Loadbalancer == nil && ig.Spec.Role.HasControlPlane() {
 		securityGroups = append(securityGroups, b.LinkToSecurityGroup(b.APIResourceName()))
 	}
 
@@ -145,8 +145,8 @@ func (b *ServerGroupModelBuilder) buildInstances(c *fi.CloudupModelBuilderContex
 	for i := int32(0); i < *ig.Spec.MinSize; i++ {
 		// FIXME: Must ensure 63 or less characters
 		// replace all dots and _ with -, this is needed to get external cloudprovider working
-		iName := strings.Replace(strings.ToLower(fmt.Sprintf("%s-%d.%s", ig.Name, i+1, b.ClusterName())), "_", "-", -1)
-		instanceName := fi.PtrTo(strings.Replace(iName, ".", "-", -1))
+		iName := strings.ReplaceAll(strings.ToLower(fmt.Sprintf("%s-%d.%s", ig.Name, i+1, b.ClusterName())), "_", "-")
+		instanceName := fi.PtrTo(strings.ReplaceAll(iName, ".", "-"))
 
 		var az *string
 		var subnets []*openstacktasks.Subnet
@@ -154,7 +154,7 @@ func (b *ServerGroupModelBuilder) buildInstances(c *fi.CloudupModelBuilderContex
 		if len(ig.Spec.Subnets) > 0 {
 			subnet := ig.Spec.Subnets[int(i)%len(ig.Spec.Subnets)]
 			// bastion subnet name might contain a "utility-" prefix
-			if ig.Spec.Role == kops.InstanceGroupRoleBastion {
+			if ig.Spec.Role.HasBastion() {
 				az = fi.PtrTo(strings.Replace(subnet, "utility-", "", 1))
 			} else {
 				az = fi.PtrTo(subnet)
@@ -175,13 +175,13 @@ func (b *ServerGroupModelBuilder) buildInstances(c *fi.CloudupModelBuilderContex
 		}
 		// Create instance port task
 		portName := fmt.Sprintf("%s-%s", "port", *instanceName)
-		portTagKopsName := strings.Replace(
-			strings.Replace(
+		portTagKopsName := strings.ReplaceAll(
+			strings.ReplaceAll(
 				strings.ToLower(
 					fmt.Sprintf("port-%s-%d", ig.Name, i+1),
 				),
-				"_", "-", -1,
-			), ".", "-", -1,
+				"_", "-",
+			), ".", "-",
 		)
 		portTask := &openstacktasks.Port{
 			Name:              fi.PtrTo(portName),
@@ -200,7 +200,7 @@ func (b *ServerGroupModelBuilder) buildInstances(c *fi.CloudupModelBuilderContex
 		}
 		c.AddTask(portTask)
 
-		if b.Cluster.UsesNoneDNS() && ig.Spec.Role == kops.InstanceGroupRoleControlPlane {
+		if b.Cluster.UsesLoadBalancerForKopsController() && ig.Spec.Role.HasControlPlane() {
 			portTask.WellKnownServices = append(portTask.WellKnownServices, wellknownservices.KubeAPIServer)
 		}
 
@@ -234,13 +234,13 @@ func (b *ServerGroupModelBuilder) buildInstances(c *fi.CloudupModelBuilderContex
 			if ig.Spec.AssociatePublicIP != nil && !fi.ValueOf(ig.Spec.AssociatePublicIP) {
 				continue
 			}
-			if havePublicSubnet || ig.Spec.Role == kops.InstanceGroupRoleBastion {
+			if havePublicSubnet || ig.Spec.Role.HasBastion() {
 				t := &openstacktasks.FloatingIP{
 					Name:      fi.PtrTo(fmt.Sprintf("%s-%s", "fip", *instanceTask.Name)),
 					Lifecycle: b.Lifecycle,
 				}
 				c.AddTask(t)
-				if ig.Spec.Role == kops.InstanceGroupRoleControlPlane {
+				if ig.Spec.Role.HasControlPlane() {
 					// Ensure the floating IP is included in the TLS certificate,
 					// if we're not going to use an alias for it
 					t.WellKnownServices = append(t.WellKnownServices, wellknownservices.KubeAPIServer, wellknownservices.KopsController)
@@ -379,7 +379,7 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 		}
 
 		for _, ig := range b.InstanceGroups {
-			if ig.Spec.Role == kops.InstanceGroupRoleControlPlane {
+			if ig.Spec.Role.HasControlPlane() {
 				associateTask := &openstacktasks.PoolAssociation{
 					Name:          fi.PtrTo(fmt.Sprintf("%s-%s", clusterName, ig.Name)),
 					ServerPrefix:  fi.PtrTo(ig.Name),

@@ -24,17 +24,21 @@ kops reconcile cluster [CLUSTER] [flags]
 
 ```
       --allow-kops-downgrade   Allow an older version of kOps to update the cluster than last used
+      --api-server string      Override the API server used when communicating with the cluster kube-apiserver
   -h, --help                   help for cluster
+      --use-kubeconfig         Use the server endpoint from the local kubeconfig instead of inferring from cluster name
   -y, --yes                    Create cloud resources, without --yes reconcile is in dry run mode
 ```
 
 ### Options inherited from parent commands
 
 ```
-      --config string   yaml config file (default is $HOME/.kops.yaml)
-      --name string     Name of cluster. Overrides KOPS_CLUSTER_NAME environment variable
-      --state string    Location of state storage (kops 'config' file). Overrides KOPS_STATE_STORE environment variable
-  -v, --v Level         number for the log level verbosity
+      --alsologtostderrthreshold severity   logs at or above this threshold go to stderr when -alsologtostderr=true (no effect when -logtostderr=true)
+      --config string                       yaml config file (default is $HOME/.kops.yaml)
+      --legacy_stderr_threshold_behavior    If true, stderrthreshold is ignored when logtostderr=true (legacy behavior). If false, stderrthreshold is honored even when logtostderr=true
+      --name string                         Name of cluster. Overrides KOPS_CLUSTER_NAME environment variable
+      --state string                        Location of state storage (kops 'config' file). Overrides KOPS_STATE_STORE environment variable
+  -v, --v Level                             number for the log level verbosity
 ```
 
 ### SEE ALSO

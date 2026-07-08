@@ -51,6 +51,9 @@ func Test_S3Path_Parse(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error parsing s3 path: %v", err)
 			}
+			if s3path.scheme != "s3" {
+				t.Fatalf("unexpected scheme for s3 path, got %q expected \"s3\": %v", s3path.scheme, s3path)
+			}
 			if s3path.bucket != g.ExpectedBucket {
 				t.Fatalf("unexpected s3 path: %v", s3path)
 			}
@@ -62,6 +65,83 @@ func Test_S3Path_Parse(t *testing.T) {
 				t.Fatalf("unexpected error parsing %q", g.Input)
 			}
 		}
+	}
+}
+
+func Test_LinodePath_Parse(t *testing.T) {
+	grid := []struct {
+		Input          string
+		ExpectError    bool
+		ExpectedBucket string
+		ExpectedPath   string
+	}{
+		{
+			Input:          "linode://bucket",
+			ExpectedBucket: "bucket",
+			ExpectedPath:   "",
+		},
+		{
+			Input:          "linode://bucket/path",
+			ExpectedBucket: "bucket",
+			ExpectedPath:   "path",
+		},
+		{
+			Input:          "linode://bucket2/path/subpath",
+			ExpectedBucket: "bucket2",
+			ExpectedPath:   "path/subpath",
+		},
+		{
+			Input:       "linode:///bucket/path/subpath",
+			ExpectError: true,
+		},
+	}
+	for _, g := range grid {
+		t.Setenv("S3_ENDPOINT", "https://example.com")
+		s3path, err := Context.buildLinodePath(g.Input)
+		if !g.ExpectError {
+			if err != nil {
+				t.Fatalf("unexpected error parsing linode path: %v", err)
+			}
+			if s3path.scheme != "linode" {
+				t.Fatalf("expected scheme=\"linode\" for linode path, got %q: %v", s3path.scheme, s3path)
+			}
+			if s3path.bucket != g.ExpectedBucket {
+				t.Fatalf("unexpected linode path: %v", s3path)
+			}
+			if s3path.key != g.ExpectedPath {
+				t.Fatalf("unexpected linode path: %v", s3path)
+			}
+		} else {
+			if err == nil {
+				t.Fatalf("unexpected error parsing %q", g.Input)
+			}
+		}
+	}
+}
+
+func Test_NonLinodeObjectStoragePaths_HaveCorrectScheme(t *testing.T) {
+	grid := []struct {
+		name   string
+		input  string
+		scheme string
+		build  func(string) (*S3Path, error)
+	}{
+		{name: "do", input: "do://bucket/path", scheme: "do", build: Context.buildDOPath},
+		{name: "hos", input: "hos://bucket/path", scheme: "hos", build: Context.buildHetznerPath},
+		{name: "scw", input: "scw://bucket/path", scheme: "scw", build: Context.buildSCWPath},
+	}
+
+	for _, tc := range grid {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("S3_ENDPOINT", "https://example.com")
+			s3path, err := tc.build(tc.input)
+			if err != nil {
+				t.Fatalf("unexpected error parsing %s path: %v", tc.name, err)
+			}
+			if s3path.scheme != tc.scheme {
+				t.Fatalf("unexpected scheme for %s path, got %q expected %q", tc.name, s3path.scheme, tc.scheme)
+			}
+		})
 	}
 }
 

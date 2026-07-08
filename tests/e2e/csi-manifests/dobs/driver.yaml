@@ -1,0 +1,33 @@
+# Manifest for Kubernetes external tests.
+# See https://github.com/kubernetes/kubernetes/tree/master/test/e2e/storage/external
+# https://github.com/digitalocean/csi-digitalocean/blob/master/test/e2e/testdrivers/1.35.yaml
+StorageClass:
+  FromFile: tests/e2e/csi-manifests/dobs/sc.yaml
+SnapshotClass:
+  FromName: true
+DriverInfo:
+  Name: dobs.csi.digitalocean.com
+  SupportedSizeRange:
+    Max: 100Gi
+    Min: 1Gi
+  Capabilities:
+    persistence: true
+    block: true
+    fsGroup: true
+    volumeMountGroup: false
+    exec: true
+    snapshotDataSource: true
+    pvcDataSource: false
+    multipods: true
+    RWX: false
+    controllerExpansion: true
+    nodeExpansion: true
+    onlineExpansion: true
+    volumeLimits: true
+    singleNodeVolume: true
+    topology: true
+    capacity: false
+  SupportedFsType:
+    ext3:
+    ext4:
+    xfs:

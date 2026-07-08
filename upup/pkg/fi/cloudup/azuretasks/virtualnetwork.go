@@ -74,6 +74,10 @@ func (n *VirtualNetwork) Find(c *fi.CloudupContext) (*VirtualNetwork, error) {
 	if found.Properties == nil {
 		return nil, fmt.Errorf("found virtual network without properties")
 	}
+	if found.Properties.ProvisioningState != nil && *found.Properties.ProvisioningState == network.ProvisioningStateFailed {
+		klog.Warningf("found virtual network %q in failed provisioning state", *n.Name)
+		return nil, nil
+	}
 	if found.Properties.AddressSpace == nil {
 		return nil, fmt.Errorf("found virtual network without address space")
 	}

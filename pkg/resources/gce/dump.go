@@ -19,6 +19,7 @@ package gce
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	compute "google.golang.org/api/compute/v1"
@@ -60,21 +61,50 @@ func DumpManagedInstance(op *resources.DumpOperation, r *resources.Resource) err
 
 	instanceDetails := instanceMap[u.Name]
 	if instanceDetails == nil {
-		klog.Warningf("instance %q not found", instance.Instance)
-	} else {
-		for _, ni := range instanceDetails.NetworkInterfaces {
-			if ni.NetworkIP != "" {
-				i.PrivateAddresses = append(i.PrivateAddresses, ni.NetworkIP)
-			}
-			if ni.Ipv6Address != "" {
-				i.PrivateAddresses = append(i.PrivateAddresses, ni.Ipv6Address)
-			}
-			for _, ac := range ni.AccessConfigs {
-				if ac.NatIP != "" {
-					i.PublicAddresses = append(i.PublicAddresses, ac.NatIP)
-				}
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "instance %q not found (currentAction=%q instanceStatus=%q)", instance.Instance, instance.CurrentAction, instance.InstanceStatus)
+		if instance.LastAttempt != nil && instance.LastAttempt.Errors != nil {
+			for _, e := range instance.LastAttempt.Errors.Errors {
+				fmt.Fprintf(&sb, "; lastAttempt.error code=%q location=%q message=%q", e.Code, e.Location, e.Message)
 			}
 		}
+		klog.Warning(sb.String())
+		return nil
+	}
+
+	for _, ni := range instanceDetails.NetworkInterfaces {
+		if ni == nil {
+			continue
+		}
+		if ni.NetworkIP != "" {
+			i.PrivateAddresses = append(i.PrivateAddresses, ni.NetworkIP)
+		}
+		if ni.Ipv6Address != "" {
+			i.PrivateAddresses = append(i.PrivateAddresses, ni.Ipv6Address)
+		}
+		for _, ac := range ni.AccessConfigs {
+			if ac == nil {
+				continue
+			}
+			if ac.NatIP != "" {
+				i.PublicAddresses = append(i.PublicAddresses, ac.NatIP)
+			}
+		}
+	}
+
+	isControlPlane := false
+	for key, value := range instanceDetails.Labels {
+		if !strings.HasPrefix(key, gce.GceLabelNameRolePrefix) {
+			continue
+		}
+		if value == "control-plane" {
+			isControlPlane = true
+		} else {
+			i.Roles = append(i.Roles, value)
+		}
+	}
+	if isControlPlane {
+		i.Roles = append(i.Roles, "control-plane")
 	}
 
 	op.Dump.Instances = append(op.Dump.Instances, i)
@@ -117,4 +147,28 @@ func (s *dumpState) getInstances(ctx context.Context, zone string) (map[string]*
 	}
 	s.instances[zone] = instances
 	return instances, nil
+}
+
+// DumpNetwork is responsible for dumping a resource for a Network
+func DumpNetwork(op *resources.DumpOperation, r *resources.Resource) error {
+	network := r.Obj.(*compute.Network)
+
+	vpc := &resources.VPC{
+		ID: gce.LastComponent(network.SelfLink),
+	}
+	op.Dump.VPC = vpc
+
+	return nil
+}
+
+// DumpSubnetwork is responsible for dumping a resource for a Subnetwork
+func DumpSubnetwork(op *resources.DumpOperation, r *resources.Resource) error {
+	obj := r.Obj.(*compute.Subnetwork)
+
+	subnet := &resources.Subnet{
+		ID: gce.LastComponent(obj.SelfLink),
+	}
+	op.Dump.Subnets = append(op.Dump.Subnets, subnet)
+
+	return nil
 }

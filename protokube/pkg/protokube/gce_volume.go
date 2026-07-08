@@ -21,7 +21,6 @@ import (
 	"strings"
 
 	"cloud.google.com/go/compute/metadata"
-	compute "google.golang.org/api/compute/v1"
 	"k8s.io/klog/v2"
 	"k8s.io/kops/protokube/pkg/gossip"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce/gcediscovery"
@@ -29,13 +28,7 @@ import (
 
 // GCECloudProvider is the CloudProvider implementation for GCE
 type GCECloudProvider struct {
-	compute   *compute.Service
-	discovery *gcediscovery.Discovery
-
-	project      string
-	zone         string
-	region       string
-	clusterName  string
+	discovery    *gcediscovery.Discovery
 	instanceName string
 }
 
@@ -50,7 +43,6 @@ func NewGCECloudProvider() (*GCECloudProvider, error) {
 
 	a := &GCECloudProvider{
 		discovery: discovery,
-		compute:   discovery.Compute(),
 	}
 
 	err = a.discoverTags()
@@ -61,53 +53,33 @@ func NewGCECloudProvider() (*GCECloudProvider, error) {
 	return a, nil
 }
 
-// Project returns the current GCE project
-func (a *GCECloudProvider) Project() string {
-	return a.project
-}
-
 func (a *GCECloudProvider) discoverTags() error {
-	// Cluster Name
-	{
-		a.clusterName = a.discovery.ClusterName()
-		if a.clusterName == "" {
-			return fmt.Errorf("cluster-name metadata was empty")
-		}
+	if a.discovery.ClusterName() == "" {
+		return fmt.Errorf("cluster-name metadata was empty")
 	}
 
-	// Project ID
-	{
-		a.project = a.discovery.ProjectID()
-		if a.project == "" {
-			return fmt.Errorf("project metadata was empty")
-		}
-		klog.Infof("Found project=%q", a.project)
+	project := a.discovery.ProjectID()
+	if project == "" {
+		return fmt.Errorf("project metadata was empty")
 	}
+	klog.Infof("Found project=%q", project)
 
-	// Zone
-	{
-		a.zone = a.discovery.Zone()
-		if a.zone == "" {
-			return fmt.Errorf("zone metadata was empty")
-		}
-		klog.Infof("Found zone=%q", a.zone)
-
-		a.region = a.discovery.Region()
-		klog.Infof("Found region=%q", a.region)
+	zone := a.discovery.Zone()
+	if zone == "" {
+		return fmt.Errorf("zone metadata was empty")
 	}
+	klog.Infof("Found zone=%q", zone)
+	klog.Infof("Found region=%q", a.discovery.Region())
 
-	// Instance Name
-	{
-		instanceName, err := metadata.InstanceName()
-		if err != nil {
-			return fmt.Errorf("error reading instance name from GCE: %v", err)
-		}
-		a.instanceName = strings.TrimSpace(instanceName)
-		if a.instanceName == "" {
-			return fmt.Errorf("instance name metadata was empty")
-		}
-		klog.Infof("Found instanceName=%q", a.instanceName)
+	instanceName, err := metadata.InstanceName()
+	if err != nil {
+		return fmt.Errorf("error reading instance name from GCE: %v", err)
 	}
+	a.instanceName = strings.TrimSpace(instanceName)
+	if a.instanceName == "" {
+		return fmt.Errorf("instance name metadata was empty")
+	}
+	klog.Infof("Found instanceName=%q", a.instanceName)
 
 	return nil
 }

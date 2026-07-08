@@ -17,7 +17,6 @@ limitations under the License.
 package model
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -28,42 +27,8 @@ import (
 )
 
 const (
-	CloudConfigFilePath       = "/etc/kubernetes/cloud.config"
-	InTreeCloudConfigFilePath = "/etc/kubernetes/in-tree-cloud.config"
-
-	// VM UUID is set by cloud-init
-	VM_UUID_FILE_PATH = "/etc/vmware/vm_uuid"
+	CloudConfigFilePath = "/etc/kubernetes/cloud.config"
 )
-
-// azureCloudConfig is the configuration passed to Cloud Provider Azure.
-// The specification is described in https://kubernetes-sigs.github.io/cloud-provider-azure/install/configs/.
-type azureCloudConfig struct {
-	// SubscriptionID is the ID of the Azure Subscription that the cluster is deployed in.
-	SubscriptionID string `json:"subscriptionId,omitempty"`
-	// TenantID is the ID of the tenant that the cluster is deployed in.
-	TenantID string `json:"tenantId"`
-	// CloudConfigType is the cloud configure type for Azure cloud provider. Supported values are file, secret and merge.
-	CloudConfigType string `json:"cloudConfigType,omitempty"`
-	// VMType is the type of azure nodes.
-	VMType string `json:"vmType,omitempty" yaml:"vmType,omitempty"`
-	// ResourceGroup is the name of the resource group that the cluster is deployed in.
-	ResourceGroup string `json:"resourceGroup,omitempty"`
-	// Location is the location of the resource group that the cluster is deployed in.
-	Location string `json:"location,omitempty"`
-	// RouteTableName is the name of the route table attached to the subnet that the cluster is deployed in.
-	RouteTableName string `json:"routeTableName,omitempty"`
-	// VnetName is the name of the virtual network that the cluster is deployed in.
-	VnetName string `json:"vnetName"`
-
-	// UseInstanceMetadata specifies where instance metadata service is used where possible.
-	UseInstanceMetadata bool `json:"useInstanceMetadata,omitempty"`
-	// UseManagedIdentityExtension specifies where managed service
-	// identity is used for the virtual machine to access Azure
-	// ARM APIs.
-	UseManagedIdentityExtension bool `json:"useManagedIdentityExtension,omitempty"`
-	// DisableAvailabilitySetNodes disables VMAS nodes support.
-	DisableAvailabilitySetNodes bool `json:"disableAvailabilitySetNodes,omitempty"`
-}
 
 // CloudConfigBuilder creates the cloud configuration file
 type CloudConfigBuilder struct {
@@ -73,27 +38,25 @@ type CloudConfigBuilder struct {
 var _ fi.NodeupModelBuilder = &CloudConfigBuilder{}
 
 func (b *CloudConfigBuilder) Build(c *fi.NodeupModelBuilderContext) error {
+	// Azure reads its cloud config from the azure-cloud-provider Secret, so
+	// nodeup does not write a cloud config file for Azure nodes.
+	if b.CloudProvider() == kops.CloudProviderAzure {
+		return nil
+	}
+
 	if !b.HasAPIServer && b.NodeupConfig.KubeletConfig.CloudProvider == "external" {
 		return nil
 	}
 
-	if err := b.build(c, true); err != nil {
-		return err
-	}
-	if err := b.build(c, false); err != nil {
-		return err
-	}
-	return nil
+	return b.build(c)
 }
 
-func (b *CloudConfigBuilder) build(c *fi.NodeupModelBuilderContext, inTree bool) error {
+func (b *CloudConfigBuilder) build(c *fi.NodeupModelBuilderContext) error {
 	// Add cloud config file if needed
 	var lines []string
 
 	cloudProvider := b.CloudProvider()
 
-	var config string
-	requireGlobal := true
 	switch cloudProvider {
 	case kops.CloudProviderGCE:
 		if b.NodeupConfig.NodeTags != nil {
@@ -112,50 +75,18 @@ func (b *CloudConfigBuilder) build(c *fi.NodeupModelBuilderContext, inTree bool)
 		if b.NodeupConfig.ElbSecurityGroup != nil {
 			lines = append(lines, "ElbSecurityGroup = "+*b.NodeupConfig.ElbSecurityGroup)
 		}
-		if !inTree {
-			for _, family := range b.NodeupConfig.NodeIPFamilies {
-				lines = append(lines, "NodeIPFamilies = "+family)
-			}
+		if b.NodeupConfig.NLBSecurityGroupMode != nil {
+			lines = append(lines, "NLBSecurityGroupMode = "+*b.NodeupConfig.NLBSecurityGroupMode)
+		}
+		for _, family := range b.NodeupConfig.NodeIPFamilies {
+			lines = append(lines, "NodeIPFamilies = "+family)
 		}
 	case kops.CloudProviderOpenstack:
 		lines = append(lines, openstack.MakeCloudConfig(b.NodeupConfig.Openstack)...)
-
-	case kops.CloudProviderAzure:
-		requireGlobal = false
-
-		vnetName := b.NodeupConfig.Networking.NetworkID
-		if vnetName == "" {
-			vnetName = b.NodeupConfig.ClusterName
-		}
-
-		c := &azureCloudConfig{
-			CloudConfigType:             "file",
-			SubscriptionID:              b.NodeupConfig.AzureSubscriptionID,
-			TenantID:                    b.NodeupConfig.AzureTenantID,
-			Location:                    b.NodeupConfig.AzureLocation,
-			VMType:                      "vmss",
-			ResourceGroup:               b.NodeupConfig.AzureResourceGroup,
-			RouteTableName:              b.NodeupConfig.AzureRouteTableName,
-			VnetName:                    vnetName,
-			UseInstanceMetadata:         true,
-			UseManagedIdentityExtension: true,
-			// Disable availability set nodes as we currently use VMSS.
-			DisableAvailabilitySetNodes: true,
-		}
-		data, err := json.Marshal(c)
-		if err != nil {
-			return fmt.Errorf("error marshalling azure config: %s", err)
-		}
-		config = string(data)
 	}
 
-	if requireGlobal {
-		config = "[global]\n" + strings.Join(lines, "\n") + "\n"
-	}
+	config := "[global]\n" + strings.Join(lines, "\n") + "\n"
 	path := CloudConfigFilePath
-	if inTree {
-		path = InTreeCloudConfigFilePath
-	}
 	t := &nodetasks.File{
 		Path:     path,
 		Contents: fi.NewStringResource(config),

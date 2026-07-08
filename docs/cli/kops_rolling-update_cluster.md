@@ -60,6 +60,7 @@ kops rolling-update cluster [CLUSTER] [flags]
 
 ```
       --admin duration                    a cluster admin user credential with the specified lifetime (default 18h0m0s)
+      --api-server string                 Override the API server used when communicating with the cluster kube-apiserver
       --bastion-interval duration         Time to wait between restarting bastions (default 15s)
       --cloudonly                         Perform rolling update without validating cluster status (will cause downtime)
       --control-plane-interval duration   Time to wait between restarting control plane nodes (default 15s)
@@ -73,6 +74,7 @@ kops rolling-update cluster [CLUSTER] [flags]
   -i, --interactive                       Prompt to continue after each instance is updated
       --node-interval duration            Time to wait between restarting worker nodes (default 15s)
       --post-drain-delay duration         Time to wait after draining each node (default 5s)
+      --use-kubeconfig                    Use the server endpoint from the local kubeconfig instead of inferring from cluster name
       --validate-count int32              Number of times that a cluster needs to be validated after single node update (default 2)
       --validation-timeout duration       Maximum time to wait for a cluster to validate (default 15m0s)
   -y, --yes                               Perform rolling update immediately; without --yes rolling-update executes a dry-run
@@ -81,10 +83,12 @@ kops rolling-update cluster [CLUSTER] [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   yaml config file (default is $HOME/.kops.yaml)
-      --name string     Name of cluster. Overrides KOPS_CLUSTER_NAME environment variable
-      --state string    Location of state storage (kops 'config' file). Overrides KOPS_STATE_STORE environment variable
-  -v, --v Level         number for the log level verbosity
+      --alsologtostderrthreshold severity   logs at or above this threshold go to stderr when -alsologtostderr=true (no effect when -logtostderr=true)
+      --config string                       yaml config file (default is $HOME/.kops.yaml)
+      --legacy_stderr_threshold_behavior    If true, stderrthreshold is ignored when logtostderr=true (legacy behavior). If false, stderrthreshold is honored even when logtostderr=true
+      --name string                         Name of cluster. Overrides KOPS_CLUSTER_NAME environment variable
+      --state string                        Location of state storage (kops 'config' file). Overrides KOPS_STATE_STORE environment variable
+  -v, --v Level                             number for the log level verbosity
 ```
 
 ### SEE ALSO

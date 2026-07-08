@@ -29,7 +29,7 @@ import (
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
 	"k8s.io/kops/util/pkg/distributions"
-	"k8s.io/kops/util/pkg/proxy"
+	proxy "k8s.io/kops/util/pkg/env"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -151,8 +151,6 @@ func (b *KubeControllerManagerBuilder) buildPod(kcm *kops.KubeControllerManagerC
 		return nil, fmt.Errorf("error building kube-controller-manager flags: %v", err)
 	}
 
-	flags = append(flags, "--cloud-config="+InTreeCloudConfigFilePath)
-
 	// Add kubeconfig flags
 	for _, flag := range []string{"", "authentication-", "authorization-"} {
 		flags = append(flags, "--"+flag+"kubeconfig="+"/var/lib/kube-controller-manager/kubeconfig")
@@ -261,11 +259,9 @@ func (b *KubeControllerManagerBuilder) buildPod(kcm *kops.KubeControllerManagerC
 		container.Args = append(container.Args, sortedStrings(flags)...)
 	}
 	for _, path := range b.SSLHostPaths() {
-		name := strings.Replace(path, "/", "", -1)
+		name := strings.ReplaceAll(path, "/", "")
 		kubemanifest.AddHostPathMapping(pod, container, name, path)
 	}
-
-	kubemanifest.AddHostPathMapping(pod, container, "cloudconfig", InTreeCloudConfigFilePath)
 
 	kubemanifest.AddHostPathMapping(pod, container, "cabundle", filepath.Join(b.PathSrvKubernetes(), "ca.crt"))
 

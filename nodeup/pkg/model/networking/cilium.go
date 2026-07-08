@@ -25,6 +25,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"k8s.io/kops/nodeup/pkg/model"
+	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
 )
@@ -55,6 +56,15 @@ func (b *CiliumBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 
 	if err := b.buildCgroup2Mount(c); err != nil {
 		return fmt.Errorf("failed to create cgroupv2 mount unit: %w", err)
+	}
+
+	disableManageForeignRoutes(c, b.Distribution)
+	disableCloudInitNetworkHotplug(c, b.Distribution)
+
+	if b.NodeupConfig.Networking.Cilium.IPAM == kops.CiliumIpamEni {
+		maskEC2NetUtilsUdevRules(c, b.Distribution)
+		setMACAddressPolicyNone(c, b.Distribution)
+		markSecondaryENIsUnmanaged(c, b.Distribution)
 	}
 
 	return nil

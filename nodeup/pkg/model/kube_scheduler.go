@@ -31,7 +31,7 @@ import (
 	"k8s.io/kops/pkg/rbac"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
-	"k8s.io/kops/util/pkg/proxy"
+	"k8s.io/kops/util/pkg/env"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -111,9 +111,6 @@ func (b *KubeSchedulerBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 		// We didn't get a kubescheduler configuration; warn as we're aiming to move this to generation in the kops CLI
 		klog.Warningf("using embedded kubescheduler configuration")
 		config := NewSchedulerConfig("kubescheduler.config.k8s.io/v1")
-		if b.IsKubernetesLT("1.25") {
-			config = NewSchedulerConfig("kubescheduler.config.k8s.io/v1beta2")
-		}
 
 		kubeSchedulerConfig, err := configbuilder.BuildConfigYaml(&kubeScheduler, config)
 		if err != nil {
@@ -191,6 +188,9 @@ func (b *KubeSchedulerBuilder) buildPod(kubeScheduler *kops.KubeSchedulerConfig)
 
 	flags = append(flags, "--config="+"/var/lib/kube-scheduler/config.yaml")
 
+	// Make sure the scheduler always looks up its authentication configuration from the API server.
+	flags = append(flags, "--authentication-tolerate-lookup-failure=false")
+	flags = append(flags, "--authentication-skip-lookup=false")
 	// Add kubeconfig flags
 	for _, flag := range []string{"authentication-", "authorization-"} {
 		flags = append(flags, "--"+flag+"kubeconfig="+kubescheduler.KubeConfigPath)
@@ -246,7 +246,7 @@ func (b *KubeSchedulerBuilder) buildPod(kubeScheduler *kops.KubeSchedulerConfig)
 	container := &v1.Container{
 		Name:  "kube-scheduler",
 		Image: image,
-		Env:   proxy.GetProxyEnvVars(b.NodeupConfig.Networking.EgressProxy),
+		Env:   env.GetProxyEnvVars(b.NodeupConfig.Networking.EgressProxy),
 		LivenessProbe: &v1.Probe{
 			ProbeHandler:        v1.ProbeHandler{HTTPGet: healthAction},
 			InitialDelaySeconds: 15,

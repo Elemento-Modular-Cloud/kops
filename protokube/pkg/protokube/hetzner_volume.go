@@ -21,9 +21,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/hetznercloud/hcloud-go/hcloud"
-	"github.com/hetznercloud/hcloud-go/hcloud/metadata"
+	"github.com/hetznercloud/hcloud-go/v2/hcloud"
+	"github.com/hetznercloud/hcloud-go/v2/hcloud/metadata"
 	"k8s.io/klog/v2"
+	version "k8s.io/kops"
 	"k8s.io/kops/protokube/pkg/gossip"
 	gossiphetzner "k8s.io/kops/protokube/pkg/gossip/hetzner"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner"
@@ -51,6 +52,7 @@ func NewHetznerCloudProvider() (*HetznerCloudProvider, error) {
 	}
 	opts := []hcloud.ClientOption{
 		hcloud.WithToken(hcloudToken),
+		hcloud.WithApplication("kops", version.Version),
 	}
 	hcloudClient := hcloud.NewClient(opts...)
 

@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -35,14 +34,9 @@ import (
 
 // AWSCloudProvider defines the AWS cloud provider implementation
 type AWSCloudProvider struct {
-	mutex sync.Mutex
-
 	clusterTag string
-	deviceMap  map[string]string
 	ec2        ec2.DescribeInstancesAPIClient
 	instanceId string
-	imdsClient *imds.Client
-	zone       string
 }
 
 var _ CloudProvider = &AWSCloudProvider{}
@@ -50,32 +44,20 @@ var _ CloudProvider = &AWSCloudProvider{}
 // NewAWSCloudProvider returns a new aws volume provider
 func NewAWSCloudProvider() (*AWSCloudProvider, error) {
 	ctx := context.TODO()
-	a := &AWSCloudProvider{
-		deviceMap: make(map[string]string),
-	}
+	a := &AWSCloudProvider{}
 
 	config, err := awsconfig.LoadDefaultConfig(ctx, awslog.WithAWSLogger())
 	if err != nil {
 		return nil, fmt.Errorf("error loading AWS config: %w", err)
 	}
-	a.imdsClient = imds.NewFromConfig(config)
+	imdsClient := imds.NewFromConfig(config)
 
-	regionResp, err := a.imdsClient.GetRegion(ctx, &imds.GetRegionInput{})
+	regionResp, err := imdsClient.GetRegion(ctx, &imds.GetRegionInput{})
 	if err != nil {
 		return nil, fmt.Errorf("error querying ec2 metadata service (for az/region): %w", err)
 	}
 
-	zoneResp, err := a.imdsClient.GetMetadata(ctx, &imds.GetMetadataInput{Path: "placement/availability-zone"})
-	if err != nil {
-		return nil, fmt.Errorf("error querying ec2 metadata service (for az): %w", err)
-	}
-	zone, err := io.ReadAll(zoneResp.Content)
-	if err != nil {
-		return nil, fmt.Errorf("error reading ec2 metadata service response (for az): %w", err)
-	}
-	a.zone = string(zone)
-
-	instanceIdResp, err := a.imdsClient.GetMetadata(ctx, &imds.GetMetadataInput{Path: "instance-id"})
+	instanceIdResp, err := imdsClient.GetMetadata(ctx, &imds.GetMetadataInput{Path: "instance-id"})
 	if err != nil {
 		return nil, fmt.Errorf("error querying ec2 metadata service (for instance-id): %w", err)
 	}

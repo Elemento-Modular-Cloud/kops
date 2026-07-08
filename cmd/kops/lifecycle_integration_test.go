@@ -56,7 +56,7 @@ func (o *LifecycleTestOptions) AddDefaults() {
 		o.Version = "v1alpha2"
 	}
 	if o.ClusterName == "" {
-		o.ClusterName = strings.Replace(o.SrcDir, "_", "", -1) + ".example.com"
+		o.ClusterName = strings.ReplaceAll(o.SrcDir, "_", "") + ".example.com"
 	}
 
 	o.SrcDir = "../../tests/integration/update_cluster/" + o.SrcDir
@@ -376,7 +376,7 @@ func runLifecycleTestAWS(o *LifecycleTestOptions) {
 	h := testutils.NewIntegrationTestHarness(o.t)
 	defer h.Close()
 
-	h.MockKopsVersion("1.21.0-alpha.1")
+	h.MockKopsVersion("1.34.0-beta.1")
 	cloud := h.SetupMockAWS()
 
 	var beforeIds []string
@@ -408,7 +408,7 @@ func runLifecycleTestOpenstack(o *LifecycleTestOptions) {
 	h := testutils.NewIntegrationTestHarness(o.t)
 	defer h.Close()
 
-	h.MockKopsVersion("1.21.0-alpha.1")
+	h.MockKopsVersion("1.34.0-beta.1")
 	cloud := testutils.SetupMockOpenstack()
 
 	var beforeIds []string
@@ -461,7 +461,7 @@ func runLifecycleTestGCE(o *LifecycleTestOptions) {
 	h := testutils.NewIntegrationTestHarness(o.t)
 	defer h.Close()
 
-	h.MockKopsVersion("1.21.0-alpha.1")
+	h.MockKopsVersion("1.34.0-beta.1")
 
 	cloud := h.SetupMockGCE()
 

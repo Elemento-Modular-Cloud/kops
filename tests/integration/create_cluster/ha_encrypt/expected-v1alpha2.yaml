@@ -52,7 +52,7 @@ spec:
   kubernetesApiAccess:
   - 0.0.0.0/0
   - ::/0
-  kubernetesVersion: v1.21.0
+  kubernetesVersion: v1.35.0
   networkCIDR: 172.20.0.0/16
   networking:
     cni: {}
@@ -87,12 +87,12 @@ metadata:
     kops.k8s.io/cluster: ha.example.com
   name: control-plane-us-test-1a
 spec:
-  image: 099720109477/ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20250210
-  instanceMetadata:
-    httpTokens: required
+  image: 099720109477/ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20260610
   machineType: m3.medium
   maxSize: 1
   minSize: 1
+  nodeLabels:
+    kops.k8s.io/instancegroup: control-plane-us-test-1a
   role: Master
   subnets:
   - us-test-1a
@@ -107,12 +107,12 @@ metadata:
     kops.k8s.io/cluster: ha.example.com
   name: control-plane-us-test-1b
 spec:
-  image: 099720109477/ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20250210
-  instanceMetadata:
-    httpTokens: required
+  image: 099720109477/ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20260610
   machineType: m3.medium
   maxSize: 1
   minSize: 1
+  nodeLabels:
+    kops.k8s.io/instancegroup: control-plane-us-test-1b
   role: Master
   subnets:
   - us-test-1b
@@ -127,12 +127,12 @@ metadata:
     kops.k8s.io/cluster: ha.example.com
   name: control-plane-us-test-1c
 spec:
-  image: 099720109477/ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20250210
-  instanceMetadata:
-    httpTokens: required
+  image: 099720109477/ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20260610
   machineType: m3.medium
   maxSize: 1
   minSize: 1
+  nodeLabels:
+    kops.k8s.io/instancegroup: control-plane-us-test-1c
   role: Master
   subnets:
   - us-test-1c
@@ -147,13 +147,12 @@ metadata:
     kops.k8s.io/cluster: ha.example.com
   name: nodes-us-test-1a
 spec:
-  image: 099720109477/ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20250210
-  instanceMetadata:
-    httpPutResponseHopLimit: 1
-    httpTokens: required
+  image: 099720109477/ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20260610
   machineType: t2.medium
   maxSize: 1
   minSize: 1
+  nodeLabels:
+    kops.k8s.io/instancegroup: nodes-us-test-1a
   role: Node
   subnets:
   - us-test-1a
@@ -168,13 +167,12 @@ metadata:
     kops.k8s.io/cluster: ha.example.com
   name: nodes-us-test-1b
 spec:
-  image: 099720109477/ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20250210
-  instanceMetadata:
-    httpPutResponseHopLimit: 1
-    httpTokens: required
+  image: 099720109477/ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20260610
   machineType: t2.medium
   maxSize: 1
   minSize: 1
+  nodeLabels:
+    kops.k8s.io/instancegroup: nodes-us-test-1b
   role: Node
   subnets:
   - us-test-1b
@@ -189,13 +187,12 @@ metadata:
     kops.k8s.io/cluster: ha.example.com
   name: nodes-us-test-1c
 spec:
-  image: 099720109477/ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20250210
-  instanceMetadata:
-    httpPutResponseHopLimit: 1
-    httpTokens: required
+  image: 099720109477/ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20260610
   machineType: t2.medium
   maxSize: 1
   minSize: 1
+  nodeLabels:
+    kops.k8s.io/instancegroup: nodes-us-test-1c
   role: Node
   subnets:
   - us-test-1c

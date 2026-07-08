@@ -42,7 +42,7 @@ func (m *instanceComputeMetadata) GetTags() (map[string]string, error) {
 	tags := map[string]string{}
 	l := strings.Split(m.Tags, ";")
 	for _, t := range l {
-		tl := strings.Split(t, ":")
+		tl := strings.SplitN(t, ":", 2)
 		if len(tl) != 2 {
 			return nil, fmt.Errorf("unexpected tag format: %s", tl)
 		}
@@ -146,7 +146,7 @@ func (c *Client) ListVMScaleSets(ctx context.Context) ([]*compute.VirtualMachine
 // ListVMSSNetworkInterfaces returns the interfaces that the specified VM ScaleSet has.
 func (c *Client) ListVMSSNetworkInterfaces(ctx context.Context, vmScaleSetName string) ([]*network.Interface, error) {
 	var l []*network.Interface
-	pager := c.interfacesClient.NewListPager(c.resourceGroupName(), nil)
+	pager := c.interfacesClient.NewListVirtualMachineScaleSetNetworkInterfacesPager(c.resourceGroupName(), vmScaleSetName, nil)
 	for pager.More() {
 		resp, err := pager.NextPage(ctx)
 		if err != nil {

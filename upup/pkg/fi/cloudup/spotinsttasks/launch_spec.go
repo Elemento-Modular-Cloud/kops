@@ -127,7 +127,7 @@ func (o *LaunchSpec) find(svc spotinst.LaunchSpecService, oceanID string) (*aws.
 	return out, nil
 }
 
-var _ fi.CloudupHasCheckExisting = &LaunchSpec{}
+var _ fi.CloudupHasCheckExisting = (*LaunchSpec)(nil)
 
 func (o *LaunchSpec) Find(c *fi.CloudupContext) (*LaunchSpec, error) {
 	cloud := awsup.GetCloud(c)
@@ -160,7 +160,7 @@ func (o *LaunchSpec) Find(c *fi.CloudupContext) (*LaunchSpec, error) {
 	// Image.
 	{
 		//		convert spec from api that reply for multi arch data only in spec.images
-		if spec.Images != nil && len(spec.Images) > 1 {
+		if len(spec.Images) > 1 {
 			spec.SetImageId(fi.PtrTo(fi.ValueOf(spec.Images[0].ImageId)))
 			actual.OtherArchitectureImages = append(actual.OtherArchitectureImages, fi.ValueOf(spec.Images[1].ImageId))
 		}
@@ -411,7 +411,7 @@ func (_ *LaunchSpec) create(cloud awsup.AWSCloud, a, e, changes *LaunchSpec) err
 
 	// Image.
 	{
-		if e.ImageID != nil && len(e.OtherArchitectureImages) == 0 { //old api
+		if e.ImageID != nil && len(e.OtherArchitectureImages) == 0 { // old api
 			image, err := resolveImage(cloud, fi.ValueOf(e.ImageID))
 			if err != nil {
 				return err
@@ -635,7 +635,7 @@ func (_ *LaunchSpec) update(cloud awsup.AWSCloud, a, e, changes *LaunchSpec) err
 
 	// Image.
 	{
-		if changes.ImageID != nil { //old api
+		if changes.ImageID != nil { // old api
 			image, err := resolveImage(cloud, fi.ValueOf(e.ImageID))
 			if err != nil {
 				return err
@@ -1175,11 +1175,11 @@ func (o *LaunchSpec) convertBlockDeviceMapping(in *awstasks.BlockDeviceMapping) 
 
 	return out
 }
-func buildImages(cloud awsup.AWSCloud, ImageID *string, OtherArchitectureImages []string) ([]*aws.Images, error) {
+func buildImages(cloud awsup.AWSCloud, imageID *string, OtherArchitectureImages []string) ([]*aws.Images, error) {
 	var imagesSlice []*aws.Images
 	var imageIndex = 0
-	if ImageID != nil {
-		image, err := resolveImage(cloud, fi.ValueOf(ImageID))
+	if imageID != nil {
+		image, err := resolveImage(cloud, fi.ValueOf(imageID))
 		if err != nil {
 			return nil, err
 		}

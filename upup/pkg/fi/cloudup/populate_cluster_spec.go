@@ -69,14 +69,13 @@ func PopulateClusterSpec(ctx context.Context, clientset simple.Clientset, cluste
 	return c.fullCluster, nil
 }
 
-// Here be dragons
-//
-// This function has some `interesting` things going on.
-// In an effort to let the cluster.Spec fall through I am
-// hard coding topology in two places.. It seems and feels
-// very wrong.. but at least now my new cluster.Spec.Topology
-// struct is falling through..
-// @kris-nova
+// run implements the main logic of "filling in" the details of a cluster.
+// Some logic is built into this function (and probably should be refactored out),
+// but the majority of the logic is delegated to OptionsBuilder implementations.
+// So that we don't have to be very careful about convergence, we run the list of OptionsBuilders
+// repeatedly until convergence (defined as no changes).
+// In general, an OptionsBuilder should populate only if the field is not already set
+// (it may have been set by a user).
 func (c *populateClusterSpec) run(ctx context.Context, clientset simple.Clientset) error {
 	if errs := validation.ValidateCluster(c.InputCluster, false, clientset.VFSContext()); len(errs) != 0 {
 		return errs.ToAggregate()
@@ -228,12 +227,12 @@ func (c *populateClusterSpec) run(ctx context.Context, clientset simple.Clientse
 
 			haveAPIServerNodes := false
 			for _, ig := range c.InputInstanceGroups {
-				if ig.Spec.Role == kopsapi.InstanceGroupRoleAPIServer {
+				if ig.Spec.Role.HasAPIServer() {
 					haveAPIServerNodes = true
 				}
 			}
 			for _, ig := range c.InputInstanceGroups {
-				if ig.Spec.Role == kopsapi.InstanceGroupRoleAPIServer || (!haveAPIServerNodes && ig.Spec.Role == kopsapi.InstanceGroupRoleControlPlane) {
+				if ig.Spec.Role.HasAPIServer() || (!haveAPIServerNodes && ig.Spec.Role.HasControlPlane()) {
 					for _, subnet := range ig.Spec.Subnets {
 						switch subnetTypesByName[subnet] {
 						case kopsapi.SubnetTypePrivate:
@@ -285,9 +284,10 @@ func (c *populateClusterSpec) run(ctx context.Context, clientset simple.Clientse
 			cluster.Spec.API.PublicName = "api." + cluster.Name
 		}
 		if cluster.Spec.ExternalDNS == nil {
-			cluster.Spec.ExternalDNS = &kopsapi.ExternalDNSConfig{
-				Provider: kopsapi.ExternalDNSProviderDNSController,
-			}
+			cluster.Spec.ExternalDNS = &kopsapi.ExternalDNSConfig{}
+		}
+		if cluster.Spec.ExternalDNS.Provider == "" {
+			cluster.Spec.ExternalDNS.Provider = kopsapi.ExternalDNSProviderDNSController
 		}
 	}
 
@@ -329,7 +329,9 @@ func (c *populateClusterSpec) run(ctx context.Context, clientset simple.Clientse
 			codeModels = append(codeModels, &components.AWSCloudControllerManagerOptionsBuilder{OptionsContext: optionsContext})
 			codeModels = append(codeModels, &components.GCPCloudControllerManagerOptionsBuilder{OptionsContext: optionsContext})
 			codeModels = append(codeModels, &components.GCPPDCSIDriverOptionsBuilder{OptionsContext: optionsContext})
+			codeModels = append(codeModels, &components.AzureCloudControllerManagerOptionsBuilder{OptionsContext: optionsContext})
 			codeModels = append(codeModels, &components.HetznerCloudControllerManagerOptionsBuilder{OptionsContext: optionsContext})
+			codeModels = append(codeModels, &components.LinodeCloudControllerManagerOptionsBuilder{OptionsContext: optionsContext})
 			codeModels = append(codeModels, &components.KarpenterOptionsBuilder{Context: optionsContext})
 		}
 	}

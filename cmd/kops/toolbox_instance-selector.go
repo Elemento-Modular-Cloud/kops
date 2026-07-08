@@ -22,8 +22,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/aws/amazon-ec2-instance-selector/v2/pkg/cli"
-	"github.com/aws/amazon-ec2-instance-selector/v2/pkg/selector"
+	"github.com/aws/amazon-ec2-instance-selector/v3/pkg/cli"
+	"github.com/aws/amazon-ec2-instance-selector/v3/pkg/selector"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -520,7 +520,8 @@ func decorateWithMixedInstancesPolicy(instanceGroup *kops.InstanceGroup, usageCl
 	ig := instanceGroup
 	ig.Spec.MachineType = instanceSelections[0]
 
-	if usageClass == ec2types.UsageClassTypeSpot {
+	switch usageClass {
+	case ec2types.UsageClassTypeSpot:
 		ondemandBase := int64(0)
 		ondemandAboveBase := int64(0)
 		spotAllocationStrategy := "capacity-optimized"
@@ -530,11 +531,11 @@ func decorateWithMixedInstancesPolicy(instanceGroup *kops.InstanceGroup, usageCl
 			OnDemandAboveBase:      &ondemandAboveBase,
 			SpotAllocationStrategy: &spotAllocationStrategy,
 		}
-	} else if usageClass == ec2types.UsageClassTypeOnDemand {
+	case ec2types.UsageClassTypeOnDemand:
 		ig.Spec.MixedInstancesPolicy = &kops.MixedInstancesPolicySpec{
 			Instances: instanceSelections,
 		}
-	} else {
+	default:
 		return nil, fmt.Errorf("error node usage class not supported")
 	}
 

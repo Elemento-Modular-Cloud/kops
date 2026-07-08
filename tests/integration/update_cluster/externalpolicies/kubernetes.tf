@@ -552,6 +552,23 @@ resource "aws_launch_template" "master-us-test-1a-masters-externalpolicies-examp
       "kubernetes.io/cluster/externalpolicies.example.com"                                                    = "owned"
     }
   }
+  tag_specifications {
+    resource_type = "network-interface"
+    tags = {
+      "KubernetesCluster"                                                                                     = "externalpolicies.example.com"
+      "Name"                                                                                                  = "master-us-test-1a.masters.externalpolicies.example.com"
+      "Owner"                                                                                                 = "John Doe"
+      "aws-node-termination-handler/managed"                                                                  = ""
+      "foo/bar"                                                                                               = "fib+baz"
+      "k8s.io/cluster-autoscaler/node-template/label/kops.k8s.io/kops-controller-pki"                         = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node-role.kubernetes.io/control-plane"                   = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node.kubernetes.io/exclude-from-external-load-balancers" = ""
+      "k8s.io/role/control-plane"                                                                             = "1"
+      "k8s.io/role/master"                                                                                    = "1"
+      "kops.k8s.io/instancegroup"                                                                             = "master-us-test-1a"
+      "kubernetes.io/cluster/externalpolicies.example.com"                                                    = "owned"
+    }
+  }
   tags = {
     "KubernetesCluster"                                                                                     = "externalpolicies.example.com"
     "Name"                                                                                                  = "master-us-test-1a.masters.externalpolicies.example.com"
@@ -622,6 +639,20 @@ resource "aws_launch_template" "nodes-externalpolicies-example-com" {
   }
   tag_specifications {
     resource_type = "volume"
+    tags = {
+      "KubernetesCluster"                                                          = "externalpolicies.example.com"
+      "Name"                                                                       = "nodes.externalpolicies.example.com"
+      "Owner"                                                                      = "John Doe"
+      "aws-node-termination-handler/managed"                                       = ""
+      "foo/bar"                                                                    = "fib+baz"
+      "k8s.io/cluster-autoscaler/node-template/label/node-role.kubernetes.io/node" = ""
+      "k8s.io/role/node"                                                           = "1"
+      "kops.k8s.io/instancegroup"                                                  = "nodes"
+      "kubernetes.io/cluster/externalpolicies.example.com"                         = "owned"
+    }
+  }
+  tag_specifications {
+    resource_type = "network-interface"
     tags = {
       "KubernetesCluster"                                                          = "externalpolicies.example.com"
       "Name"                                                                       = "nodes.externalpolicies.example.com"
@@ -807,6 +838,14 @@ resource "aws_s3_object" "kops-version-txt" {
   bucket                 = "testingBucket"
   content                = file("${path.module}/data/aws_s3_object_kops-version.txt_content")
   key                    = "clusters.example.com/externalpolicies.example.com/kops-version.txt"
+  provider               = aws.files
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_object" "manifests-channels-kops-channels" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_object_manifests-channels-kops-channels_content")
+  key                    = "clusters.example.com/externalpolicies.example.com/manifests/channels/kops-channels.yaml"
   provider               = aws.files
   server_side_encryption = "AES256"
 }

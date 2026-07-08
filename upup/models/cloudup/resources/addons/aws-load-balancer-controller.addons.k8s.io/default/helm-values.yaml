@@ -1,0 +1,75 @@
+# Helm values for aws-load-balancer-controller — non-IRSA variant.
+#
+# The controller runs on control-plane nodes with hostNetwork so it can use the
+# node IAM role for AWS API calls. The IRSA variant (../irsa/) drops that and
+# lets the chart defaults schedule the controller on any node.
+#
+# To regenerate the manifests:
+#   cd upup/models/cloudup/resources/addons/aws-load-balancer-controller.addons.k8s.io
+#   ./regenerate.sh
+
+# `{{`{{ ClusterName }}`}}` is an escaped Go template. The chart passes
+# clusterName and region through `tpl`, so the outer `{{` renders to a literal
+# `{{`, leaving a Go-template expression in the output for kops to evaluate.
+clusterName: "{{`{{ ClusterName }}`}}"
+region: "{{`{{ Region }}`}}"
+
+# Chart does a plain string substitution for the image tag (no tpl), so the
+# Go-template expression passes through to the rendered manifest. Backticks
+# rather than `"v3.2.2"` — the chart wraps the final image in double quotes.
+image:
+  repository: public.ecr.aws/eks/aws-load-balancer-controller
+  tag: '{{ or .CloudProvider.AWS.LoadBalancerController.Version `v3.3.0` }}'
+
+metricsBindAddr: ":9442"
+
+resources:
+  limits:
+    cpu: '{{ or .CloudProvider.AWS.LoadBalancerController.CPULimit "200m" }}'
+    memory: '{{ or .CloudProvider.AWS.LoadBalancerController.MemoryLimit "500Mi" }}'
+  requests:
+    cpu: '{{ or .CloudProvider.AWS.LoadBalancerController.CPURequest "100m" }}'
+    memory: '{{ or .CloudProvider.AWS.LoadBalancerController.MemoryRequest "200Mi" }}'
+
+# kops runs cert-manager for webhook TLS. Chart creates a selfsigned Issuer,
+# a root CA Certificate and a root Issuer; the root pair is deleted via
+# kustomize and the serving cert is re-pointed at the selfsigned Issuer.
+enableCertManager: true
+
+# Exclude kube-system from the `mservice` webhook so kops-managed Services
+# (e.g. dns-controller) are never routed through the controller.
+serviceMutatorWebhookConfig:
+  namespaceSelectors:
+    - key: kubernetes.io/metadata.name
+      operator: NotIn
+      values:
+        - kube-system
+
+replicaCount: 1
+
+# Container args, env and resources are applied via kustomize patches so Go
+# template expressions are preserved.
+
+hostNetwork: true
+
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+  - key: node-role.kubernetes.io/master
+    operator: Exists
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+        - matchExpressions:
+            - key: node-role.kubernetes.io/master
+              operator: Exists
+
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 0

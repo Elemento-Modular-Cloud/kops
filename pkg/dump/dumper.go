@@ -21,7 +21,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -32,6 +31,7 @@ import (
 	"golang.org/x/crypto/ssh/agent"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
+	"k8s.io/kops/pkg/resources"
 )
 
 // logDumper gets all the nodes from a kubernetes cluster and dumps a well-known set of logs
@@ -40,25 +40,33 @@ type logDumper struct {
 
 	artifactsDir string
 
+	// nodeDumpTimeout bounds the time spent connecting to and dumping a single node.
+	nodeDumpTimeout time.Duration
+
 	services     []string
 	files        []string
 	podSelectors []string
 }
 
 // NewLogDumper is the constructor for a logDumper
-func NewLogDumper(bastionAddress string, sshConfig *ssh.ClientConfig, keyRing agent.Agent, artifactsDir string) *logDumper {
+func NewLogDumper(bastionAddress string, sshConfig *ssh.ClientConfig, keyRing agent.Agent, artifactsDir string, nodeDumpTimeout time.Duration) *logDumper {
 	sshClientFactory := &sshClientFactoryImplementation{
 		keyRing:   keyRing,
 		sshConfig: sshConfig,
 	}
 	if bastionAddress != "" {
-		log.Printf("detected a bastion instance, with the address: %s", bastionAddress)
+		klog.Infof("detected a bastion instance, with the address: %s", bastionAddress)
 		sshClientFactory.bastion = bastionAddress
+	}
+
+	if nodeDumpTimeout <= 0 {
+		nodeDumpTimeout = defaultNodeDumpTimeout
 	}
 
 	d := &logDumper{
 		sshClientFactory: sshClientFactory,
 		artifactsDir:     artifactsDir,
+		nodeDumpTimeout:  nodeDumpTimeout,
 	}
 
 	d.services = []string{
@@ -78,6 +86,7 @@ func NewLogDumper(bastionAddress string, sshConfig *ssh.ClientConfig, keyRing ag
 		"etcd",
 		"etcd-events",
 		"etcd-cilium",
+		"etcd-leases",
 		"glbc",
 		"cluster-autoscaler",
 		"kube-addon-manager",
@@ -94,6 +103,7 @@ func NewLogDumper(bastionAddress string, sshConfig *ssh.ClientConfig, keyRing ag
 	d.podSelectors = []string{
 		"k8s-app=external-dns",
 		"k8s-app=dns-controller",
+		"k8s-app=kops-channels",
 	}
 
 	return d
@@ -104,84 +114,102 @@ func NewLogDumper(bastionAddress string, sshConfig *ssh.ClientConfig, keyRing ag
 // if the IPs are not found from kubectl get nodes, then these will be dumped also.
 // This allows for dumping log on nodes even if they don't register as a kubernetes
 // node, or if a node fails to register, or if the whole cluster fails to start.
-func (d *logDumper) DumpAllNodes(ctx context.Context, nodes corev1.NodeList, maxNodesToDump int, additionalIPs, additionalPrivateIPs []string) error {
-	var special, regular, dumped []*corev1.Node
+func (d *logDumper) DumpAllNodes(ctx context.Context, nodes corev1.NodeList, maxNodesToDump int, cloudDump *resources.Dump) error {
+	var special, regular []*corev1.Node
+	var missingK8sNodes []*resources.Instance
+	var dumped []string
 
-	log.Printf("starting to dump %d nodes fetched through the Kubernetes APIs", len(nodes.Items))
-	for i := range nodes.Items {
-		node := &nodes.Items[i]
+	foundInstanceNames := make(map[string]struct{})
 
-		if _, ok := node.Labels["node-role.kubernetes.io/master"]; ok {
-			special = append(special, node)
-			continue
-		}
-		if _, ok := node.Labels["node-role.kubernetes.io/control-plane"]; ok {
-			special = append(special, node)
-			continue
-		}
-		if _, ok := node.Labels["node-role.kubernetes.io/api-server"]; ok {
-			special = append(special, node)
-			continue
-		}
+	var cloudInstances []*resources.Instance
 
-		regular = append(regular, node)
+	if cloudDump != nil {
+		cloudInstances = cloudDump.Instances
 	}
+
+	for _, cloudNode := range cloudInstances {
+		for _, k8sNode := range nodes.Items {
+			if k8sNode.Name == cloudNode.Name {
+				foundInstanceNames[cloudNode.Name] = struct{}{}
+				if _, ok := k8sNode.Labels["node-role.kubernetes.io/master"]; ok {
+					special = append(special, &k8sNode)
+					continue
+				}
+				if _, ok := k8sNode.Labels["node-role.kubernetes.io/control-plane"]; ok {
+					special = append(special, &k8sNode)
+					continue
+				}
+				if _, ok := k8sNode.Labels["node-role.kubernetes.io/api-server"]; ok {
+					special = append(special, &k8sNode)
+					continue
+				}
+				regular = append(regular, &k8sNode)
+			}
+		}
+	}
+
+	for _, cloudNode := range cloudInstances {
+		if _, found := foundInstanceNames[cloudNode.Name]; !found {
+			missingK8sNodes = append(missingK8sNodes, cloudNode)
+		}
+	}
+
+	if len(missingK8sNodes) > 0 {
+		klog.V(2).Infof("number of nodes from kubernetes (%d) differs from number of instances from cloud resources (%d)", len(nodes.Items), len(cloudInstances))
+	}
+
+	// Dumping priority
+	// 1. control plane & special nodes
+	// 2. IP of nodes that haven't joined the kubernetes cluster aka unregistered nodes
+	// 3. remaining Kubernetes
+
+	klog.Infof("starting to dump %d control plane nodes fetched through the Kubernetes APIs", len(special))
 
 	for i := range special {
 		node := special[i]
-		err := d.dumpRegistered(ctx, node)
+		ip, err := d.dumpRegistered(ctx, node)
 		if err != nil {
-			log.Printf("could not dump node %s: %v", node.Name, err)
+			klog.Infof("could not dump node %s: %v", node.Name, err)
 		} else {
-			dumped = append(dumped, node)
+			dumped = append(dumped, ip)
+		}
+	}
+
+	for i := range missingK8sNodes {
+		if len(dumped) >= maxNodesToDump {
+			klog.Infof("stopping dumping nodes: %d nodes dumped", maxNodesToDump)
+			return nil
+		}
+		node := missingK8sNodes[i]
+		ip, err := d.dumpNotRegistered(ctx, node)
+		if err != nil {
+			klog.Infof("could not dump node %s: %v", node.Name, err)
+		} else {
+			dumped = append(dumped, ip)
 		}
 	}
 
 	for i := range regular {
 		if len(dumped) >= maxNodesToDump {
-			log.Printf("stopping dumping nodes: %d nodes dumped", maxNodesToDump)
+			klog.Infof("stopping dumping nodes: %d nodes dumped", maxNodesToDump)
 			return nil
 		}
 		node := regular[i]
-		err := d.dumpRegistered(ctx, node)
+		ip, err := d.dumpRegistered(ctx, node)
 		if err != nil {
-			log.Printf("could not dump node %s: %v", node.Name, err)
+			klog.Infof("could not dump node %s: %v", node.Name, err)
 		} else {
-			dumped = append(dumped, node)
-		}
-	}
-
-	notDumped := findInstancesNotDumped(additionalIPs, dumped)
-	for _, ip := range notDumped {
-		if len(dumped) >= maxNodesToDump {
-			log.Printf("stopping dumping nodes: %d nodes dumped", maxNodesToDump)
-			return nil
-		}
-		err := d.dumpNotRegistered(ctx, ip, false)
-		if err != nil {
-			return err
-		}
-	}
-
-	notDumped = findInstancesNotDumped(additionalPrivateIPs, dumped)
-	for _, ip := range notDumped {
-		if len(dumped) >= maxNodesToDump {
-			log.Printf("stopping dumping nodes: %d nodes dumped", maxNodesToDump)
-			return nil
-		}
-		err := d.dumpNotRegistered(ctx, ip, true)
-		if err != nil {
-			return err
+			dumped = append(dumped, ip)
 		}
 	}
 
 	return nil
 }
 
-func (d *logDumper) dumpRegistered(ctx context.Context, node *corev1.Node) error {
+func (d *logDumper) dumpRegistered(ctx context.Context, node *corev1.Node) (string, error) {
 	if ctx.Err() != nil {
-		log.Printf("stopping dumping nodes: %v", ctx.Err())
-		return ctx.Err()
+		klog.Infof("stopping dumping nodes: %v", ctx.Err())
+		return "", ctx.Err()
 	}
 
 	var publicIP, privateIP string
@@ -197,48 +225,41 @@ func (d *logDumper) dumpRegistered(ctx context.Context, node *corev1.Node) error
 	}
 
 	if publicIP != "" {
-		return d.dumpNode(ctx, node.Name, publicIP, false)
+		return publicIP, d.dumpNode(ctx, node.Name, publicIP, false)
 	} else {
 		useBastion := true
 		if !d.sshClientFactory.HasBastion() {
 			klog.Warningf("no bastion address set, will attempt to connect to node %s directly via private IP %v", node.Name, privateIP)
 			useBastion = false
 		}
-		return d.dumpNode(ctx, node.Name, privateIP, useBastion)
+		return privateIP, d.dumpNode(ctx, node.Name, privateIP, useBastion)
 	}
 }
 
-func (d *logDumper) dumpNotRegistered(ctx context.Context, ip string, useBastion bool) error {
+func (d *logDumper) dumpNotRegistered(ctx context.Context, node *resources.Instance) (string, error) {
 	if ctx.Err() != nil {
-		log.Printf("stopping dumping nodes: %v", ctx.Err())
-		return ctx.Err()
+		klog.Infof("stopping dumping nodes: %v", ctx.Err())
+		return "", ctx.Err()
 	}
 
-	log.Printf("dumping node not registered in kubernetes: %s", ip)
-	err := d.dumpNode(ctx, ip, ip, useBastion)
-	if err != nil {
-		log.Printf("error dumping node %s: %v", ip, err)
+	klog.Infof("dumping node not registered in kubernetes: %s", node.Name)
+	if len(node.PublicAddresses) > 0 {
+		return node.PublicAddresses[0], d.dumpNode(ctx, node.PublicAddresses[0], node.PublicAddresses[0], false)
 	}
-	return nil
+
+	if len(node.PrivateAddresses) > 0 {
+		return node.PrivateAddresses[0], d.dumpNode(ctx, node.PrivateAddresses[0], node.PrivateAddresses[0], true)
+	}
+	return "", fmt.Errorf("no known addresses for node %s", node.Name)
 }
 
-// findInstancesNotDumped returns ips from the slice that do not appear as any address of the nodes
-func findInstancesNotDumped(ips []string, dumped []*corev1.Node) []string {
-	var notDumped []string
-	dumpedAddresses := make(map[string]bool)
-	for _, node := range dumped {
-		for _, address := range node.Status.Addresses {
-			dumpedAddresses[address.Address] = true
-		}
-	}
-
-	for _, ip := range ips {
-		if !dumpedAddresses[ip] {
-			notDumped = append(notDumped, ip)
-		}
-	}
-	return notDumped
-}
+// defaultNodeDumpTimeout bounds the time spent connecting to and dumping a single node.
+// A healthy node dumps in well under a minute. Without this cap, an SSH operation
+// against an unreachable node blocks until the OS TCP timeout (~15 min) expires.
+// Large clusters dump multi-GB logs per node and need a higher value, configurable
+// via the --node-dump-timeout flag, because the files are dumped sequentially and a
+// single oversized log can otherwise exhaust the budget before the rest are read.
+const defaultNodeDumpTimeout = time.Minute
 
 // DumpNode connects to a node and dumps the logs.
 func (d *logDumper) dumpNode(ctx context.Context, name string, ip string, useBastion bool) error {
@@ -246,7 +267,10 @@ func (d *logDumper) dumpNode(ctx context.Context, name string, ip string, useBas
 		return fmt.Errorf("could not find address for %v, ", name)
 	}
 
-	log.Printf("Dumping node %s", name)
+	klog.Infof("Dumping node %s", name)
+
+	ctx, cancel := context.WithTimeout(ctx, d.nodeDumpTimeout)
+	defer cancel()
 
 	n, err := d.connectToNode(ctx, name, ip, useBastion)
 	if err != nil {
@@ -259,11 +283,11 @@ func (d *logDumper) dumpNode(ctx context.Context, name string, ip string, useBas
 	// TODO(justinsb): clean up / rationalize
 	errors := n.dump(ctx)
 	for _, e := range errors {
-		log.Printf("error dumping node %s: %v", name, e)
+		klog.Warningf("error dumping node %s: %v", name, e)
 	}
 
 	if err := n.Close(); err != nil {
-		log.Printf("error closing connection: %v", err)
+		klog.Warningf("error closing connection: %v", err)
 	}
 
 	return nil
@@ -403,6 +427,31 @@ func (n *logDumperNode) dump(ctx context.Context) []error {
 		errors = append(errors, err)
 	}
 
+	if err := n.shellToFile(ctx, "cat /var/lib/kubelet/kubelet.conf", filepath.Join(n.dir, "kubelet.conf")); err != nil {
+		errors = append(errors, err)
+	}
+
+	if err := n.shellToFile(ctx, "cat /proc/modules", filepath.Join(n.dir, "modules")); err != nil {
+		errors = append(errors, err)
+	}
+
+	// Capture containerd configuration files (config.toml, CNI templates, certs.d hosts.toml).
+	containerdFiles, err := n.findFiles(ctx, "/etc/containerd")
+	if err != nil {
+		errors = append(errors, fmt.Errorf("error listing /etc/containerd: %v", err))
+	}
+	for _, f := range containerdFiles {
+		if !strings.HasSuffix(f, ".toml") && !strings.HasSuffix(f, ".template") {
+			continue
+		}
+		rel := strings.TrimPrefix(f, "/etc/containerd/")
+		dest := filepath.Join(n.dir, "containerd", rel)
+		cmd := "sudo cat '" + strings.ReplaceAll(f, "'", `'\''`) + "'"
+		if err := n.shellToFile(ctx, cmd, dest); err != nil {
+			errors = append(errors, err)
+		}
+	}
+
 	return errors
 }
 
@@ -411,7 +460,7 @@ func (n *logDumperNode) findFiles(ctx context.Context, dir string) ([]string, er
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	err := n.client.ExecPiped(ctx, "sudo find "+dir+" -print0", &stdout, &stderr)
+	err := n.client.ExecPiped(ctx, "sudo find "+dir+" -type f -print0", &stdout, &stderr)
 	if err != nil {
 		return nil, fmt.Errorf("error listing %q: %v", dir, err)
 	}
@@ -451,7 +500,7 @@ func (n *logDumperNode) listSystemdUnits(ctx context.Context) ([]string, error) 
 // shellToFile executes a command and copies the output to a file
 func (n *logDumperNode) shellToFile(ctx context.Context, command string, destPath string) error {
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
-		log.Printf("unable to mkdir on %q: %v", filepath.Dir(destPath), err)
+		klog.Warningf("unable to mkdir on %q: %v", filepath.Dir(destPath), err)
 	}
 
 	f, err := os.Create(destPath)
@@ -504,7 +553,7 @@ func (s *sshClientImplementation) ExecPiped(ctx context.Context, cmd string, std
 
 	select {
 	case <-ctx.Done():
-		log.Print("closing SSH tcp connection due to context completion")
+		klog.Infof("closing SSH tcp connection due to context completion")
 
 		// terminate the TCP connection to force a disconnect - we assume everyone is using the same context.
 		// We could make this better by sending a signal on the session, waiting and then closing the session,
@@ -613,7 +662,7 @@ func (f *sshClientFactoryImplementation) Dial(ctx context.Context, host string, 
 
 	select {
 	case <-ctx.Done():
-		log.Print("cancelling SSH tcp connection due to context completion")
+		klog.Infof("cancelling SSH tcp connection due to context completion")
 		conn.Close() // Close the TCP connection to force cancellation
 		<-finished   // Wait for cancellation
 		return nil, ctx.Err()

@@ -181,6 +181,7 @@ func Convert_v1alpha2_ClusterSpec_To_kops_ClusterSpec(in *ClusterSpec, out *kops
 			string(kops.CloudProviderAzure),
 			string(kops.CloudProviderAWS),
 			string(kops.CloudProviderHetzner),
+			string(kops.CloudProviderLinode),
 			string(kops.CloudProviderOpenstack),
 			string(kops.CloudProviderScaleway),
 			string(kops.CloudProviderElemento),
@@ -221,6 +222,13 @@ func Convert_v1alpha2_ClusterSpec_To_kops_ClusterSpec(in *ClusterSpec, out *kops
 			}
 			val := *in.CloudConfig.ElbSecurityGroup
 			out.CloudProvider.AWS.ElbSecurityGroup = &val
+		}
+		if in.CloudConfig.NLBSecurityGroupMode != nil {
+			if out.CloudProvider.AWS == nil {
+				return field.Forbidden(field.NewPath("spec").Child("cloudConfig", "nlbSecurityGroupMode"), "nlbSecurityGroupMode supports only AWS")
+			}
+			val := *in.CloudConfig.NLBSecurityGroupMode
+			out.CloudProvider.AWS.NLBSecurityGroupMode = &val
 		}
 		if in.CloudConfig.GCPPDCSIDriver != nil {
 			if out.CloudProvider.GCE == nil {
@@ -443,6 +451,9 @@ func Convert_kops_ClusterSpec_To_v1alpha2_ClusterSpec(in *kops.ClusterSpec, out 
 	if in.CloudProvider.Scaleway != nil {
 		out.LegacyCloudProvider = string(kops.CloudProviderScaleway)
 	}
+	if in.CloudProvider.Linode != nil {
+		out.LegacyCloudProvider = string(kops.CloudProviderLinode)
+  }
 	if in.CloudProvider.Elemento != nil {
 		out.LegacyCloudProvider = string(kops.CloudProviderElemento)
 	}
@@ -471,6 +482,13 @@ func Convert_kops_ClusterSpec_To_v1alpha2_ClusterSpec(in *kops.ClusterSpec, out 
 			}
 			val := *aws.ElbSecurityGroup
 			out.CloudConfig.ElbSecurityGroup = &val
+		}
+		if aws.NLBSecurityGroupMode != nil {
+			if out.CloudConfig == nil {
+				out.CloudConfig = &CloudConfiguration{}
+			}
+			val := *aws.NLBSecurityGroupMode
+			out.CloudConfig.NLBSecurityGroupMode = &val
 		}
 		if aws.NodeTerminationHandler != nil {
 			out.NodeTerminationHandler = &NodeTerminationHandlerSpec{}
@@ -643,6 +661,14 @@ func Convert_v1alpha2_ExternalDNSConfig_To_kops_ExternalDNSConfig(in *ExternalDN
 	return nil
 }
 
+func Convert_v1alpha2_KubeAPIServerConfig_To_kops_KubeAPIServerConfig(in *KubeAPIServerConfig, out *kops.KubeAPIServerConfig, s conversion.Scope) error {
+	return autoConvert_v1alpha2_KubeAPIServerConfig_To_kops_KubeAPIServerConfig(in, out, s)
+}
+
+func Convert_kops_KubeAPIServerConfig_To_v1alpha2_KubeAPIServerConfig(in *kops.KubeAPIServerConfig, out *KubeAPIServerConfig, s conversion.Scope) error {
+	return autoConvert_kops_KubeAPIServerConfig_To_v1alpha2_KubeAPIServerConfig(in, out, s)
+}
+
 func Convert_kops_ExternalDNSConfig_To_v1alpha2_ExternalDNSConfig(in *kops.ExternalDNSConfig, out *ExternalDNSConfig, s conversion.Scope) error {
 	if err := autoConvert_kops_ExternalDNSConfig_To_v1alpha2_ExternalDNSConfig(in, out, s); err != nil {
 		return err
@@ -675,7 +701,7 @@ func Convert_kops_HookSpec_To_v1alpha2_HookSpec(in *kops.HookSpec, out *HookSpec
 	}
 	if in.Roles != nil {
 		for i := range in.Roles {
-			if in.Roles[i] == kops.InstanceGroupRoleControlPlane {
+			if in.Roles[i].HasControlPlane() {
 				out.Roles[i] = "Master"
 			}
 		}
@@ -739,7 +765,7 @@ func Convert_kops_InstanceGroupSpec_To_v1alpha2_InstanceGroupSpec(in *kops.Insta
 	if err := autoConvert_kops_InstanceGroupSpec_To_v1alpha2_InstanceGroupSpec(in, out, s); err != nil {
 		return err
 	}
-	if in.Role == kops.InstanceGroupRoleControlPlane {
+	if in.Role.HasControlPlane() {
 		out.Role = "Master"
 	}
 	if in.RootVolume != nil {

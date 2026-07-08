@@ -41,10 +41,11 @@ type WarmPool struct {
 	// MinSize is the smallest number of nodes in the warm pool.
 	MinSize int32
 
+	// AutoscalingGroup is the AutoscalingGroup on which we configure this warmpool.
 	AutoscalingGroup *AutoscalingGroup
 }
 
-var _ fi.CloudupHasDependencies = &WarmPool{}
+var _ fi.CloudupHasDependencies = (*WarmPool)(nil)
 
 // Warmpool depends on any Lifecycle hooks being in place first.
 func (e *WarmPool) GetDependencies(tasks map[string]fi.CloudupTask) []fi.CloudupTask {
@@ -64,6 +65,13 @@ func (e *WarmPool) GetDependencies(tasks map[string]fi.CloudupTask) []fi.Cloudup
 		}
 	}
 	return deps
+}
+
+var _ fi.CompareWithID = (*WarmPool)(nil)
+
+// CompareWithID returns the ID of the WarmPool task
+func (e *WarmPool) CompareWithID() *string {
+	return e.Name
 }
 
 // Find is used to discover the ASG in the cloud provider.

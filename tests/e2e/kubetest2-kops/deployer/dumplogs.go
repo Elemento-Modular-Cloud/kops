@@ -25,7 +25,6 @@ import (
 
 	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/resources"
-	"k8s.io/kops/tests/e2e/pkg/kops"
 	"sigs.k8s.io/kubetest2/pkg/exec"
 	"sigs.k8s.io/yaml"
 )
@@ -48,6 +47,9 @@ func (d *deployer) DumpClusterLogs() error {
 	if d.MaxNodesToDump != "" {
 		args = append(args, "--max-nodes", d.MaxNodesToDump)
 	}
+	if d.NodeDumpTimeout > 0 {
+		args = append(args, "--node-dump-timeout", d.NodeDumpTimeout.String())
+	}
 	klog.Info(strings.Join(args, " "))
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.SetEnv(append(d.env(), "KOPS_TOOLBOX_DUMP_K8S_RESOURCES=1")...)
@@ -65,19 +67,6 @@ func (d *deployer) DumpClusterLogs() error {
 		dumpErr = errors.Join(dumpErr, err)
 	}
 
-	kopsVersion, err := kops.GetVersion(d.KopsBinaryPath)
-	if err != nil {
-		klog.Warningf("kops version failed: %v", err)
-		dumpErr = errors.Join(dumpErr, err)
-	}
-
-	if kopsVersion == "" || kopsVersion < "1.29" {
-		// TODO: remove when kubetest2-kops stops testing against kops 1.28 and older
-		if err := d.dumpClusterInfo(); err != nil {
-			klog.Warningf("cluster info dump failed: %v", err)
-			dumpErr = errors.Join(dumpErr, err)
-		}
-	}
 	return dumpErr
 }
 

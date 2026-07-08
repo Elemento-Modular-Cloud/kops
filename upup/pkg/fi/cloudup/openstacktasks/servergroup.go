@@ -37,7 +37,7 @@ type ServerGroup struct {
 	Lifecycle   fi.Lifecycle
 }
 
-var _ fi.CompareWithID = &ServerGroup{}
+var _ fi.CompareWithID = (*ServerGroup)(nil)
 
 func (s *ServerGroup) CompareWithID() *string {
 	return s.ID
@@ -163,7 +163,7 @@ func (_ *ServerGroup) RenderOpenstack(t *openstack.OpenstackAPITarget, a, e, cha
 
 				for currentLastIndex > fi.ValueOf(maxSize) {
 					iName := strings.ToLower(fmt.Sprintf("%s-%d.%s", igName, currentLastIndex, fi.ValueOf(a.ClusterName)))
-					instanceName := strings.Replace(iName, ".", "-", -1)
+					instanceName := strings.ReplaceAll(iName, ".", "-")
 					opts := servers.ListOpts{
 						Name: fmt.Sprintf("^%s", igName),
 					}

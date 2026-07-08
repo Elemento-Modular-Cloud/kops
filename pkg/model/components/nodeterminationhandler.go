@@ -35,15 +35,23 @@ func (b *NodeTerminationHandlerOptionsBuilder) BuildOptions(o *kops.Cluster) err
 	if clusterSpec.CloudProvider.AWS == nil {
 		return nil
 	}
+	if clusterSpec.Karpenter != nil && clusterSpec.Karpenter.Enabled {
+		// Karpenter manages its own NTH, so we disable the NTH addon.
+		// https://karpenter.sh/docs/troubleshooting/#aws-node-termination-handler-nth-interactions
+		return nil
+	}
 	if clusterSpec.CloudProvider.AWS.NodeTerminationHandler == nil {
 		clusterSpec.CloudProvider.AWS.NodeTerminationHandler = &kops.NodeTerminationHandlerSpec{}
 	}
 	nth := clusterSpec.CloudProvider.AWS.NodeTerminationHandler
-	if nth.DeleteSQSMsgIfNodeNotFound == nil {
-		nth.DeleteSQSMsgIfNodeNotFound = fi.PtrTo(false)
-	}
 	if nth.Enabled == nil {
 		nth.Enabled = fi.PtrTo(true)
+	}
+	if !fi.ValueOf(nth.Enabled) {
+		return nil
+	}
+	if nth.DeleteSQSMsgIfNodeNotFound == nil {
+		nth.DeleteSQSMsgIfNodeNotFound = fi.PtrTo(false)
 	}
 	if nth.EnableSpotInterruptionDraining == nil {
 		nth.EnableSpotInterruptionDraining = fi.PtrTo(true)
@@ -56,6 +64,10 @@ func (b *NodeTerminationHandlerOptionsBuilder) BuildOptions(o *kops.Cluster) err
 	}
 	if nth.EnableRebalanceDraining == nil {
 		nth.EnableRebalanceDraining = fi.PtrTo(false)
+	}
+
+	if nth.EnableOutOfServiceTaint == nil {
+		nth.EnableOutOfServiceTaint = fi.PtrTo(false)
 	}
 
 	if nth.EnablePrometheusMetrics == nil {
@@ -89,7 +101,7 @@ func (b *NodeTerminationHandlerOptionsBuilder) BuildOptions(o *kops.Cluster) err
 	}
 
 	if nth.Version == nil {
-		nth.Version = fi.PtrTo("v1.22.0")
+		nth.Version = fi.PtrTo("v1.25.5")
 	}
 
 	return nil

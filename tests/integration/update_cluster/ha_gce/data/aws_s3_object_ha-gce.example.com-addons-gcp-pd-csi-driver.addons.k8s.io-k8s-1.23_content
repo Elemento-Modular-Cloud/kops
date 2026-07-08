@@ -4,7 +4,6 @@ kind: StorageClass
 metadata:
   annotations:
     storageclass.kubernetes.io/is-default-class: "false"
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -24,7 +23,6 @@ kind: StorageClass
 metadata:
   annotations:
     storageclass.kubernetes.io/is-default-class: "true"
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -43,7 +41,26 @@ allowVolumeExpansion: true
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  creationTimestamp: null
+  labels:
+    addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
+    app.kubernetes.io/managed-by: kops
+    k8s-addon: gcp-pd-csi-driver.addons.k8s.io
+    kubernetes.io/cluster-service: "true"
+  name: balanced-storage
+parameters:
+  provisioned-iops-on-create: "5000"
+  provisioned-throughput-on-create: 250Mi
+  type: hyperdisk-balanced
+provisioner: pd.csi.storage.gke.io
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+
+---
+
+allowVolumeExpansion: true
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -61,7 +78,6 @@ volumeBindingMode: WaitForFirstConsumer
 apiVersion: v1
 kind: Namespace
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -73,7 +89,6 @@ metadata:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -86,7 +101,6 @@ metadata:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -99,7 +113,6 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -125,7 +138,6 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -180,7 +192,6 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -268,7 +279,6 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -324,7 +334,6 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -374,7 +383,6 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -396,7 +404,6 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -416,7 +423,6 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -436,7 +442,6 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -456,7 +461,6 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -476,7 +480,6 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -496,7 +499,6 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -516,7 +518,6 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -539,7 +540,6 @@ description: This priority class should be used for the GCE PD CSI driver contro
 globalDefault: false
 kind: PriorityClass
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -555,7 +555,6 @@ description: This priority class should be used for the GCE PD CSI driver node d
 globalDefault: false
 kind: PriorityClass
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -568,7 +567,6 @@ value: 900001000
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -582,7 +580,6 @@ spec:
       app: gcp-compute-persistent-disk-csi-driver
   template:
     metadata:
-      creationTimestamp: null
       labels:
         app: gcp-compute-persistent-disk-csi-driver
         kops.k8s.io/managed-by: kops
@@ -608,16 +605,6 @@ spec:
       containers:
       - args:
         - --v=5
-        - --endpoint=unix:/csi/csi.sock
-        - --extra-labels=k8s-io-cluster-name=ha-gce-example-com
-        env: []
-        image: registry.k8s.io/cloud-provider-gcp/gcp-compute-persistent-disk-csi-driver:v1.10.1
-        name: gce-pd-driver
-        volumeMounts:
-        - mountPath: /csi
-          name: socket-dir
-      - args:
-        - --v=5
         - --csi-address=/csi/csi.sock
         - --feature-gates=Topology=true
         - --http-endpoint=:22011
@@ -632,7 +619,7 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
-        image: registry.k8s.io/sig-storage/csi-provisioner:v3.4.0
+        image: registry.k8s.io/sig-storage/csi-provisioner:v6.0.0
         livenessProbe:
           failureThreshold: 1
           httpGet:
@@ -661,7 +648,7 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
-        image: registry.k8s.io/sig-storage/csi-attacher:v4.2.0
+        image: registry.k8s.io/sig-storage/csi-attacher:v4.8.1
         livenessProbe:
           failureThreshold: 1
           httpGet:
@@ -690,7 +677,7 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
-        image: registry.k8s.io/sig-storage/csi-resizer:v1.7.0
+        image: registry.k8s.io/sig-storage/csi-resizer:v2.0.0
         livenessProbe:
           failureThreshold: 1
           httpGet:
@@ -714,18 +701,34 @@ spec:
         - --leader-election
         - --leader-election-namespace=$(PDCSI_NAMESPACE)
         - --timeout=300s
+        - --retry-interval-max=60s
         env:
         - name: PDCSI_NAMESPACE
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
-        image: registry.k8s.io/sig-storage/csi-snapshotter:v6.1.0
+        image: registry.k8s.io/sig-storage/csi-snapshotter:v8.2.1
         name: csi-snapshotter
         volumeMounts:
         - mountPath: /csi
           name: socket-dir
+      - args:
+        - --v=5
+        - --endpoint=unix:/csi/csi.sock
+        - --extra-labels=k8s-io-cluster-name=ha-gce-example-com
+        - --supports-dynamic-iops-provisioning=hyperdisk-balanced,hyperdisk-extreme
+        - --supports-dynamic-throughput-provisioning=hyperdisk-balanced,hyperdisk-throughput,hyperdisk-ml
+        - --enable-data-cache
+        - --run-node-service=false
+        env: []
+        image: registry.k8s.io/cloud-provider-gcp/gcp-compute-persistent-disk-csi-driver:v1.22.1
+        name: gce-pd-driver
+        volumeMounts:
+        - mountPath: /csi
+          name: socket-dir
       hostNetwork: true
-      nodeSelector: null
+      nodeSelector:
+        kubernetes.io/os: linux
       priorityClassName: csi-gce-pd-controller
       serviceAccountName: csi-gce-pd-controller-sa
       tolerations:
@@ -742,7 +745,6 @@ spec:
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -755,7 +757,6 @@ spec:
       app: gcp-compute-persistent-disk-csi-driver
   template:
     metadata:
-      creationTimestamp: null
       labels:
         app: gcp-compute-persistent-disk-csi-driver
         kops.k8s.io/managed-by: kops
@@ -779,7 +780,7 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
-        image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.7.0
+        image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.13.0
         name: csi-driver-registrar
         volumeMounts:
         - mountPath: /csi
@@ -790,7 +791,8 @@ spec:
         - --v=5
         - --endpoint=unix:/csi/csi.sock
         - --run-controller-service=false
-        image: registry.k8s.io/cloud-provider-gcp/gcp-compute-persistent-disk-csi-driver:v1.10.13
+        - --enable-data-cache
+        image: registry.k8s.io/cloud-provider-gcp/gcp-compute-persistent-disk-csi-driver:v1.22.1
         name: gce-pd-driver
         securityContext:
           privileged: true
@@ -811,7 +813,8 @@ spec:
         - mountPath: /sys
           name: sys
       hostNetwork: true
-      nodeSelector: null
+      nodeSelector:
+        kubernetes.io/os: linux
       priorityClassName: csi-gce-pd-node
       serviceAccountName: csi-gce-pd-node-sa
       tolerations:
@@ -855,7 +858,6 @@ spec:
 apiVersion: storage.k8s.io/v1
 kind: CSIDriver
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: gcp-pd-csi-driver.addons.k8s.io
     app.kubernetes.io/managed-by: kops

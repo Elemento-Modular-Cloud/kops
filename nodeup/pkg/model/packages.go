@@ -35,51 +35,41 @@ var _ fi.NodeupModelBuilder = &PackagesBuilder{}
 func (b *PackagesBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 	// kubelet needs:
 	//   conntrack  - kops #5671
-	//   ebtables - kops #1711
-	//   ethtool - kops #1830
 	if b.Distribution.IsDebianFamily() {
-		// From containerd: https://github.com/containerd/cri/blob/master/contrib/ansible/tasks/bootstrap_ubuntu.yaml
-		c.AddTask(&nodetasks.Package{Name: "bridge-utils"})
-		c.AddTask(&nodetasks.Package{Name: "cgroupfs-mount"})
-		c.AddTask(&nodetasks.Package{Name: "conntrack"})
-		c.AddTask(&nodetasks.Package{Name: "ebtables"})
-		c.AddTask(&nodetasks.Package{Name: "ethtool"})
 		c.AddTask(&nodetasks.Package{Name: "iptables"})
 		c.AddTask(&nodetasks.Package{Name: "libapparmor1"})
 		c.AddTask(&nodetasks.Package{Name: "libseccomp2"})
-		c.AddTask(&nodetasks.Package{Name: "libltdl7"})
-		c.AddTask(&nodetasks.Package{Name: "pigz"})
-		c.AddTask(&nodetasks.Package{Name: "socat"})
+		if b.NodeupConfig.KubeProxy != nil && fi.ValueOf(b.NodeupConfig.KubeProxy.Enabled) && b.NodeupConfig.KubeProxy.ProxyMode == "nftables" {
+			// Note: keep the iptables/nftables logic in sync with ForceNftables
+			c.AddTask(&nodetasks.Package{Name: "nftables"})
+		}
 		c.AddTask(&nodetasks.Package{Name: "util-linux"})
 		// Additional packages
 		for _, additionalPackage := range b.NodeupConfig.Packages {
 			c.EnsureTask(&nodetasks.Package{Name: additionalPackage})
 		}
 	} else if b.Distribution.IsRHELFamily() {
-		// From containerd: https://github.com/containerd/cri/blob/master/contrib/ansible/tasks/bootstrap_centos.yaml
-		c.AddTask(&nodetasks.Package{Name: "conntrack-tools"})
-		c.AddTask(&nodetasks.Package{Name: "ebtables"})
-		c.AddTask(&nodetasks.Package{Name: "ethtool"})
-		if b.Distribution == distributions.DistributionAmazonLinux2023 {
+		// RHEL 10+ doesn't support iptables anymore
+		// Note: keep the iptables/nftables logic in sync with ForceNftables
+		switch b.Distribution {
+		case distributions.DistributionAmazonLinux2023:
 			// install iptables-nft in al2023 (NOT the iptables-legacy!)
 			c.AddTask(&nodetasks.Package{Name: "iptables-nft"})
-		} else {
+		case distributions.DistributionRhel8, distributions.DistributionRhel9,
+			distributions.DistributionRocky8:
 			c.AddTask(&nodetasks.Package{Name: "iptables"})
+		default:
+			c.AddTask(&nodetasks.Package{Name: "nftables"})
+			// Also install iptables-nft so that CNI plugins that shell
+			// out to the iptables binary get the nf_tables backend
+			c.AddTask(&nodetasks.Package{Name: "iptables-nft"})
 		}
 		c.AddTask(&nodetasks.Package{Name: "libseccomp"})
-		c.AddTask(&nodetasks.Package{Name: "libtool-ltdl"})
-		c.AddTask(&nodetasks.Package{Name: "socat"})
+		if b.NodeupConfig.KubeProxy != nil && fi.ValueOf(b.NodeupConfig.KubeProxy.Enabled) && b.NodeupConfig.KubeProxy.ProxyMode == "nftables" {
+			c.AddTask(&nodetasks.Package{Name: "nftables"})
+		}
 		c.AddTask(&nodetasks.Package{Name: "util-linux"})
-		// Handle some packages differently for each distro
-		// Amazon Linux 2 doesn't have SELinux enabled by default
-		if b.Distribution != distributions.DistributionAmazonLinux2 {
-			c.AddTask(&nodetasks.Package{Name: "container-selinux"})
-			c.AddTask(&nodetasks.Package{Name: "pigz"})
-		}
-		// RHEL9 and Rocky 9 do not have libcgroup
-		if b.Distribution != distributions.DistributionRhel9 && b.Distribution != distributions.DistributionRocky9 {
-			c.AddTask(&nodetasks.Package{Name: "libcgroup"})
-		}
+		c.AddTask(&nodetasks.Package{Name: "container-selinux"})
 		// Additional packages
 		for _, additionalPackage := range b.NodeupConfig.Packages {
 			c.EnsureTask(&nodetasks.Package{Name: additionalPackage})

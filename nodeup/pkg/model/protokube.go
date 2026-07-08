@@ -21,18 +21,17 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 
 	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/flagbuilder"
-	"k8s.io/kops/pkg/rbac"
 	"k8s.io/kops/pkg/systemd"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
 	"k8s.io/kops/util/pkg/distributions"
-	"k8s.io/kops/util/pkg/proxy"
+	"k8s.io/kops/util/pkg/env"
+	"k8s.io/kops/util/pkg/vfs/openstackconfig"
 )
 
 // ProtokubeBuilder configures protokube
@@ -44,9 +43,10 @@ var _ fi.NodeupModelBuilder = &ProtokubeBuilder{}
 
 // Build is responsible for generating the options for protokube
 func (t *ProtokubeBuilder) Build(c *fi.NodeupModelBuilderContext) error {
-	// check is not a master and we are not using gossip (https://github.com/kubernetes/kops/pull/3091)
-	if !t.IsMaster && !t.UsesLegacyGossip() {
-		klog.V(2).Infof("skipping the provisioning of protokube on the nodes")
+	// Skip the cluster doesn't use gossip, or this is a worker that bootstraps via kops-controller.
+	// Must match the asset-skip condition in pkg/nodemodel/nodeupconfigbuilder.go.
+	if !t.UsesLegacyGossip() || (!t.IsMaster && len(t.BootConfig.APIServerIPs) > 0) {
+		klog.V(2).Infof("skipping protokube provisioning")
 		return nil
 	}
 
@@ -61,35 +61,6 @@ func (t *ProtokubeBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 			Contents: res,
 			Type:     nodetasks.FileType_File,
 			Mode:     fi.PtrTo("0755"),
-		})
-	}
-
-	{
-		name, res, err := t.Assets.FindMatch(regexp.MustCompile("channels$"))
-		if err != nil {
-			return err
-		}
-
-		c.AddTask(&nodetasks.File{
-			Path:     filepath.Join("/opt/kops/bin", name),
-			Contents: res,
-			Type:     nodetasks.FileType_File,
-			Mode:     fi.PtrTo("0755"),
-		})
-	}
-
-	if t.IsMaster {
-		name := nodetasks.PKIXName{
-			CommonName:   "kops",
-			Organization: []string{rbac.SystemPrivilegedGroup},
-		}
-		kubeconfig := t.BuildIssuedKubeconfig("kops", name, c)
-
-		c.AddTask(&nodetasks.File{
-			Path:     "/var/lib/kops/kubeconfig",
-			Contents: kubeconfig,
-			Type:     nodetasks.FileType_File,
-			Mode:     s("0400"),
 		})
 	}
 
@@ -145,23 +116,10 @@ func (t *ProtokubeBuilder) buildSystemdService() (*nodetasks.Service, error) {
 
 // ProtokubeFlags are the flags for protokube
 type ProtokubeFlags struct {
-	ClusterID         *string  `json:"clusterID,omitempty" flag:"cluster-id"`
-	Channels          []string `json:"channels,omitempty" flag:"channels"`
-	Cloud             *string  `json:"cloud,omitempty" flag:"cloud"`
-	Containerized     *bool    `json:"containerized,omitempty" flag:"containerized"`
-	DNSInternalSuffix *string  `json:"dnsInternalSuffix,omitempty" flag:"dns-internal-suffix"`
-	Gossip            *bool    `json:"gossip,omitempty" flag:"gossip"`
-	LogLevel          *int32   `json:"logLevel,omitempty" flag:"v"`
-	Master            *bool    `json:"master,omitempty" flag:"master"`
-	Zone              []string `json:"zone,omitempty" flag:"zone"`
-
-	// BootstrapMasterNodeLabels applies the critical node-role labels to our node,
-	// which lets us bring up the controllers that can only run on masters, which are then
-	// responsible for node labels.  The node is specified by NodeName
-	BootstrapMasterNodeLabels bool `json:"bootstrapMasterNodeLabels,omitempty" flag:"bootstrap-master-node-labels"`
-
-	// NodeName is the name of the node as will be created in kubernetes.  Primarily used by BootstrapMasterNodeLabels.
-	NodeName string `json:"nodeName,omitempty" flag:"node-name"`
+	Cloud         *string `json:"cloud,omitempty" flag:"cloud"`
+	Containerized *bool   `json:"containerized,omitempty" flag:"containerized"`
+	Gossip        *bool   `json:"gossip,omitempty" flag:"gossip"`
+	LogLevel      *int32  `json:"logLevel,omitempty" flag:"v"`
 
 	GossipProtocol *string `json:"gossip-protocol" flag:"gossip-protocol"`
 	GossipListen   *string `json:"gossip-listen" flag:"gossip-listen"`
@@ -175,28 +133,9 @@ type ProtokubeFlags struct {
 // ProtokubeFlags is responsible for building the command line flags for protokube
 func (t *ProtokubeBuilder) ProtokubeFlags() (*ProtokubeFlags, error) {
 	f := &ProtokubeFlags{
-		Channels:      t.NodeupConfig.Channels,
 		Cloud:         fi.PtrTo(string(t.CloudProvider())),
 		Containerized: fi.PtrTo(false),
 		LogLevel:      fi.PtrTo(int32(4)),
-		Master:        b(t.IsMaster),
-	}
-
-	f.ClusterID = fi.PtrTo(t.NodeupConfig.ClusterName)
-
-	zone := t.NodeupConfig.DNSZone
-	if zone != "" {
-		if strings.Contains(zone, ".") {
-			// match by name
-			f.Zone = append(f.Zone, zone)
-		} else {
-			// match by id
-			f.Zone = append(f.Zone, "*/"+zone)
-		}
-	} else {
-		klog.Warningf("DNSZone not specified; protokube won't be able to update DNS")
-		// @TODO: Should we permit wildcard updates if zone is not specified?
-		// argv = append(argv, "--zone=*/*")
 	}
 
 	if t.UsesLegacyGossip() {
@@ -213,32 +152,13 @@ func (t *ProtokubeBuilder) ProtokubeFlags() (*ProtokubeFlags, error) {
 				f.GossipSecretSecondary = t.NodeupConfig.GossipConfig.Secondary.Secret
 			}
 		}
-
-		// @TODO: This is hacky, but we want it so that we can have a different internal & external name
-		internalSuffix := t.APIInternalName()
-		internalSuffix = strings.TrimPrefix(internalSuffix, "api.")
-		f.DNSInternalSuffix = fi.PtrTo(internalSuffix)
 	}
-
-	if f.DNSInternalSuffix == nil {
-		f.DNSInternalSuffix = fi.PtrTo(".internal." + t.NodeupConfig.ClusterName)
-	}
-
-	f.BootstrapMasterNodeLabels = true
-
-	nodeName, err := t.NodeName()
-	if err != nil {
-		return nil, fmt.Errorf("error getting NodeName: %v", err)
-	}
-	f.NodeName = nodeName
 
 	return f, nil
 }
 
 func (t *ProtokubeBuilder) buildEnvFile() (*nodetasks.File, error) {
 	envVars := make(map[string]string)
-
-	envVars["KUBECONFIG"] = "/var/lib/kops/kubeconfig"
 
 	// Pass in gossip dns connection limit
 	if os.Getenv("GOSSIP_DNS_CONN_LIMIT") != "" {
@@ -268,6 +188,7 @@ func (t *ProtokubeBuilder) buildEnvFile() (*nodetasks.File, error) {
 			"OS_REGION_NAME",
 			"OS_APPLICATION_CREDENTIAL_ID",
 			"OS_APPLICATION_CREDENTIAL_SECRET",
+			openstackconfig.EnvKeyOpenstackTLSInsecureSkipVerify,
 		} {
 			envVars[envVar] = os.Getenv(envVar)
 		}
@@ -285,10 +206,6 @@ func (t *ProtokubeBuilder) buildEnvFile() (*nodetasks.File, error) {
 		envVars["OSS_REGION"] = os.Getenv("OSS_REGION")
 	}
 
-	if os.Getenv("AZURE_STORAGE_ACCOUNT") != "" {
-		envVars["AZURE_STORAGE_ACCOUNT"] = os.Getenv("AZURE_STORAGE_ACCOUNT")
-	}
-
 	if t.CloudProvider() == kops.CloudProviderScaleway {
 		if os.Getenv("SCW_PROFILE") != "" || os.Getenv("SCW_SECRET_KEY") != "" {
 			profile, err := scaleway.CreateValidScalewayProfile()
@@ -301,7 +218,7 @@ func (t *ProtokubeBuilder) buildEnvFile() (*nodetasks.File, error) {
 		}
 	}
 
-	for _, envVar := range proxy.GetProxyEnvVars(t.NodeupConfig.Networking.EgressProxy) {
+	for _, envVar := range env.GetProxyEnvVars(t.NodeupConfig.Networking.EgressProxy) {
 		envVars[envVar.Name] = envVar.Value
 	}
 

@@ -31,10 +31,12 @@ import (
 	"path"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/bootstrap"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup"
+	"k8s.io/kops/util/pkg/vfs"
 )
 
 type Client struct {
@@ -49,26 +51,38 @@ type Client struct {
 	httpClient *http.Client
 }
 
-func (b *Client) Query(ctx context.Context, req any, resp any) error {
-	if b.httpClient == nil {
-		certPool := x509.NewCertPool()
-		certPool.AppendCertsFromPEM(b.CAs)
+func New(authenticator bootstrap.Authenticator, cas []byte, baseURL url.URL) *Client {
+	return NewWithTLSServerName(authenticator, cas, baseURL, "")
+}
 
-		transport := &http.Transport{
-			TLSClientConfig: &tls.Config{
-				RootCAs:    certPool,
-				MinVersion: tls.VersionTLS12,
-			},
-		}
-
-		httpClient := &http.Client{
-			Timeout:   time.Duration(15) * time.Second,
-			Transport: transport,
-		}
-
-		b.httpClient = httpClient
+func NewWithTLSServerName(authenticator bootstrap.Authenticator, cas []byte, baseURL url.URL, tlsServerName string) *Client {
+	client := &Client{
+		Authenticator: authenticator,
+		CAs:           cas,
+		BaseURL:       baseURL,
 	}
 
+	certPool := x509.NewCertPool()
+	certPool.AppendCertsFromPEM(cas)
+	tlsConfig := &tls.Config{
+		RootCAs:    certPool,
+		MinVersion: tls.VersionTLS12,
+	}
+	if tlsServerName != "" {
+		tlsConfig.ServerName = tlsServerName
+	}
+	transport := &http.Transport{
+		TLSClientConfig: tlsConfig,
+	}
+	client.httpClient = &http.Client{
+		Timeout:   time.Duration(15) * time.Second,
+		Transport: transport,
+	}
+
+	return client
+}
+
+func (b *Client) Query(ctx context.Context, req any, resp any) error {
 	// Sanity-check DNS to provide clearer diagnostic messages.
 	if ips, err := net.LookupIP(b.BaseURL.Hostname()); err != nil {
 		if dnsErr, ok := err.(*net.DNSError); ok && dnsErr.IsNotFound {
@@ -86,30 +100,54 @@ func (b *Client) Query(ctx context.Context, req any, resp any) error {
 
 	bootstrapURL := b.BaseURL
 	bootstrapURL.Path = path.Join(bootstrapURL.Path, "/bootstrap")
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", bootstrapURL.String(), bytes.NewReader(reqBytes))
-	if err != nil {
-		return err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
 
-	token, err := b.Authenticator.CreateToken(reqBytes)
-	if err != nil {
-		return err
+	backoff := wait.Backoff{
+		Duration: 1 * time.Second,
+		Factor:   2,
+		Jitter:   0.1,
+		Steps:    100,
 	}
-	httpReq.Header.Set("Authorization", token)
 
-	response, err := b.httpClient.Do(httpReq)
-	if err != nil {
-		return err
-	}
-	if response.Body != nil {
-		defer response.Body.Close()
+	var response *http.Response
+	done, err := vfs.RetryWithBackoff(backoff, func() (bool, error) {
+		httpReq, reqErr := http.NewRequestWithContext(ctx, "POST", bootstrapURL.String(), bytes.NewReader(reqBytes))
+		if reqErr != nil {
+			return false, reqErr
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+
+		token, tokenErr := b.Authenticator.CreateToken(reqBytes)
+		if tokenErr != nil {
+			return false, tokenErr
+		}
+		httpReq.Header.Set("Authorization", token)
+
+		resp, doErr := b.httpClient.Do(httpReq)
+		if doErr != nil {
+			return false, fmt.Errorf("request to kops-controller failed: %w", doErr)
+		}
+
+		response = resp
+		return true, nil
+	})
+	if !done {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("timed out waiting for a successful response from kops-controller")
 	}
 
 	// if we receive StatusConflict it means that we should exit gracefully
 	if response.StatusCode == http.StatusConflict {
 		klog.Infof("kops-controller returned status code %d", response.StatusCode)
+		if response.Body != nil {
+			response.Body.Close()
+		}
 		os.Exit(0)
+	}
+
+	if response.Body != nil {
+		defer response.Body.Close()
 	}
 
 	if response.StatusCode != http.StatusOK {

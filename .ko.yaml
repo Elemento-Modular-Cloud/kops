@@ -1,0 +1,5 @@
+defaultBaseImage: gcr.io/distroless/static:nonroot
+defaultLdflags:
+- -s -w
+- -X k8s.io/kops.Version={{.Env.VERSION}}
+- -X k8s.io/kops.GitVersion={{.Env.GITSHA}}

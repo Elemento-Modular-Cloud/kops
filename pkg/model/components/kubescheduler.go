@@ -57,19 +57,5 @@ func (b *KubeSchedulerOptionsBuilder) BuildOptions(o *kops.Cluster) error {
 		}
 	}
 
-	if clusterSpec.CloudProvider.AWS != nil {
-
-		if config.FeatureGates == nil {
-			config.FeatureGates = make(map[string]string)
-		}
-
-		if _, found := config.FeatureGates["InTreePluginAWSUnregister"]; !found && b.ControlPlaneKubernetesVersion().IsLT("1.31") {
-			config.FeatureGates["InTreePluginAWSUnregister"] = "true"
-		}
-
-		if _, found := config.FeatureGates["CSIMigrationAWS"]; !found && b.ControlPlaneKubernetesVersion().IsLT("1.27") {
-			config.FeatureGates["CSIMigrationAWS"] = "true"
-		}
-	}
 	return nil
 }
