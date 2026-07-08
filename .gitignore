@@ -93,8 +93,13 @@ _output
 _artifacts
 _rundir
 
+<<<<<<< HEAD
 # kustomize helm chart cache
 charts/
 
 # Ignore asdf .tool-versions file
 .tool-versions
+=======
+# Ignore vendor directory
+vendor/
+>>>>>>> 2fdf5a2a5a (delete vendor folder)

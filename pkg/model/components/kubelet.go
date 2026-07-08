@@ -143,6 +143,56 @@ func (b *KubeletOptionsBuilder) configureKubelet(cluster *kops.Cluster, kubelet 
 		cluster.Spec.CloudProvider.GCE.NodeTags = fi.PtrTo(gce.TagForRole(b.ClusterName, kops.InstanceGroupRoleNode))
 	}
 
+<<<<<<< HEAD
+=======
+	if cloudProvider == kops.CloudProviderHetzner {
+		kubelet.CloudProvider = "external"
+	}
+
+	if cloudProvider == kops.CloudProviderOpenstack {
+		kubelet.CloudProvider = "openstack"
+	}
+
+	if cloudProvider == kops.CloudProviderAzure {
+		kubelet.CloudProvider = "azure"
+	}
+
+	if cloudProvider == kops.CloudProviderScaleway {
+		kubelet.CloudProvider = "external"
+	}
+
+	if cloudProvider == kops.CloudProviderElemento {
+		kubelet.CloudProvider = "external"
+	}
+
+	if cluster.Spec.ExternalCloudControllerManager != nil {
+		kubelet.CloudProvider = "external"
+	}
+
+	// Prevent image GC from pruning the pause image
+	// https://github.com/kubernetes/enhancements/tree/master/keps/sig-node/2040-kubelet-cri#pinned-images
+	image := "registry.k8s.io/pause:3.9"
+	var err error
+	if image, err = b.AssetBuilder.RemapImage(image); err != nil {
+		return err
+	}
+	kubelet.PodInfraContainerImage = image
+
+	if kubelet.FeatureGates == nil {
+		kubelet.FeatureGates = make(map[string]string)
+	}
+
+	if cluster.Spec.CloudProvider.AWS != nil {
+		if _, found := kubelet.FeatureGates["InTreePluginAWSUnregister"]; !found && kubernetesVersion.IsLT("1.31") {
+			kubelet.FeatureGates["InTreePluginAWSUnregister"] = "true"
+		}
+
+		if _, found := kubelet.FeatureGates["CSIMigrationAWS"]; !found && kubernetesVersion.IsLT("1.27") {
+			kubelet.FeatureGates["CSIMigrationAWS"] = "true"
+		}
+	}
+
+>>>>>>> 2fdf5a2a5a (delete vendor folder)
 	// Set systemd as the default cgroup driver for kubelet
 	// In Kubernetes 1.34, with the KubeletCgroupDriverFromCRI feature gate enabled and a container runtime
 	// that supports the RuntimeConfig CRI RPC, the kubelet automatically detects the appropriate cgroup driver
