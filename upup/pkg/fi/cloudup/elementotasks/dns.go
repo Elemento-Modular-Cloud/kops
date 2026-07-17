@@ -19,6 +19,7 @@ package elementotasks
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/Elemento-Modular-Cloud/ecloud-go/ecloud"
 	"k8s.io/klog/v2"
@@ -29,12 +30,22 @@ import (
 // +kops:fitask
 type DNSZone struct {
 	Name      *string
+	Network   *Network
+	IPAddress *string
 	Lifecycle fi.Lifecycle
 }
 
 var _ fi.CloudupTask = &DNSZone{}
+var _ fi.CloudupHasDependencies = &DNSZone{}
 var _ fi.HasLifecycle = &DNSZone{}
 var _ fi.HasName = &DNSZone{}
+
+func (z *DNSZone) GetDependencies(tasks map[string]fi.CloudupTask) []fi.CloudupTask {
+	if z.Network == nil {
+		return nil
+	}
+	return []fi.CloudupTask{z.Network}
+}
 
 func (z *DNSZone) GetLifecycle() fi.Lifecycle {
 	return z.Lifecycle
@@ -71,10 +82,17 @@ func (z *DNSZone) Find(c *fi.CloudupContext) (*DNSZone, error) {
 		fmt.Printf("EKOPS: Elemento DNS zone %q not found\n", zoneName)
 		return nil, nil
 	}
+	dnsIPAddress := strings.TrimSpace(dns.IPAddress)
+	if dnsIPAddress == "" {
+		return nil, fmt.Errorf("Elemento DNS zone %q has no service IP address", zoneName)
+	}
+	z.IPAddress = fi.PtrTo(dnsIPAddress)
 
 	fmt.Printf("EKOPS: Elemento DNS zone %q already exists\n", zoneName)
 	return &DNSZone{
 		Name:      fi.PtrTo(dns.ZoneName),
+		Network:   z.Network,
+		IPAddress: z.IPAddress,
 		Lifecycle: z.Lifecycle,
 	}, nil
 }
@@ -87,15 +105,28 @@ func (_ *DNSZone) CheckChanges(actual, expected, changes *DNSZone) error {
 	if expected.Name == nil {
 		return fi.RequiredField("Name")
 	}
+	if expected.Network == nil {
+		return fi.RequiredField("Network")
+	}
 	return nil
 }
 
 func (_ *DNSZone) RenderElemento(t *elemento.ElementoAPITarget, actual, expected, changes *DNSZone) error {
 	zoneName := fi.ValueOf(expected.Name)
+	networkUID := strings.TrimSpace(fi.ValueOf(expected.Network.ID))
+	if networkUID == "" {
+		return fmt.Errorf("Elemento network %q has no UUID for DNS service", fi.ValueOf(expected.Network.Name))
+	}
+
 	fmt.Printf("EKOPS: Ensuring Elemento DNS zone %q\n", zoneName)
-	if err := ensureElementoDNSZone(context.TODO(), t.Cloud.DnsClient(), zoneName); err != nil {
+	dnsService, err := ensureElementoDNSZone(context.TODO(), t.Cloud.DnsClient(), zoneName, networkUID)
+	if err != nil {
 		return err
 	}
+	if dnsService == nil || strings.TrimSpace(dnsService.IPAddress) == "" {
+		return fmt.Errorf("Elemento DNS zone %q returned no service IP address", zoneName)
+	}
+	expected.IPAddress = fi.PtrTo(strings.TrimSpace(dnsService.IPAddress))
 	fmt.Printf("EKOPS: Elemento DNS zone %q ensured\n", zoneName)
 	return nil
 }
@@ -209,18 +240,22 @@ func (_ *DNSRecord) RenderElemento(t *elemento.ElementoAPITarget, actual, expect
 	return nil
 }
 
-func ensureElementoDNSZone(ctx context.Context, client ecloud.DnsClient, zoneName string) error {
-	_, _, err := client.Create(ctx, zoneName)
+func ensureElementoDNSZone(ctx context.Context, client ecloud.DnsClient, zoneName, networkUID string) (*ecloud.Dns, error) {
+	dnsService, _, err := client.Create(ctx, zoneName, networkUID)
 	if err != nil {
 		if elemento.IsDNSAlreadyExists(err) {
 			klog.V(2).Infof("Elemento DNS zone %q already exists", zoneName)
-			return nil
+			dnsService, _, err = client.Get(ctx, zoneName)
+			if err != nil {
+				return nil, fmt.Errorf("getting existing Elemento DNS zone %q: %w", zoneName, err)
+			}
+			return dnsService, nil
 		}
-		return fmt.Errorf("creating Elemento DNS zone %q: %w", zoneName, err)
+		return nil, fmt.Errorf("creating Elemento DNS zone %q: %w", zoneName, err)
 	}
 
 	klog.V(2).Infof("Created Elemento DNS zone %q", zoneName)
-	return nil
+	return dnsService, nil
 }
 
 func ensureElementoDNSRecord(ctx context.Context, client ecloud.DnsClient, zoneName, recordName, recordValue string) error {

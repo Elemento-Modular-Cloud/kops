@@ -37,3 +37,23 @@ func TestDNSRecordCheckChangesAllowsPendingDHCPReservation(t *testing.T) {
 		t.Fatalf("expected pending DHCP reservation to be valid during planning: %v", err)
 	}
 }
+
+func TestDNSZoneDependsOnNetwork(t *testing.T) {
+	network := &Network{Name: fi.PtrTo("test.k8s")}
+	zone := &DNSZone{
+		Name:    fi.PtrTo("test.k8s"),
+		Network: network,
+	}
+
+	dependencies := zone.GetDependencies(nil)
+	if len(dependencies) != 1 || dependencies[0] != network {
+		t.Fatalf("expected DNS zone to depend on its network, got %#v", dependencies)
+	}
+}
+
+func TestDNSZoneCheckChangesRequiresNetwork(t *testing.T) {
+	expected := &DNSZone{Name: fi.PtrTo("test.k8s")}
+	if err := expected.CheckChanges(nil, expected, &DNSZone{}); err == nil {
+		t.Fatal("expected DNS zone without a network to be rejected")
+	}
+}

@@ -35,8 +35,10 @@ var _ fi.CloudupModelBuilder = &DHCPModelBuilder{}
 
 func (b *DHCPModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	networkName := b.ClusterName()
+	network := b.LinkToNetwork()
 	dnsZoneTask := &elementotasks.DNSZone{
 		Name:      fi.PtrTo(b.ClusterName()),
+		Network:   network,
 		Lifecycle: b.Lifecycle,
 	}
 	c.EnsureTask(dnsZoneTask)
@@ -44,7 +46,7 @@ func (b *DHCPModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	service := &elementotasks.DHCPService{
 		Name:        fi.PtrTo(networkName),
 		Lifecycle:   b.Lifecycle,
-		Network:     b.LinkToNetwork(),
+		Network:     network,
 		DNSZoneTask: dnsZoneTask,
 	}
 	c.AddTask(service)

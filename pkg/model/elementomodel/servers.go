@@ -39,6 +39,7 @@ type ServerGroupModelBuilder struct {
 var _ fi.CloudupModelBuilder = &ServerGroupModelBuilder{}
 
 func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
+	network := b.LinkToNetwork()
 	var sshkeyTasks []*elementotasks.SSHKey
 	for _, sshkey := range b.SSHPublicKeys {
 		fingerprint, err := pki.ComputeOpenSSHKeyFingerprint(string(sshkey))
@@ -61,6 +62,7 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 	if b.Cluster.PublishesDNSRecords() {
 		dnsZoneTask = &elementotasks.DNSZone{
 			Name:      fi.PtrTo(b.ClusterName()),
+			Network:   network,
 			Lifecycle: b.Lifecycle,
 		}
 	}
@@ -108,7 +110,7 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 			Name:                 fi.PtrTo(ig.Name),
 			Lifecycle:            b.Lifecycle,
 			SSHKeys:              sshkeyTasks,
-			Network:              b.LinkToNetwork(),
+			Network:              network,
 			Count:                int(igSize),
 			Location:             ig.Spec.Subnets[0],
 			Size:                 ig.Spec.MachineType,

@@ -253,6 +253,24 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 	if e.Network == nil {
 		return fmt.Errorf("failed to find network for server group %q", fi.ValueOf(e.Name))
 	}
+	dnsIPAddress := ""
+	if e.DNSZoneTask != nil {
+		dnsIPAddress = strings.TrimSpace(fi.ValueOf(e.DNSZoneTask.IPAddress))
+		if dnsIPAddress == "" {
+			dnsClient := t.Cloud.DnsClient()
+			dnsService, _, err := dnsClient.Get(context.TODO(), fi.ValueOf(e.DNSZoneTask.Name))
+			if err != nil {
+				return fmt.Errorf("getting DNS service IP for server group %q: %w", fi.ValueOf(e.Name), err)
+			}
+			if dnsService != nil {
+				dnsIPAddress = strings.TrimSpace(dnsService.IPAddress)
+			}
+		}
+		if dnsIPAddress == "" {
+			return fmt.Errorf("DNS zone task for server group %q has no service IP address", fi.ValueOf(e.Name))
+		}
+		e.DNSZoneTask.IPAddress = fi.PtrTo(dnsIPAddress)
+	}
 
 	userData, err := fi.ResourceAsString(e.UserData)
 	if err != nil {
@@ -307,9 +325,10 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 			ServerType: &ecloud.ServerType{
 				Name: e.Size,
 			},
-			UserData: userData,
-			Labels:   labels,
-			SSHKeys:  []*ecloud.SSHKey{},
+			UserData:     userData,
+			Labels:       labels,
+			DNSIPAddress: dnsIPAddress,
+			SSHKeys:      []*ecloud.SSHKey{},
 		}
 
 		// Add root volume configuration if specified

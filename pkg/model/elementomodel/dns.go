@@ -43,6 +43,7 @@ func (b *DNSModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 
 	dnsZoneTask := &elementotasks.DNSZone{
 		Name:      fi.PtrTo(b.ClusterName()),
+		Network:   b.LinkToNetwork(),
 		Lifecycle: b.Lifecycle,
 	}
 	c.EnsureTask(dnsZoneTask)

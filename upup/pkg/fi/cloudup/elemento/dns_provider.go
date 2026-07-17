@@ -27,7 +27,7 @@ import (
 )
 
 type dnsClient interface {
-	Create(ctx context.Context, zoneName string) (*ecloud.Dns, *ecloud.Response, error)
+	Create(ctx context.Context, zoneName, networkUID string) (*ecloud.Dns, *ecloud.Response, error)
 	AddDnsRecord(ctx context.Context, zoneName, recordName, recordValue string) (*ecloud.DnsRecord, *ecloud.Response, error)
 	Get(ctx context.Context, zoneName string) (*ecloud.Dns, *ecloud.Response, error)
 	ListDnsRecords(ctx context.Context, zoneName string) ([]*ecloud.DnsRecord, *ecloud.Response, error)
@@ -41,7 +41,7 @@ type dnsListClient interface {
 // NewDNSProvider adapts the Elemento DNS SDK to kOps' generic dnsprovider
 // interface. Deletion is intentionally unsupported until the SDK exposes a
 // delete operation; Apply returns an explicit error for removals.
-func NewDNSProvider(client ecloud.DnsClient, defaultZoneName string) (dnsprovider.Interface, error) {
+func NewDNSProvider(client ecloud.DnsClient, networkClient ecloud.NetworkClient, defaultZoneName string) (dnsprovider.Interface, error) {
 	dnsClient, ok := any(&client).(dnsClient)
 	if !ok {
 		return nil, fmt.Errorf("Elemento DNS SDK does not implement the read methods required by the kOps DNS provider")
@@ -49,12 +49,14 @@ func NewDNSProvider(client ecloud.DnsClient, defaultZoneName string) (dnsprovide
 
 	return &dnsProvider{
 		client:          dnsClient,
+		networkClient:   &networkClient,
 		defaultZoneName: defaultZoneName,
 	}, nil
 }
 
 type dnsProvider struct {
 	client          dnsClient
+	networkClient   *ecloud.NetworkClient
 	defaultZoneName string
 }
 
@@ -63,12 +65,14 @@ var _ dnsprovider.Interface = &dnsProvider{}
 func (p *dnsProvider) Zones() (dnsprovider.Zones, bool) {
 	return &dnsZones{
 		client:          p.client,
+		networkClient:   p.networkClient,
 		defaultZoneName: p.defaultZoneName,
 	}, true
 }
 
 type dnsZones struct {
 	client          dnsClient
+	networkClient   *ecloud.NetworkClient
 	defaultZoneName string
 }
 
@@ -80,7 +84,7 @@ func (z *dnsZones) List() ([]dnsprovider.Zone, error) {
 		if err != nil {
 			return nil, fmt.Errorf("listing Elemento DNS zones: %w", err)
 		}
-		return zonesFromElementoDNS(z.client, dnsServices), nil
+		return zonesFromElementoDNS(z.client, z.networkClient, dnsServices), nil
 	}
 
 	if z.defaultZoneName == "" {
@@ -95,11 +99,11 @@ func (z *dnsZones) List() ([]dnsprovider.Zone, error) {
 		return nil, nil
 	}
 
-	return zonesFromElementoDNS(z.client, []*ecloud.Dns{dnsService}), nil
+	return zonesFromElementoDNS(z.client, z.networkClient, []*ecloud.Dns{dnsService}), nil
 }
 
 func (z *dnsZones) Add(newZone dnsprovider.Zone) (dnsprovider.Zone, error) {
-	dnsService, _, err := z.client.Create(context.TODO(), newZone.Name())
+	dnsService, err := createElementoDNSService(context.TODO(), z.client, z.networkClient, newZone.Name())
 	if err != nil && !IsDNSAlreadyExists(err) {
 		return nil, fmt.Errorf("creating Elemento DNS zone %q: %w", newZone.Name(), err)
 	}
@@ -110,7 +114,7 @@ func (z *dnsZones) Add(newZone dnsprovider.Zone) (dnsprovider.Zone, error) {
 		}
 	}
 
-	return zoneFromElementoDNS(z.client, newZone.Name(), dnsService), nil
+	return zoneFromElementoDNS(z.client, z.networkClient, newZone.Name(), dnsService), nil
 }
 
 func (z *dnsZones) Remove(zone dnsprovider.Zone) error {
@@ -119,24 +123,25 @@ func (z *dnsZones) Remove(zone dnsprovider.Zone) error {
 
 func (z *dnsZones) New(name string) (dnsprovider.Zone, error) {
 	return &dnsZone{
-		client: z.client,
-		name:   name,
-		id:     name,
+		client:        z.client,
+		networkClient: z.networkClient,
+		name:          name,
+		id:            name,
 	}, nil
 }
 
-func zonesFromElementoDNS(client dnsClient, dnsServices []*ecloud.Dns) []dnsprovider.Zone {
+func zonesFromElementoDNS(client dnsClient, networkClient *ecloud.NetworkClient, dnsServices []*ecloud.Dns) []dnsprovider.Zone {
 	var zones []dnsprovider.Zone
 	for _, dnsService := range dnsServices {
 		if dnsService == nil {
 			continue
 		}
-		zones = append(zones, zoneFromElementoDNS(client, dnsService.ZoneName, dnsService))
+		zones = append(zones, zoneFromElementoDNS(client, networkClient, dnsService.ZoneName, dnsService))
 	}
 	return zones
 }
 
-func zoneFromElementoDNS(client dnsClient, name string, dnsService *ecloud.Dns) dnsprovider.Zone {
+func zoneFromElementoDNS(client dnsClient, networkClient *ecloud.NetworkClient, name string, dnsService *ecloud.Dns) dnsprovider.Zone {
 	id := name
 	if dnsService != nil {
 		if dnsService.ZoneName != "" {
@@ -148,16 +153,18 @@ func zoneFromElementoDNS(client dnsClient, name string, dnsService *ecloud.Dns) 
 	}
 
 	return &dnsZone{
-		client: client,
-		name:   name,
-		id:     id,
+		client:        client,
+		networkClient: networkClient,
+		name:          name,
+		id:            id,
 	}
 }
 
 type dnsZone struct {
-	client dnsClient
-	name   string
-	id     string
+	client        dnsClient
+	networkClient *ecloud.NetworkClient
+	name          string
+	id            string
 }
 
 var _ dnsprovider.Zone = &dnsZone{}
@@ -172,14 +179,16 @@ func (z *dnsZone) ID() string {
 
 func (z *dnsZone) ResourceRecordSets() (dnsprovider.ResourceRecordSets, bool) {
 	return &dnsResourceRecordSets{
-		client: z.client,
-		zone:   z,
+		client:        z.client,
+		networkClient: z.networkClient,
+		zone:          z,
 	}, true
 }
 
 type dnsResourceRecordSets struct {
-	client dnsClient
-	zone   *dnsZone
+	client        dnsClient
+	networkClient *ecloud.NetworkClient
+	zone          *dnsZone
 }
 
 var _ dnsprovider.ResourceRecordSets = &dnsResourceRecordSets{}
@@ -231,9 +240,10 @@ func (r *dnsResourceRecordSets) New(name string, rrdatas []string, ttl int64, re
 
 func (r *dnsResourceRecordSets) StartChangeset() dnsprovider.ResourceRecordChangeset {
 	return &dnsResourceRecordChangeset{
-		client:   r.client,
-		rrsets:   r,
-		zoneName: r.zone.Name(),
+		client:        r.client,
+		networkClient: r.networkClient,
+		rrsets:        r,
+		zoneName:      r.zone.Name(),
 	}
 }
 
@@ -276,9 +286,10 @@ func (r *dnsResourceRecordSet) Type() rrstype.RrsType {
 }
 
 type dnsResourceRecordChangeset struct {
-	client   dnsClient
-	rrsets   dnsprovider.ResourceRecordSets
-	zoneName string
+	client        dnsClient
+	networkClient *ecloud.NetworkClient
+	rrsets        dnsprovider.ResourceRecordSets
+	zoneName      string
 
 	additions []dnsprovider.ResourceRecordSet
 	removals  []dnsprovider.ResourceRecordSet
@@ -309,8 +320,7 @@ func (c *dnsResourceRecordChangeset) Apply(ctx context.Context) error {
 	if len(c.removals) != 0 {
 		return fmt.Errorf("deleting Elemento DNS records is not supported yet")
 	}
-
-	if _, _, err := c.client.Create(ctx, c.zoneName); err != nil && !IsDNSAlreadyExists(err) {
+	if _, err := createElementoDNSService(ctx, c.client, c.networkClient, c.zoneName); err != nil && !IsDNSAlreadyExists(err) {
 		return fmt.Errorf("creating Elemento DNS zone %q: %w", c.zoneName, err)
 	}
 
@@ -331,6 +341,23 @@ func (c *dnsResourceRecordChangeset) Apply(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func createElementoDNSService(ctx context.Context, client dnsClient, networkClient *ecloud.NetworkClient, zoneName string) (*ecloud.Dns, error) {
+	if networkClient == nil {
+		return nil, fmt.Errorf("Elemento network client is required for DNS zone %q", zoneName)
+	}
+
+	network, _, err := networkClient.GetByName(ctx, zoneName)
+	if err != nil {
+		return nil, fmt.Errorf("getting Elemento network %q for DNS zone: %w", zoneName, err)
+	}
+	if network == nil || strings.TrimSpace(network.ID) == "" {
+		return nil, fmt.Errorf("Elemento network %q has no UUID for DNS zone", zoneName)
+	}
+
+	dnsService, _, err := client.Create(ctx, zoneName, network.ID)
+	return dnsService, err
 }
 
 func (c *dnsResourceRecordChangeset) IsEmpty() bool {

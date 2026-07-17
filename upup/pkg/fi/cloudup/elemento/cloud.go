@@ -151,7 +151,7 @@ func findServerGroups(c *elementoCloudImplementation, clusterName string) (map[s
 }
 
 func (c *elementoCloudImplementation) DNS() (dnsprovider.Interface, error) {
-	return NewDNSProvider(c.Client.Dns, "")
+	return NewDNSProvider(c.Client.Dns, c.Client.Network, "")
 }
 
 func (c *elementoCloudImplementation) DnsClient() ecloud.DnsClient {
