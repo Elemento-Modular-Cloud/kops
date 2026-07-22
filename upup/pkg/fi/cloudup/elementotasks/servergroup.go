@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/Elemento-Modular-Cloud/ecloud-go/ecloud"
@@ -298,6 +299,10 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 		if macAddress == "" {
 			return fmt.Errorf("DHCP reservation task for server %q has no MAC address", name)
 		}
+		internalIPAddress := strings.TrimSpace(fi.ValueOf(reservation.IPAddress))
+		if net.ParseIP(internalIPAddress) == nil {
+			return fmt.Errorf("DHCP reservation task for server %q has invalid IP address %q", name, internalIPAddress)
+		}
 
 		// Initialize labels if nil
 		labels := e.Labels
@@ -325,10 +330,11 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 			ServerType: &ecloud.ServerType{
 				Name: e.Size,
 			},
-			UserData:     userData,
-			Labels:       labels,
-			DNSIPAddress: dnsIPAddress,
-			SSHKeys:      []*ecloud.SSHKey{},
+			UserData:          userData,
+			Labels:            labels,
+			DNSIPAddress:      dnsIPAddress,
+			InternalIPAddress: internalIPAddress,
+			SSHKeys:           []*ecloud.SSHKey{},
 		}
 
 		// Add root volume configuration if specified

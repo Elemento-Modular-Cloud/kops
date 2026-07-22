@@ -329,7 +329,7 @@ func (b *KubeletBuilder) buildSystemdEnvironmentFile(ctx context.Context, kubele
 	// We can always add this later if it is needed.
 	flags += " --cloud-config=" + InTreeCloudConfigFilePath
 
-	if b.UsesSecondaryIP() {
+	if b.UsesMetadataNodeIP() {
 		localIP, err := b.GetMetadataLocalIP(ctx)
 		if err != nil {
 			return nil, err

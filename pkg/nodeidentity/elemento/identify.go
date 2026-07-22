@@ -48,7 +48,6 @@ type nodeIdentifier struct {
 
 type staticNodeInfo struct {
 	InstanceID string
-	InternalIP string
 	ProviderID string
 	Labels     map[string]string
 }
@@ -56,21 +55,18 @@ type staticNodeInfo struct {
 var staticNodesByName = map[string]staticNodeInfo{
 	"control-plane-europe-1": {
 		InstanceID: "fc72216e-6fb0-4cbf-a2be-3973da79f955",
-		InternalIP: "192.168.100.10",
 		Labels: map[string]string{
 			nodelabels.RoleLabelControlPlane20: "",
 		},
 	},
 	"nodes-europe-1": {
 		InstanceID: "e4ff7b13-51c1-48bf-9ba9-c5fb5839c358",
-		InternalIP: "192.168.100.11",
 		Labels: map[string]string{
 			nodelabels.RoleLabelNode16: "",
 		},
 	},
 	"nodes-europe-2": {
 		InstanceID: "f1dc002b-a660-423f-8850-8b3fc28c1625",
-		InternalIP: "192.168.100.12",
 		Labels: map[string]string{
 			nodelabels.RoleLabelNode16: "",
 		},
@@ -161,7 +157,6 @@ func (i *nodeIdentifier) IdentifyNode(ctx context.Context, node *corev1.Node) (*
 		InstanceID:  serverID,
 		ProviderID:  "elemento://" + serverID,
 		Labels:      labels,
-		Addresses:   nodeAddresses(server),
 		Initialized: true,
 	}
 
@@ -189,19 +184,9 @@ func staticNodeIdentity(nodeName string) (*nodeidentity.Info, bool) {
 		labels[key] = value
 	}
 	return &nodeidentity.Info{
-		InstanceID: static.InstanceID,
-		ProviderID: providerID,
-		Labels:     labels,
-		Addresses: []corev1.NodeAddress{
-			{
-				Type:    corev1.NodeInternalIP,
-				Address: static.InternalIP,
-			},
-			{
-				Type:    corev1.NodeHostName,
-				Address: nodeName,
-			},
-		},
+		InstanceID:  static.InstanceID,
+		ProviderID:  providerID,
+		Labels:      labels,
 		Initialized: true,
 	}, true
 }
@@ -275,34 +260,4 @@ func addRoleLabelFallback(labels map[string]string, serverName string) {
 	case strings.HasPrefix(serverName, "nodes-"):
 		labels[nodelabels.RoleLabelNode16] = ""
 	}
-}
-
-func nodeAddresses(server *ecloud.Server) []corev1.NodeAddress {
-	var addresses []corev1.NodeAddress
-	for _, privateNet := range server.PrivateNet {
-		if len(privateNet.IP) == 0 {
-			continue
-		}
-		addresses = append(addresses, corev1.NodeAddress{
-			Type:    corev1.NodeInternalIP,
-			Address: privateNet.IP.String(),
-		})
-		break
-	}
-
-	if len(addresses) == 0 && server.PublicNet.IPv4 != "" {
-		addresses = append(addresses, corev1.NodeAddress{
-			Type:    corev1.NodeInternalIP,
-			Address: server.PublicNet.IPv4,
-		})
-	}
-
-	if server.Name != "" {
-		addresses = append(addresses, corev1.NodeAddress{
-			Type:    corev1.NodeHostName,
-			Address: server.Name,
-		})
-	}
-
-	return addresses
 }

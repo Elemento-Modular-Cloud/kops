@@ -45,6 +45,7 @@ import (
 
 const (
 	ConfigurationModeWarming string = "Warming"
+	elementoNodeIPFilePath          = "/etc/elemento/node-ip"
 )
 
 // NodeupModelContext is the context supplied the nodeup tasks
@@ -343,6 +344,11 @@ func (c *NodeupModelContext) UsesSecondaryIP() bool {
 		c.BootConfig.CloudProvider == kops.CloudProviderHetzner
 }
 
+// UsesMetadataNodeIP reports whether kubelet should use an IP selected by the cloud integration.
+func (c *NodeupModelContext) UsesMetadataNodeIP() bool {
+	return c.UsesSecondaryIP() || c.CloudProvider() == kops.CloudProviderElemento
+}
+
 // KubectlPath returns distro based path for kubectl
 func (c *NodeupModelContext) KubectlPath() string {
 	kubeletCommand := "/usr/local/bin"
@@ -605,10 +611,26 @@ func (c *NodeupModelContext) GetMetadataLocalIP(ctx context.Context) (string, er
 			}
 		}
 
+	case kops.CloudProviderElemento:
+		return readElementoNodeIP(elementoNodeIPFilePath)
+
 	default:
 		return "", fmt.Errorf("getting local IP from metadata is not supported for cloud provider: %q", c.BootConfig.CloudProvider)
 	}
 
+	return internalIP, nil
+}
+
+func readElementoNodeIP(filePath string) (string, error) {
+	b, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("reading Elemento node IP from %q: %w", filePath, err)
+	}
+
+	internalIP := strings.TrimSpace(string(b))
+	if net.ParseIP(internalIP) == nil {
+		return "", fmt.Errorf("invalid Elemento node IP %q in %q", internalIP, filePath)
+	}
 	return internalIP, nil
 }
 
