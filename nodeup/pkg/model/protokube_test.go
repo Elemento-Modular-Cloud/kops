@@ -17,10 +17,36 @@ limitations under the License.
 package model
 
 import (
+	"runtime"
 	"testing"
 
 	"k8s.io/kops/upup/pkg/fi"
 )
+
+func TestKopsBinaryAssetPattern(t *testing.T) {
+	pattern := kopsBinaryAssetPattern("protokube")
+
+	for _, asset := range []string{
+		"protokube",
+		"/opt/kops/bin/protokube",
+		"protokube-linux-" + runtime.GOARCH,
+		"https://github.com/example/releases/download/v1/protokube-linux-" + runtime.GOARCH,
+	} {
+		if !pattern.MatchString(asset) {
+			t.Errorf("expected pattern %q to match %q", pattern, asset)
+		}
+	}
+
+	for _, asset := range []string{
+		"other-protokube",
+		"protokube.sha256",
+		"protokube-linux-not-this-architecture",
+	} {
+		if pattern.MatchString(asset) {
+			t.Errorf("expected pattern %q not to match %q", pattern, asset)
+		}
+	}
+}
 
 func TestProtokubeBuilder(t *testing.T) {
 	RunGoldenTest(t, "tests/protokube/", "protokube", func(nodeupModelContext *NodeupModelContext, target *fi.NodeupModelBuilderContext) error {

@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"strings"
 
 	"k8s.io/klog/v2"
 	"k8s.io/kops"
@@ -149,7 +150,7 @@ func KopsFileURL(file string, assetBuilder *assets.AssetBuilder) (*assets.FileAs
 		return nil, err
 	}
 
-	base.Path = path.Join(base.Path, file)
+	base.Path = path.Join(base.Path, kopsAssetPath(base, file))
 
 	asset, err := assetBuilder.RemapFile(base, nil)
 	if err != nil {
@@ -157,4 +158,21 @@ func KopsFileURL(file string, assetBuilder *assets.AssetBuilder) (*assets.FileAs
 	}
 
 	return asset, nil
+}
+
+func kopsAssetPath(base *url.URL, file string) string {
+	file = strings.TrimPrefix(path.Clean("/"+file), "/")
+	if base.Host != "github.com" || !strings.Contains(base.Path, "/releases/download/") {
+		return file
+	}
+
+	parts := strings.Split(file, "/")
+	if len(parts) == 3 && parts[0] == "linux" {
+		return fmt.Sprintf("%s-linux-%s", parts[2], parts[1])
+	}
+	if len(parts) == 2 && parts[0] == "images" {
+		return parts[1]
+	}
+
+	return file
 }

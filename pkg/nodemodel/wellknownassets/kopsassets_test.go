@@ -70,3 +70,62 @@ func Test_BuildMirroredAsset(t *testing.T) {
 		})
 	}
 }
+
+func TestKopsAssetPath(t *testing.T) {
+	tests := []struct {
+		name     string
+		baseURL  string
+		file     string
+		expected string
+	}{
+		{
+			name:     "regular base URL preserves binary hierarchy",
+			baseURL:  "https://assets.example.com/kops/v1/",
+			file:     "linux/amd64/nodeup",
+			expected: "linux/amd64/nodeup",
+		},
+		{
+			name:     "regular base URL preserves image hierarchy",
+			baseURL:  "https://assets.example.com/kops/v1/",
+			file:     "images/kops-controller-amd64.tar.gz",
+			expected: "images/kops-controller-amd64.tar.gz",
+		},
+		{
+			name:     "GitHub release flattens binary name",
+			baseURL:  "https://github.com/Elemento-Modular-Cloud/kops/releases/download/v1/",
+			file:     "linux/amd64/nodeup",
+			expected: "nodeup-linux-amd64",
+		},
+		{
+			name:     "GitHub release flattens arm64 binary name",
+			baseURL:  "https://github.com/Elemento-Modular-Cloud/kops/releases/download/v1/",
+			file:     "linux/arm64/protokube",
+			expected: "protokube-linux-arm64",
+		},
+		{
+			name:     "GitHub release flattens image path",
+			baseURL:  "https://github.com/Elemento-Modular-Cloud/kops/releases/download/v1/",
+			file:     "images/kops-controller-amd64.tar.gz",
+			expected: "kops-controller-amd64.tar.gz",
+		},
+		{
+			name:     "GitHub release preserves unknown hierarchy",
+			baseURL:  "https://github.com/Elemento-Modular-Cloud/kops/releases/download/v1/",
+			file:     "other/example/file",
+			expected: "other/example/file",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			base, err := url.Parse(tc.baseURL)
+			if err != nil {
+				t.Fatalf("parsing base URL: %v", err)
+			}
+
+			if actual := kopsAssetPath(base, tc.file); actual != tc.expected {
+				t.Fatalf("unexpected asset path: got %q, want %q", actual, tc.expected)
+			}
+		})
+	}
+}

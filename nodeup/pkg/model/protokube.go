@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"k8s.io/klog/v2"
@@ -42,6 +43,10 @@ type ProtokubeBuilder struct {
 
 var _ fi.NodeupModelBuilder = &ProtokubeBuilder{}
 
+func kopsBinaryAssetPattern(name string) *regexp.Regexp {
+	return regexp.MustCompile(fmt.Sprintf(`(?:^|/)%s(?:-linux-%s)?$`, regexp.QuoteMeta(name), regexp.QuoteMeta(runtime.GOARCH)))
+}
+
 // Build is responsible for generating the options for protokube
 func (t *ProtokubeBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 	// check is not a master and we are not using gossip (https://github.com/kubernetes/kops/pull/3091)
@@ -51,13 +56,13 @@ func (t *ProtokubeBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 	}
 
 	{
-		name, res, err := t.Assets.FindMatch(regexp.MustCompile("protokube$"))
+		_, res, err := t.Assets.FindMatch(kopsBinaryAssetPattern("protokube"))
 		if err != nil {
 			return err
 		}
 
 		c.AddTask(&nodetasks.File{
-			Path:     filepath.Join("/opt/kops/bin", name),
+			Path:     filepath.Join("/opt/kops/bin", "protokube"),
 			Contents: res,
 			Type:     nodetasks.FileType_File,
 			Mode:     fi.PtrTo("0755"),
@@ -65,13 +70,13 @@ func (t *ProtokubeBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 	}
 
 	{
-		name, res, err := t.Assets.FindMatch(regexp.MustCompile("channels$"))
+		_, res, err := t.Assets.FindMatch(kopsBinaryAssetPattern("channels"))
 		if err != nil {
 			return err
 		}
 
 		c.AddTask(&nodetasks.File{
-			Path:     filepath.Join("/opt/kops/bin", name),
+			Path:     filepath.Join("/opt/kops/bin", "channels"),
 			Contents: res,
 			Type:     nodetasks.FileType_File,
 			Mode:     fi.PtrTo("0755"),

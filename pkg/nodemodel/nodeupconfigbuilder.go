@@ -130,14 +130,7 @@ func NewNodeUpConfigBuilder(cluster *kops.Cluster, assetBuilder *assets.AssetBui
 		if os.Getenv("KOPS_BASE_URL") != "" && isMaster {
 			for _, arch := range architectures.GetSupported() {
 				for _, name := range []string{"kops-utils-cp", "kops-controller", "dns-controller", "kube-apiserver-healthcheck"} {
-					baseURL, err := url.Parse(os.Getenv("KOPS_BASE_URL"))
-					if err != nil {
-						return nil, err
-					}
-
-					baseURL.Path = path.Join(baseURL.Path, "/images/"+name+"-"+string(arch)+".tar.gz")
-
-					asset, err := assetBuilder.RemapFile(baseURL, nil)
+					asset, err := wellknownassets.KopsFileURL("images/"+name+"-"+string(arch)+".tar.gz", assetBuilder)
 					if err != nil {
 						return nil, err
 					}
@@ -153,14 +146,7 @@ func NewNodeUpConfigBuilder(cluster *kops.Cluster, assetBuilder *assets.AssetBui
 		if os.Getenv("KOPS_BASE_URL") != "" && isAPIServer {
 			for _, arch := range architectures.GetSupported() {
 				for _, name := range []string{"kube-apiserver-healthcheck"} {
-					baseURL, err := url.Parse(os.Getenv("KOPS_BASE_URL"))
-					if err != nil {
-						return nil, err
-					}
-
-					baseURL.Path = path.Join(baseURL.Path, "/images/"+name+"-"+string(arch)+".tar.gz")
-
-					asset, err := assetBuilder.RemapFile(baseURL, nil)
+					asset, err := wellknownassets.KopsFileURL("images/"+name+"-"+string(arch)+".tar.gz", assetBuilder)
 					if err != nil {
 						return nil, err
 					}
