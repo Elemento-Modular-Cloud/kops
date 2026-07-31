@@ -349,6 +349,13 @@ func (c *NodeupModelContext) UsesMetadataNodeIP() bool {
 	return c.UsesSecondaryIP() || c.CloudProvider() == kops.CloudProviderElemento
 }
 
+// UsesMetadataAPIServerAddress reports whether kube-apiserver should advertise
+// the internal IP selected by the cloud integration.
+func (c *NodeupModelContext) UsesMetadataAPIServerAddress() bool {
+	return c.CloudProvider() == kops.CloudProviderHetzner ||
+		c.CloudProvider() == kops.CloudProviderElemento
+}
+
 // KubectlPath returns distro based path for kubectl
 func (c *NodeupModelContext) KubectlPath() string {
 	kubeletCommand := "/usr/local/bin"

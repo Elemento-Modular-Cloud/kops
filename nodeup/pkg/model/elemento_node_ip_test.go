@@ -60,3 +60,13 @@ func TestElementoUsesMetadataNodeIP(t *testing.T) {
 		t.Fatal("expected Elemento to configure kubelet with the injected node IP")
 	}
 }
+
+func TestElementoUsesMetadataAPIServerAddress(t *testing.T) {
+	c := &NodeupModelContext{
+		BootConfig:   &nodeup.BootConfig{CloudProvider: kops.CloudProviderElemento},
+		NodeupConfig: &nodeup.Config{},
+	}
+	if !c.UsesMetadataAPIServerAddress() {
+		t.Fatal("expected Elemento to configure kube-apiserver with the injected node IP")
+	}
+}
