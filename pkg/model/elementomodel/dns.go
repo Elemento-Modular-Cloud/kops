@@ -72,10 +72,14 @@ func (b *ElementoModelContext) elementoDNSRecordTasksForInstanceGroup(ig *kops.I
 	igSize := fi.ValueOf(ig.Spec.MinSize)
 	clusterName := b.ClusterName()
 	zoneName := b.ClusterName()
+	googleControlPlaneIP, externalControlPlane, err := googleControlPlaneIPForInstanceGroup(ig)
+	if err != nil {
+		return nil, err
+	}
 
 	var tasks []*elementotasks.DNSRecord
 	addRecord := func(recordName string, reservation *elementotasks.DHCPReservation) {
-		tasks = append(tasks, &elementotasks.DNSRecord{
+		task := &elementotasks.DNSRecord{
 			Name:            fi.PtrTo(trimElementoDNSZoneSuffix(recordName, zoneName)),
 			DNSZone:         fi.PtrTo(zoneName),
 			DNSZoneTask:     dnsZoneTask,
@@ -83,13 +87,21 @@ func (b *ElementoModelContext) elementoDNSRecordTasksForInstanceGroup(ig *kops.I
 			Type:            fi.PtrTo("A"),
 			TTL:             fi.PtrTo(elementoDNSRecordTTL),
 			Lifecycle:       lifecycle,
-		})
+		}
+		if externalControlPlane {
+			task.Data = fi.PtrTo(googleControlPlaneIP)
+			task.DHCPReservation = nil
+		}
+		tasks = append(tasks, task)
 	}
 
 	for ordinal := int32(1); ordinal <= igSize; ordinal++ {
 		serverName := fmt.Sprintf("%s-%d", ig.Name, ordinal)
-		reservation := &elementotasks.DHCPReservation{
-			Name: fi.PtrTo(serverName),
+		var reservation *elementotasks.DHCPReservation
+		if !externalControlPlane {
+			reservation = &elementotasks.DHCPReservation{
+				Name: fi.PtrTo(serverName),
+			}
 		}
 
 		addRecord(fmt.Sprintf("%s.%s", serverName, clusterName), reservation)

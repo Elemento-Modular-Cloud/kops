@@ -65,6 +65,9 @@ type BootstrapScript struct {
 
 	// nodeupConfig contains the nodeup config.
 	nodeupConfig fi.CloudupTaskDependentResource
+
+	// bootConfig contains the small configuration written to kube_env.yaml.
+	bootConfig fi.CloudupTaskDependentResource
 }
 
 var (
@@ -121,6 +124,12 @@ func (b *BootstrapScript) kubeEnv(ig *kops.InstanceGroup, c *fi.CloudupContext) 
 	bootConfig.NodeupConfigHash = base64.StdEncoding.EncodeToString(sum256[:])
 	b.nodeupConfig.Resource = fi.NewBytesResource(configData)
 
+	bootConfigData, err := utils.YamlMarshal(bootConfig)
+	if err != nil {
+		return nil, fmt.Errorf("error converting boot config to yaml: %v", err)
+	}
+	b.bootConfig.Resource = fi.NewBytesResource(bootConfigData)
+
 	return bootConfig, nil
 }
 
@@ -166,12 +175,19 @@ func KeypairNamesForInstanceGroup(cluster *kops.Cluster, ig *kops.InstanceGroup)
 // ResourceNodeUp generates and returns a nodeup (bootstrap) script from a
 // template file, substituting in specific env vars & cluster spec configuration
 func (b *BootstrapScriptBuilder) ResourceNodeUp(c *fi.CloudupModelBuilderContext, ig *kops.InstanceGroup) (fi.Resource, error) {
+	userData, _, err := b.ResourceNodeUpWithBootConfig(c, ig)
+	return userData, err
+}
+
+// ResourceNodeUpWithBootConfig returns both the bootstrap user-data and the
+// kube_env.yaml content used to start nodeup.
+func (b *BootstrapScriptBuilder) ResourceNodeUpWithBootConfig(c *fi.CloudupModelBuilderContext, ig *kops.InstanceGroup) (fi.Resource, fi.Resource, error) {
 	keypairNames := KeypairNamesForInstanceGroup(b.Cluster, ig)
 
 	if ig.IsBastion() {
 		// Bastions can have AdditionalUserData, but if there isn't any skip this part
 		if len(ig.Spec.AdditionalUserData) == 0 {
-			return nil, nil
+			return nil, nil, nil
 		}
 	}
 
@@ -179,7 +195,7 @@ func (b *BootstrapScriptBuilder) ResourceNodeUp(c *fi.CloudupModelBuilderContext
 	for _, keypair := range keypairNames {
 		caTaskObject, found := c.Tasks["Keypair/"+keypair]
 		if !found {
-			return nil, fmt.Errorf("keypair/%s task not found", keypair)
+			return nil, nil, fmt.Errorf("keypair/%s task not found", keypair)
 		}
 		caTasks[keypair] = caTaskObject.(*fitasks.Keypair)
 	}
@@ -194,6 +210,7 @@ func (b *BootstrapScriptBuilder) ResourceNodeUp(c *fi.CloudupModelBuilderContext
 	}
 	task.resource.Task = task
 	task.nodeupConfig.Task = task
+	task.bootConfig.Task = task
 	c.AddTask(task)
 
 	c.AddTask(&fitasks.ManagedFile{
@@ -202,7 +219,7 @@ func (b *BootstrapScriptBuilder) ResourceNodeUp(c *fi.CloudupModelBuilderContext
 		Location:  fi.PtrTo("igconfig/" + ig.Spec.Role.ToLowerString() + "/" + ig.Name + "/nodeupconfig.yaml"),
 		Contents:  &task.nodeupConfig,
 	})
-	return &task.resource, nil
+	return &task.resource, &task.bootConfig, nil
 }
 
 func (b *BootstrapScript) GetName() *string {

@@ -27,6 +27,7 @@ import (
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
 	"k8s.io/kops/upup/pkg/fi/cloudup/elementotasks"
+	"k8s.io/kops/upup/pkg/fi/fitasks"
 )
 
 // ServerGroupModelBuilder configures server objects
@@ -69,6 +70,10 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 
 	for _, ig := range b.InstanceGroups {
 		igSize := fi.ValueOf(ig.Spec.MinSize)
+		googleControlPlaneIP, externalControlPlane, err := googleControlPlaneIPForInstanceGroup(ig)
+		if err != nil {
+			return err
+		}
 		labels, err := b.CloudTagsForInstanceGroup(ig)
 		if err != nil {
 			return err
@@ -77,9 +82,17 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 		labels[elemento.TagKubernetesInstanceGroup] = ig.Name
 		labels[elemento.TagKubernetesInstanceRole] = string(ig.Spec.Role)
 
-		userData, err := b.BootstrapScriptBuilder.ResourceNodeUp(c, ig)
+		userData, bootConfig, err := b.BootstrapScriptBuilder.ResourceNodeUpWithBootConfig(c, ig)
 		if err != nil {
 			return err
+		}
+		if externalControlPlane {
+			c.AddTask(&fitasks.ManagedFile{
+				Name:      fi.PtrTo("kubeenv-" + ig.Name),
+				Lifecycle: b.Lifecycle,
+				Location:  fi.PtrTo("igconfig/" + ig.Spec.Role.ToLowerString() + "/" + ig.Name + "/kube_env.yaml"),
+				Contents:  bootConfig,
+			})
 		}
 
 		// For debugging: wrap the userData to print it when it's ready
@@ -90,7 +103,13 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 			}
 		}
 
-		fmt.Printf("CREATING server group for instance group %q with size %d\n", ig.Name, igSize)
+		serverCount := int(igSize)
+		if externalControlPlane {
+			serverCount = 0
+			fmt.Printf("EKOPS: Skipping Elemento VM creation for Google control-plane instance group %q at %s\n", ig.Name, googleControlPlaneIP)
+		}
+
+		fmt.Printf("CREATING server group for instance group %q with size %d\n", ig.Name, serverCount)
 		fmt.Printf("--- End of UserData ---\n")
 
 		// Determine root volume size
@@ -111,7 +130,7 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 			Lifecycle:            b.Lifecycle,
 			SSHKeys:              sshkeyTasks,
 			Network:              network,
-			Count:                int(igSize),
+			Count:                serverCount,
 			Location:             ig.Spec.Subnets[0],
 			Size:                 ig.Spec.MachineType,
 			Image:                ig.Spec.Image,
@@ -123,11 +142,13 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 			RootVolumeSize:       rootVolumeSize,
 			DHCPReservationTasks: make([]*elementotasks.DHCPReservation, 0, igSize),
 		}
-		for ordinal := int32(1); ordinal <= igSize; ordinal++ {
-			serverName := fmt.Sprintf("%s-%d", ig.Name, ordinal)
-			serverGroup.DHCPReservationTasks = append(serverGroup.DHCPReservationTasks, &elementotasks.DHCPReservation{
-				Name: fi.PtrTo(serverName),
-			})
+		if !externalControlPlane {
+			for ordinal := int32(1); ordinal <= igSize; ordinal++ {
+				serverName := fmt.Sprintf("%s-%d", ig.Name, ordinal)
+				serverGroup.DHCPReservationTasks = append(serverGroup.DHCPReservationTasks, &elementotasks.DHCPReservation{
+					Name: fi.PtrTo(serverName),
+				})
+			}
 		}
 		if b.Cluster.PublishesDNSRecords() {
 			serverGroup.DNSZoneTask = dnsZoneTask
