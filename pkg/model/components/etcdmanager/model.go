@@ -526,7 +526,7 @@ func (b *EtcdManagerBuilder) buildPod(etcdCluster kops.EtcdClusterSpec, instance
 			}
 			config.VolumeNameTag = fmt.Sprintf("%s=%s", scaleway.TagInstanceGroup, instanceGroupName)
 
-		case kops.CloudProviderMetal, kops.CloudProviderElemento:
+		case kops.CloudProviderMetal:
 			config.VolumeProvider = "external"
 			config.BackupStore = "file:///mnt/disks/backups"
 			config.VolumeTag = []string{
@@ -538,7 +538,6 @@ func (b *EtcdManagerBuilder) buildPod(etcdCluster kops.EtcdClusterSpec, instance
 			}
 			staticConfig.Nodes = append(staticConfig.Nodes, StaticConfigNode{
 				ID: fmt.Sprintf("%s--%s--%d", b.Cluster.Name, etcdCluster.Name, 0),
-				// TODO: Support multiple control-plane nodes (will be interesting!)
 				IP: []string{"node0" + "." + etcdCluster.Name + "." + b.Cluster.Name},
 			})
 			b, err := json.Marshal(staticConfig)
@@ -546,6 +545,19 @@ func (b *EtcdManagerBuilder) buildPod(etcdCluster kops.EtcdClusterSpec, instance
 				return nil, fmt.Errorf("building static config: %w", err)
 			}
 			config.StaticConfig = string(b)
+
+		case kops.CloudProviderElemento:
+			config.VolumeProvider = "external"
+			config.BackupStore = "file:///mnt/disks/backups"
+			config.VolumeTag = []string{
+				fmt.Sprintf("%s--%s--", b.Cluster.Name, etcdCluster.Name),
+			}
+
+			staticConfig, err := buildElementoStaticConfig(b.Cluster.Name, etcdCluster)
+			if err != nil {
+				return nil, err
+			}
+			config.StaticConfig = staticConfig
 
 		default:
 			return nil, fmt.Errorf("CloudProvider %q not supported with etcd-manager", b.Cluster.GetCloudProvider())
@@ -642,6 +654,24 @@ func (b *EtcdManagerBuilder) buildPod(etcdCluster kops.EtcdClusterSpec, instance
 	kubemanifest.MarkPodAsClusterCritical(pod)
 
 	return pod, nil
+}
+
+func buildElementoStaticConfig(clusterName string, etcdCluster kops.EtcdClusterSpec) (string, error) {
+	staticConfig := &StaticConfig{
+		EtcdVersion: etcdCluster.Version,
+	}
+	for index := range etcdCluster.Members {
+		staticConfig.Nodes = append(staticConfig.Nodes, StaticConfigNode{
+			ID: fmt.Sprintf("%s--%s--%d", clusterName, etcdCluster.Name, index),
+			IP: []string{fmt.Sprintf("node%d.%s.%s", index, etcdCluster.Name, clusterName)},
+		})
+	}
+
+	data, err := json.Marshal(staticConfig)
+	if err != nil {
+		return "", fmt.Errorf("building Elemento etcd static config: %w", err)
+	}
+	return string(data), nil
 }
 
 // config defines the flags for etcd-manager

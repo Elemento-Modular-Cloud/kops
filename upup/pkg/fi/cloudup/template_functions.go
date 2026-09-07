@@ -118,6 +118,9 @@ func (tf *TemplateFunctions) AddTo(dest template.FuncMap, secretStore fi.SecretS
 	}
 
 	dest["GetCloudProvider"] = cluster.GetCloudProvider
+	dest["UsesElemento"] = func() bool {
+		return cluster.GetCloudProvider() == kops.CloudProviderElemento
+	}
 	dest["GetInstanceGroup"] = tf.GetInstanceGroup
 	dest["GetNodeInstanceGroups"] = tf.GetNodeInstanceGroups
 	dest["GetClusterAutoscalerNodeGroups"] = tf.GetClusterAutoscalerNodeGroups
@@ -774,7 +777,11 @@ func (tf *TemplateFunctions) KopsControllerConfig() (string, error) {
 			}
 
 		case kops.CloudProviderElemento:
-			config.Server.Provider.Elemento = &elemento.ElementoVerifierOptions{}
+			config.Server.Provider.Elemento = &elemento.ElementoVerifierOptions{
+				ClusterName:        tf.ClusterName(),
+				AuthServiceURLFile: elemento.ElementoAuthServiceURLFile,
+				VerifierAPIKeyFile: elemento.ElementoVerifierAPIKeyFile,
+			}
 
 		case kops.CloudProviderMetal:
 			// Use crypto public/private keys for Metal

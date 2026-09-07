@@ -56,11 +56,11 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/azure"
 	"k8s.io/kops/upup/pkg/fi/cloudup/do"
+	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce/tpm/gcetpmsigner"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner"
 	"k8s.io/kops/upup/pkg/fi/cloudup/openstack"
 	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
-	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
 	"k8s.io/kops/upup/pkg/fi/nodeup/local"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
 	"k8s.io/kops/upup/pkg/fi/secrets"
@@ -85,11 +85,13 @@ func (c *NodeUpCommand) Run(out io.Writer) error {
 	ctx := context.Background()
 
 	var bootConfig nodeup.BootConfig
+	var bootConfigBytes []byte
 	if c.ConfigLocation != "" {
 		b, err := vfs.Context.ReadFile(c.ConfigLocation)
 		if err != nil {
 			return fmt.Errorf("error loading configuration %q: %v", c.ConfigLocation, err)
 		}
+		bootConfigBytes = b
 
 		err = utils.YamlUnmarshal(b, &bootConfig)
 		if err != nil {
@@ -101,6 +103,9 @@ func (c *NodeUpCommand) Run(out io.Writer) error {
 
 	if c.CacheDir == "" {
 		return fmt.Errorf("CacheDir is required")
+	}
+	if err := verifyElementoControlPlaneBootstrap(ctx, &bootConfig, bootConfigBytes); err != nil {
+		return err
 	}
 
 	region, err := getRegion(ctx, &bootConfig)

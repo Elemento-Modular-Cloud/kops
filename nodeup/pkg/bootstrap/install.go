@@ -79,6 +79,7 @@ func (i *Installation) Build(c *fi.InstallModelBuilderContext) {
 
 func (i *Installation) buildEnvFile() *nodetasks.InstallFile {
 	envVars := make(map[string]string)
+	var mode *string
 
 	if os.Getenv("AWS_REGION") != "" {
 		envVars["AWS_REGION"] = os.Getenv("AWS_REGION")
@@ -86,6 +87,13 @@ func (i *Installation) buildEnvFile() *nodetasks.InstallFile {
 
 	if os.Getenv("GOSSIP_DNS_CONN_LIMIT") != "" {
 		envVars["GOSSIP_DNS_CONN_LIMIT"] = os.Getenv("GOSSIP_DNS_CONN_LIMIT")
+	}
+
+	for _, name := range []string{"ELEMENTO_AUTH_URL", "ELEMENTO_AUTH_VERIFIER_API_KEY"} {
+		if value := os.Getenv(name); value != "" {
+			envVars[name] = value
+			mode = fi.PtrTo("0600")
+		}
 	}
 
 	// Pass in required credentials when using user-defined s3 endpoint
@@ -147,6 +155,7 @@ func (i *Installation) buildEnvFile() *nodetasks.InstallFile {
 	task := &nodetasks.InstallFile{File: nodetasks.File{
 		Path:     "/etc/sysconfig/kops-configuration",
 		Contents: fi.NewStringResource(sysconfig),
+		Mode:     mode,
 		Type:     nodetasks.FileType_File,
 	}}
 

@@ -84,6 +84,67 @@ func TestCreateEtcdCluster(t *testing.T) {
 	}
 }
 
+func TestControlPlaneInstanceGroupName(t *testing.T) {
+	tests := []struct {
+		name              string
+		cloudProvider     api.CloudProviderID
+		index             int
+		controlPlaneCount int
+		zoneCount         int
+		want              string
+	}{
+		{
+			name:              "single Elemento control plane",
+			cloudProvider:     api.CloudProviderElemento,
+			index:             0,
+			controlPlaneCount: 1,
+			zoneCount:         1,
+			want:              "control-plane-europe",
+		},
+		{
+			name:              "first Elemento control plane",
+			cloudProvider:     api.CloudProviderElemento,
+			index:             0,
+			controlPlaneCount: 3,
+			zoneCount:         1,
+			want:              "control-plane-europe",
+		},
+		{
+			name:              "second Elemento control plane",
+			cloudProvider:     api.CloudProviderElemento,
+			index:             1,
+			controlPlaneCount: 3,
+			zoneCount:         1,
+			want:              "control-plane-europe-2",
+		},
+		{
+			name:              "third Elemento control plane",
+			cloudProvider:     api.CloudProviderElemento,
+			index:             2,
+			controlPlaneCount: 3,
+			zoneCount:         1,
+			want:              "control-plane-europe-3",
+		},
+		{
+			name:              "non-Elemento naming remains unchanged",
+			cloudProvider:     api.CloudProviderAWS,
+			index:             0,
+			controlPlaneCount: 3,
+			zoneCount:         1,
+			want:              "control-plane-europe-1",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := controlPlaneInstanceGroupName(test.cloudProvider, "europe", test.index, test.controlPlaneCount, test.zoneCount)
+			if got != test.want {
+				t.Fatalf("controlPlaneInstanceGroupName() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestSetupNetworking(t *testing.T) {
 	tests := []struct {
 		options  NewClusterOptions

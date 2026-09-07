@@ -17,7 +17,9 @@ limitations under the License.
 package bootstrap
 
 import (
+	"io"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"k8s.io/kops/pkg/testutils"
@@ -28,6 +30,32 @@ func TestBootstarapBuilder_Simple(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-test1")
 
 	runInstallBuilderTest(t, "tests/simple")
+}
+
+func TestInstallationPersistsElementoVerifierCredentials(t *testing.T) {
+	t.Setenv("ELEMENTO_AUTH_URL", "https://auth.example.com")
+	t.Setenv("ELEMENTO_AUTH_VERIFIER_API_KEY", "test-verifier-key")
+
+	task := (&Installation{}).buildEnvFile()
+	if task.Mode == nil || *task.Mode != "0600" {
+		t.Fatalf("environment file mode = %v, want 0600", task.Mode)
+	}
+	reader, err := task.Contents.Open()
+	if err != nil {
+		t.Fatalf("opening environment file contents: %v", err)
+	}
+	contents, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("reading environment file contents: %v", err)
+	}
+	for _, expected := range []string{
+		"ELEMENTO_AUTH_URL=https://auth.example.com",
+		"ELEMENTO_AUTH_VERIFIER_API_KEY=test-verifier-key",
+	} {
+		if !strings.Contains(string(contents), expected) {
+			t.Errorf("environment file does not contain %q", expected)
+		}
+	}
 }
 
 func runInstallBuilderTest(t *testing.T, basedir string) {

@@ -40,7 +40,12 @@ type ServerGroupModelBuilder struct {
 var _ fi.CloudupModelBuilder = &ServerGroupModelBuilder{}
 
 func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
+	if err := validateGoogleControlPlaneConfiguration(b.InstanceGroups); err != nil {
+		return err
+	}
 	network := b.LinkToNetwork()
+	authService := &elementotasks.KubernetesAuthService{Name: fi.PtrTo(b.ClusterName())}
+	authCluster := &elementotasks.KubernetesAuthCluster{Name: fi.PtrTo(b.ClusterName())}
 	var sshkeyTasks []*elementotasks.SSHKey
 	for _, sshkey := range b.SSHPublicKeys {
 		fingerprint, err := pki.ComputeOpenSSHKeyFingerprint(string(sshkey))
@@ -86,7 +91,7 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 		if err != nil {
 			return err
 		}
-		if externalControlPlane {
+		if externalControlPlane || igSize == 0 {
 			c.AddTask(&fitasks.ManagedFile{
 				Name:      fi.PtrTo("kubeenv-" + ig.Name),
 				Lifecycle: b.Lifecycle,
@@ -126,21 +131,23 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 		}
 
 		serverGroup := elementotasks.ServerGroup{
-			Name:                 fi.PtrTo(ig.Name),
-			Lifecycle:            b.Lifecycle,
-			SSHKeys:              sshkeyTasks,
-			Network:              network,
-			Count:                serverCount,
-			Location:             ig.Spec.Subnets[0],
-			Size:                 ig.Spec.MachineType,
-			Image:                ig.Spec.Image,
-			Architecture:         determineArchitecture(ig),
-			EnableIPv4:           true,
-			EnableIPv6:           false,
-			UserData:             userData,
-			Labels:               labels,
-			RootVolumeSize:       rootVolumeSize,
-			DHCPReservationTasks: make([]*elementotasks.DHCPReservation, 0, igSize),
+			Name:                        fi.PtrTo(ig.Name),
+			Lifecycle:                   b.Lifecycle,
+			SSHKeys:                     sshkeyTasks,
+			Network:                     network,
+			Count:                       serverCount,
+			Location:                    ig.Spec.Subnets[0],
+			Size:                        ig.Spec.MachineType,
+			Image:                       ig.Spec.Image,
+			Architecture:                determineArchitecture(ig),
+			EnableIPv4:                  true,
+			EnableIPv6:                  false,
+			UserData:                    userData,
+			Labels:                      labels,
+			RootVolumeSize:              rootVolumeSize,
+			DHCPReservationTasks:        make([]*elementotasks.DHCPReservation, 0, igSize),
+			KubernetesAuthService:       authService,
+			KubernetesAuthInstanceGroup: &elementotasks.KubernetesAuthInstanceGroup{Name: fi.PtrTo(ig.Name), AuthCluster: authCluster},
 		}
 		if !externalControlPlane {
 			for ordinal := int32(1); ordinal <= igSize; ordinal++ {

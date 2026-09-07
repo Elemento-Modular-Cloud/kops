@@ -34,6 +34,9 @@ type DHCPModelBuilder struct {
 var _ fi.CloudupModelBuilder = &DHCPModelBuilder{}
 
 func (b *DHCPModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
+	if err := validateGoogleControlPlaneConfiguration(b.InstanceGroups); err != nil {
+		return err
+	}
 	networkName := b.ClusterName()
 	network := b.LinkToNetwork()
 	dnsZoneTask := &elementotasks.DNSZone{

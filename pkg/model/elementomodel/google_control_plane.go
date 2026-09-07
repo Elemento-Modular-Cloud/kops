@@ -26,21 +26,136 @@ import (
 	"k8s.io/kops/upup/pkg/fi"
 )
 
-const googleControlPlaneEnv = "GOOGLE_CONTROL_PLANE"
+const (
+	googleControlPlaneEnv              = "GOOGLE_CONTROL_PLANE"
+	googleControlPlaneInstanceGroupEnv = "GOOGLE_CONTROL_PLANE_IG"
+	googleControlPlanesEnv             = "GOOGLE_CONTROL_PLANES"
+)
+
+// Leave the external control-plane environment variables unset for an
+// all-AtomOS cluster. The implementation below remains available for future
+// Google or other vanilla-VM scenarios.
 
 func googleControlPlaneIPForInstanceGroup(ig *kops.InstanceGroup) (string, bool, error) {
-	value := strings.TrimSpace(os.Getenv(googleControlPlaneEnv))
-	if value == "" || ig.Spec.Role != kops.InstanceGroupRoleControlPlane {
+	if ig.Spec.Role != kops.InstanceGroupRoleControlPlane {
 		return "", false, nil
 	}
 
-	ip := net.ParseIP(value)
-	if ip == nil || ip.To4() == nil {
-		return "", false, fmt.Errorf("%s must contain a valid IPv4 address, got %q", googleControlPlaneEnv, value)
+	controlPlanes, err := googleControlPlaneIPs()
+	if err != nil {
+		return "", false, err
 	}
-	if fi.ValueOf(ig.Spec.MinSize) != 1 {
-		return "", false, fmt.Errorf("%s supports exactly one control-plane instance, but instance group %q has minSize %d", googleControlPlaneEnv, ig.Name, fi.ValueOf(ig.Spec.MinSize))
+	value, found := controlPlanes[ig.Name]
+	if !found {
+		legacyIP := strings.TrimSpace(os.Getenv(googleControlPlaneEnv))
+		legacyInstanceGroup := strings.TrimSpace(os.Getenv(googleControlPlaneInstanceGroupEnv))
+		if legacyIP == "" || legacyInstanceGroup != "" || len(controlPlanes) != 0 {
+			return "", false, nil
+		}
+		value = legacyIP
 	}
 
-	return ip.String(), true, nil
+	if fi.ValueOf(ig.Spec.MinSize) != 1 {
+		return "", false, fmt.Errorf("external Google control-plane instance group %q must have minSize 1, got %d", ig.Name, fi.ValueOf(ig.Spec.MinSize))
+	}
+
+	return value, true, nil
+}
+
+func googleControlPlaneIPs() (map[string]string, error) {
+	value := strings.TrimSpace(os.Getenv(googleControlPlanesEnv))
+	legacyIP := strings.TrimSpace(os.Getenv(googleControlPlaneEnv))
+	legacyInstanceGroup := strings.TrimSpace(os.Getenv(googleControlPlaneInstanceGroupEnv))
+	if value != "" && (legacyIP != "" || legacyInstanceGroup != "") {
+		return nil, fmt.Errorf("%s cannot be combined with %s or %s", googleControlPlanesEnv, googleControlPlaneEnv, googleControlPlaneInstanceGroupEnv)
+	}
+
+	controlPlanes := make(map[string]string)
+	if value == "" {
+		if legacyIP == "" || legacyInstanceGroup == "" {
+			return controlPlanes, nil
+		}
+		ip, err := parseGoogleControlPlaneIP(googleControlPlaneEnv, legacyIP)
+		if err != nil {
+			return nil, err
+		}
+		controlPlanes[legacyInstanceGroup] = ip
+		return controlPlanes, nil
+	}
+
+	usedIPs := make(map[string]string)
+	for _, entry := range strings.Split(value, ",") {
+		entry = strings.TrimSpace(entry)
+		instanceGroup, rawIP, found := strings.Cut(entry, "=")
+		instanceGroup = strings.TrimSpace(instanceGroup)
+		rawIP = strings.TrimSpace(rawIP)
+		if !found || instanceGroup == "" || rawIP == "" {
+			return nil, fmt.Errorf("%s entries must use instance-group=IPv4 format, got %q", googleControlPlanesEnv, entry)
+		}
+		if _, duplicate := controlPlanes[instanceGroup]; duplicate {
+			return nil, fmt.Errorf("%s contains duplicate instance group %q", googleControlPlanesEnv, instanceGroup)
+		}
+		ip, err := parseGoogleControlPlaneIP(googleControlPlanesEnv, rawIP)
+		if err != nil {
+			return nil, err
+		}
+		if previous, duplicate := usedIPs[ip]; duplicate {
+			return nil, fmt.Errorf("%s assigns IPv4 address %s to both %q and %q", googleControlPlanesEnv, ip, previous, instanceGroup)
+		}
+		controlPlanes[instanceGroup] = ip
+		usedIPs[ip] = instanceGroup
+	}
+	return controlPlanes, nil
+}
+
+func parseGoogleControlPlaneIP(environmentVariable, value string) (string, error) {
+	ip := net.ParseIP(value)
+	if ip == nil || ip.To4() == nil {
+		return "", fmt.Errorf("%s must contain valid IPv4 addresses, got %q", environmentVariable, value)
+	}
+	return ip.String(), nil
+}
+
+func validateGoogleControlPlaneConfiguration(instanceGroups []*kops.InstanceGroup) error {
+	controlPlaneIPs, err := googleControlPlaneIPs()
+	if err != nil {
+		return err
+	}
+	legacyIP := strings.TrimSpace(os.Getenv(googleControlPlaneEnv))
+	legacyInstanceGroup := strings.TrimSpace(os.Getenv(googleControlPlaneInstanceGroupEnv))
+	if len(controlPlaneIPs) == 0 && legacyIP == "" {
+		return nil
+	}
+
+	activeControlPlanes := make(map[string]*kops.InstanceGroup)
+	for _, ig := range instanceGroups {
+		if ig.Spec.Role == kops.InstanceGroupRoleControlPlane && fi.ValueOf(ig.Spec.MinSize) > 0 {
+			activeControlPlanes[ig.Name] = ig
+		}
+	}
+
+	if legacyIP != "" && legacyInstanceGroup == "" {
+		if _, err := parseGoogleControlPlaneIP(googleControlPlaneEnv, legacyIP); err != nil {
+			return err
+		}
+		if len(activeControlPlanes) != 1 {
+			return fmt.Errorf("%s must name the external control-plane instance group when %s is used with multiple control planes", googleControlPlaneInstanceGroupEnv, googleControlPlaneEnv)
+		}
+		return nil
+	}
+
+	for instanceGroup := range controlPlaneIPs {
+		ig, found := activeControlPlanes[instanceGroup]
+		if !found {
+			return fmt.Errorf("external Google control-plane instance group %q does not match an active control-plane instance group", instanceGroup)
+		}
+		if fi.ValueOf(ig.Spec.MinSize) != 1 {
+			return fmt.Errorf("external Google control-plane instance group %q must have minSize 1, got %d", instanceGroup, fi.ValueOf(ig.Spec.MinSize))
+		}
+	}
+
+	if len(controlPlaneIPs) >= len(activeControlPlanes) {
+		return fmt.Errorf("at least one active control-plane instance group must remain managed by AtomOS")
+	}
+	return nil
 }

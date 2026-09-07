@@ -19,12 +19,16 @@ package elemento
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	// "github.com/Elemento-Modular-Cloud/ecloud-go/ecloud/metadata"
 	"k8s.io/kops/pkg/bootstrap"
 )
 
-const ElementoAuthenticationTokenPrefix = "x-elemento-id "
+const (
+	ElementoAuthenticationTokenPrefix = "x-elemento-id "
+	ElementoBootstrapTokenFile        = "/etc/elemento/bootstrap-token"
+)
 
 type elementoAuthenticator struct {
 }
@@ -36,9 +40,21 @@ func NewElementoAuthenticator() (bootstrap.Authenticator, error) {
 }
 
 func (h *elementoAuthenticator) CreateToken(body []byte) (string, error) {
-	hostname, err := os.Hostname()
+	token, err := readElementoBootstrapToken(ElementoBootstrapTokenFile)
 	if err != nil {
-		return "", fmt.Errorf("getting hostname for Elemento bootstrap token: %w", err)
+		return "", err
 	}
-	return ElementoAuthenticationTokenPrefix + hostname, nil
+	return ElementoAuthenticationTokenPrefix + token, nil
+}
+
+func readElementoBootstrapToken(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading Elemento bootstrap token file %q: %w", path, err)
+	}
+	token := strings.TrimSpace(string(b))
+	if token == "" {
+		return "", fmt.Errorf("Elemento bootstrap token file %q is empty", path)
+	}
+	return token, nil
 }

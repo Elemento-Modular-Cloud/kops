@@ -50,6 +50,7 @@ type ElementoCloud interface {
 	SSHKeyClient() ecloud.SSHKeyClient
 	VolumeClient() ecloud.VolumeClient
 	NodeupClient(ctx context.Context) ecloud.NodeupClient
+	KubernetesAuthClient() *ecloud.KubernetesAuthClient
 
 	DnsClient() ecloud.DnsClient
 	DhcpClient() ecloud.DhcpClient
@@ -181,6 +182,10 @@ func (c *elementoCloudImplementation) VolumeClient() ecloud.VolumeClient {
 
 func (c *elementoCloudImplementation) NodeupClient(ctx context.Context) ecloud.NodeupClient {
 	return c.Client.Nodeup
+}
+
+func (c *elementoCloudImplementation) KubernetesAuthClient() *ecloud.KubernetesAuthClient {
+	return &c.Client.KubernetesAuth
 }
 
 func buildCloudInstanceGroup(ig *kops.InstanceGroup, sg []*ecloud.Server, nodeMap map[string]*v1.Node) (*cloudinstances.CloudInstanceGroup, error) {

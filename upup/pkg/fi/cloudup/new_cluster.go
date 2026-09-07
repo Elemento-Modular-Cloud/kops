@@ -904,22 +904,12 @@ func setupControlPlane(opt *NewClusterOptions, cluster *api.Cluster, zoneToSubne
 
 		for i := 0; i < int(controlPlaneCount); i++ {
 			zone := controlPlaneZones[i%len(controlPlaneZones)]
-			name := zone
-			if cloudProvider == api.CloudProviderDO {
-				if int(controlPlaneCount) >= len(controlPlaneZones) {
-					name += "-" + strconv.Itoa(1+(i/len(controlPlaneZones)))
-				}
-			} else {
-				if int(controlPlaneCount) > len(controlPlaneZones) {
-					name += "-" + strconv.Itoa(1+(i/len(controlPlaneZones)))
-				}
-			}
 
 			g := &api.InstanceGroup{}
 			g.Spec.Role = api.InstanceGroupRoleControlPlane
 			g.Spec.MinSize = fi.PtrTo(int32(1))
 			g.Spec.MaxSize = fi.PtrTo(int32(1))
-			g.ObjectMeta.Name = "control-plane-" + name
+			g.ObjectMeta.Name = controlPlaneInstanceGroupName(cloudProvider, zone, i, int(controlPlaneCount), len(controlPlaneZones))
 
 			subnets := zoneToSubnetsMap[zone]
 			switch len(subnets) {
@@ -1004,6 +994,23 @@ func setupControlPlane(opt *NewClusterOptions, cluster *api.Cluster, zoneToSubne
 	}
 
 	return controlPlanes, nil
+}
+
+func controlPlaneInstanceGroupName(cloudProvider api.CloudProviderID, zone string, index, controlPlaneCount, zoneCount int) string {
+	name := zone
+	if cloudProvider == api.CloudProviderElemento && index == 0 {
+		return "control-plane-" + name
+	}
+
+	if cloudProvider == api.CloudProviderDO {
+		if controlPlaneCount >= zoneCount {
+			name += "-" + strconv.Itoa(1+(index/zoneCount))
+		}
+	} else if controlPlaneCount > zoneCount {
+		name += "-" + strconv.Itoa(1+(index/zoneCount))
+	}
+
+	return "control-plane-" + name
 }
 
 func trimCommonPrefix(names []string) []string {

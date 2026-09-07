@@ -20,8 +20,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 
 	"github.com/Elemento-Modular-Cloud/ecloud-go/ecloud"
@@ -37,8 +39,9 @@ type ServerGroup struct {
 	SSHKeys   []*SSHKey
 	Network   *Network
 
-	Count      int
-	NeedUpdate []string
+	Count                      int
+	NeedUpdate                 []string
+	AuthenticationBindingError string
 
 	Location     string
 	Size         string
@@ -56,6 +59,9 @@ type ServerGroup struct {
 	DNSRecordTasks []*DNSRecord
 
 	DHCPReservationTasks []*DHCPReservation
+
+	KubernetesAuthService       *KubernetesAuthService
+	KubernetesAuthInstanceGroup *KubernetesAuthInstanceGroup
 
 	// RootVolumeSize is the size of the root volume in GB
 	RootVolumeSize *int32
@@ -81,6 +87,12 @@ func (v *ServerGroup) GetDependencies(tasks map[string]fi.CloudupTask) []fi.Clou
 	for _, dhcpReservationTask := range v.DHCPReservationTasks {
 		deps = append(deps, dhcpReservationTask)
 	}
+	if v.KubernetesAuthService != nil {
+		deps = append(deps, v.KubernetesAuthService)
+	}
+	if v.KubernetesAuthInstanceGroup != nil {
+		deps = append(deps, v.KubernetesAuthInstanceGroup)
+	}
 	if v.UserData != nil {
 		deps = append(deps, fi.FindDependencies(tasks, v.UserData)...)
 	}
@@ -89,6 +101,9 @@ func (v *ServerGroup) GetDependencies(tasks map[string]fi.CloudupTask) []fi.Clou
 }
 
 func (v *ServerGroup) Find(c *fi.CloudupContext) (*ServerGroup, error) {
+	if v.AuthenticationBindingError != "" {
+		return nil, errors.New(v.AuthenticationBindingError)
+	}
 	cloud := c.T.Cloud.(elemento.ElementoCloud)
 	client := cloud.ServerClient()
 
@@ -277,6 +292,24 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 	if err != nil {
 		return err
 	}
+	authTarget := ""
+	if e.KubernetesAuthService != nil {
+		authTarget = e.KubernetesAuthService.AtomOSTarget
+	}
+	if e.Labels[elemento.TagKubernetesInstanceRole] == "ControlPlane" {
+		if e.KubernetesAuthService == nil {
+			return fmt.Errorf("server group %q has no Kubernetes authentication service", fi.ValueOf(e.Name))
+		}
+		authURL := strings.TrimSpace(fi.ValueOf(e.KubernetesAuthService.TailnetEndpoint))
+		if authURL == "" {
+			return fmt.Errorf("Kubernetes authentication service for server group %q has no tailnet endpoint", fi.ValueOf(e.Name))
+		}
+		verifierAPIKey := strings.TrimSpace(os.Getenv("ELEMENTO_AUTH_VERIFIER_API_KEY"))
+		if verifierAPIKey == "" {
+			return fmt.Errorf("ELEMENTO_AUTH_VERIFIER_API_KEY must be set when creating Elemento control-plane servers")
+		}
+		userData = prependElementoAuthEnvironment(userData, authURL, verifierAPIKey)
+	}
 	userDataBytes, err := fi.ResourceAsBytes(e.UserData)
 	if err != nil {
 		return err
@@ -330,11 +363,12 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 			ServerType: &ecloud.ServerType{
 				Name: e.Size,
 			},
-			UserData:          userData,
-			Labels:            labels,
-			DNSIPAddress:      dnsIPAddress,
-			InternalIPAddress: internalIPAddress,
-			SSHKeys:           []*ecloud.SSHKey{},
+			UserData:             userData,
+			Labels:               labels,
+			DNSIPAddress:         dnsIPAddress,
+			InternalIPAddress:    internalIPAddress,
+			KubernetesAuthTarget: authTarget,
+			SSHKeys:              []*ecloud.SSHKey{},
 		}
 
 		// Add root volume configuration if specified
@@ -363,6 +397,10 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 
 		_, _, err = client.Create(context.TODO(), opts)
 		if err != nil {
+			var bindingErr *ecloud.KubernetesAuthBindingError
+			if errors.As(err, &bindingErr) {
+				e.AuthenticationBindingError = bindingErr.Error()
+			}
 			fmt.Printf("EKOPS: ERROR creating server %q: %v\n", name, err)
 			return err
 		}
@@ -370,6 +408,18 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 	}
 
 	return nil
+}
+
+func prependElementoAuthEnvironment(userData, authURL, verifierAPIKey string) string {
+	environment := fmt.Sprintf(
+		"export ELEMENTO_AUTH_URL=$(printf %%s %s | base64 -d)\nexport ELEMENTO_AUTH_VERIFIER_API_KEY=$(printf %%s %s | base64 -d)\n",
+		base64.StdEncoding.EncodeToString([]byte(authURL)),
+		base64.StdEncoding.EncodeToString([]byte(verifierAPIKey)),
+	)
+	if newline := strings.IndexByte(userData, '\n'); newline >= 0 {
+		return userData[:newline+1] + environment + userData[newline+1:]
+	}
+	return environment + userData
 }
 
 func (v *ServerGroup) dhcpReservationForServerName(serverName string) *DHCPReservation {

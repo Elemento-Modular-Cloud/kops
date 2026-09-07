@@ -76,6 +76,11 @@ spec:
           name: kops-controller-config
         - mountPath: /etc/kubernetes/kops-controller/pki/
           name: kops-controller-pki
+{{ if UsesElemento }}
+        - mountPath: /var/run/secrets/elemento-auth/
+          name: elemento-auth
+          readOnly: true
+{{ end }}
         args:
 {{ range $arg := KopsControllerArgv }}
         - "{{ $arg }}"
@@ -116,6 +121,12 @@ spec:
         hostPath:
           path: /etc/kubernetes/kops-controller/
           type: Directory
+{{ if UsesElemento }}
+      - name: elemento-auth
+        hostPath:
+          path: /etc/elemento/kops-controller-auth/
+          type: Directory
+{{ end }}
 ---
 
 apiVersion: v1

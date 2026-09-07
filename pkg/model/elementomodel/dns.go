@@ -37,6 +37,9 @@ type DNSModelBuilder struct {
 var _ fi.CloudupModelBuilder = &DNSModelBuilder{}
 
 func (b *DNSModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
+	if err := validateGoogleControlPlaneConfiguration(b.InstanceGroups); err != nil {
+		return err
+	}
 	if !b.Cluster.PublishesDNSRecords() {
 		return nil
 	}
@@ -76,6 +79,10 @@ func (b *ElementoModelContext) elementoDNSRecordTasksForInstanceGroup(ig *kops.I
 	if err != nil {
 		return nil, err
 	}
+	primaryAPIServer, err := b.elementoPrimaryAPIServerInstanceGroup(ig)
+	if err != nil {
+		return nil, err
+	}
 
 	var tasks []*elementotasks.DNSRecord
 	addRecord := func(recordName string, reservation *elementotasks.DHCPReservation) {
@@ -110,39 +117,81 @@ func (b *ElementoModelContext) elementoDNSRecordTasksForInstanceGroup(ig *kops.I
 			continue
 		}
 
-		if !b.UseLoadBalancerForAPI() {
-			apiPublicName := b.Cluster.Spec.API.PublicName
-			if apiPublicName == "" {
-				apiPublicName = "api." + clusterName
+		if primaryAPIServer {
+			if !b.UseLoadBalancerForAPI() {
+				apiPublicName := b.Cluster.Spec.API.PublicName
+				if apiPublicName == "" {
+					apiPublicName = "api." + clusterName
+				}
+				addRecord(apiPublicName, reservation)
 			}
-			addRecord(apiPublicName, reservation)
+			if !b.UseLoadBalancerForInternalAPI() {
+				addRecord(b.Cluster.APIInternalName(), reservation)
+			}
+			addRecord("kops-controller.internal."+clusterName, reservation)
 		}
-		if !b.UseLoadBalancerForInternalAPI() {
-			addRecord(b.Cluster.APIInternalName(), reservation)
-		}
-		addRecord("kops-controller.internal."+clusterName, reservation)
 
-		for _, etcdClusterName := range elementoEtcdClusterNames(b.Cluster.Spec.EtcdClusters) {
-			addRecord(fmt.Sprintf("node0.%s.%s", etcdClusterName, clusterName), reservation)
-			addRecord(fmt.Sprintf("%s--%s--0.internal.%s", clusterName, etcdClusterName, clusterName), reservation)
+		for _, member := range elementoEtcdMembersForInstanceGroup(b.Cluster.Spec.EtcdClusters, ig.Name) {
+			addRecord(fmt.Sprintf("node%d.%s.%s", member.index, member.clusterName, clusterName), reservation)
+			addRecord(fmt.Sprintf("%s--%s--%d.internal.%s", clusterName, member.clusterName, member.index, clusterName), reservation)
 		}
 	}
 
 	return tasks, nil
 }
 
-func elementoEtcdClusterNames(etcdClusters []kops.EtcdClusterSpec) []string {
-	var names []string
-	for _, etcdCluster := range etcdClusters {
-		name := strings.TrimSpace(etcdCluster.Name)
-		if name != "" {
-			names = append(names, name)
+func (b *ElementoModelContext) elementoPrimaryAPIServerInstanceGroup(current *kops.InstanceGroup) (bool, error) {
+	instanceGroups := b.InstanceGroups
+	if len(instanceGroups) == 0 {
+		instanceGroups = []*kops.InstanceGroup{current}
+	}
+
+	var firstAPIServer *kops.InstanceGroup
+	for _, candidate := range instanceGroups {
+		if !candidate.HasAPIServer() || fi.ValueOf(candidate.Spec.MinSize) == 0 {
+			continue
+		}
+		if firstAPIServer == nil {
+			firstAPIServer = candidate
+		}
+		_, external, err := googleControlPlaneIPForInstanceGroup(candidate)
+		if err != nil {
+			return false, err
+		}
+		if !external {
+			return candidate.Name == current.Name, nil
 		}
 	}
-	if len(names) == 0 {
-		names = []string{"main", "events"}
+
+	return firstAPIServer != nil && firstAPIServer.Name == current.Name, nil
+}
+
+type elementoEtcdMember struct {
+	clusterName string
+	index       int
+}
+
+func elementoEtcdMembersForInstanceGroup(etcdClusters []kops.EtcdClusterSpec, instanceGroupName string) []elementoEtcdMember {
+	if len(etcdClusters) == 0 {
+		return []elementoEtcdMember{
+			{clusterName: "main", index: 0},
+			{clusterName: "events", index: 0},
+		}
 	}
-	return names
+
+	var members []elementoEtcdMember
+	for _, etcdCluster := range etcdClusters {
+		clusterName := strings.TrimSpace(etcdCluster.Name)
+		if clusterName == "" {
+			continue
+		}
+		for index, member := range etcdCluster.Members {
+			if fi.ValueOf(member.InstanceGroup) == instanceGroupName {
+				members = append(members, elementoEtcdMember{clusterName: clusterName, index: index})
+			}
+		}
+	}
+	return members
 }
 
 func trimElementoDNSZoneSuffix(name, zone string) string {
