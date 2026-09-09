@@ -40,6 +40,8 @@ type ServerGroup struct {
 	Network   *Network
 
 	Count                      int
+	ServerNames                []string
+	ExistingServerNames        []string
 	NeedUpdate                 []string
 	AuthenticationBindingError string
 
@@ -130,20 +132,10 @@ func (v *ServerGroup) Find(c *fi.CloudupContext) (*ServerGroup, error) {
 
 	fmt.Printf("EKOPS: Found %d existing servers for group %q\n", len(servers), fi.ValueOf(v.Name))
 
-	// Filter servers by name prefix to ensure we only process servers for this instance group
-	// Server names are formatted as: {ig-name}-{random-id}
-	igName := fi.ValueOf(v.Name)
-	var filteredServers []*ecloud.Server
-	for i, server := range servers {
-		fmt.Printf("EKOPS: Server %d: %s (Labels: %v)\n", i, server.Name, server.Labels)
-		// Only keep servers that belong to this instance group
-		if strings.HasPrefix(server.Name, igName+"-") {
-			filteredServers = append(filteredServers, server)
-		} else {
-			fmt.Printf("EKOPS: Skipping server %q (doesn't match instance group prefix %q)\n", server.Name, igName+"-")
-		}
+	servers, err = v.matchingServers(servers, c.T.Cluster.Name)
+	if err != nil {
+		return nil, err
 	}
-	servers = filteredServers
 
 	if len(servers) == 0 {
 		fmt.Printf("EKOPS: No existing servers found for group %q\n", fi.ValueOf(v.Name))
@@ -162,6 +154,10 @@ func (v *ServerGroup) Find(c *fi.CloudupContext) (*ServerGroup, error) {
 
 	actual := *v
 	actual.Count = len(servers)
+	actual.ExistingServerNames = nil
+	for _, server := range servers {
+		actual.ExistingServerNames = append(actual.ExistingServerNames, server.Name)
+	}
 
 	// Find servers that need to be updated
 	for i, server := range servers {
@@ -212,6 +208,9 @@ func (v *ServerGroup) Run(c *fi.CloudupContext) error {
 }
 
 func (*ServerGroup) CheckChanges(a, e, changes *ServerGroup) error {
+	if len(e.ServerNames) != e.Count {
+		return fmt.Errorf("server group %q has %d names for %d nodes", fi.ValueOf(e.Name), len(e.ServerNames), e.Count)
+	}
 	if e.Name == nil {
 		return fi.RequiredField("Name")
 	}
@@ -254,11 +253,16 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 		actualCount = a.Count
 	}
 	expectedCount := e.Count
+	var existingNames []string
+	if a != nil {
+		existingNames = a.ExistingServerNames
+	}
+	missingNames := missingServerNames(e.ServerNames, existingNames)
 
 	fmt.Printf("EKOPS: Server count analysis - Expected: %d, Actual: %d, Need to create: %d\n",
 		expectedCount, actualCount, expectedCount-actualCount)
 
-	if actualCount >= expectedCount {
+	if len(missingNames) == 0 {
 		fmt.Printf("EKOPS: No new servers needed for group %q\n", fi.ValueOf(e.Name))
 		return nil
 	}
@@ -319,10 +323,7 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 	fmt.Printf("=== EKOPS: About to create %d servers for group %q ===\n", expectedCount-actualCount, fi.ValueOf(e.Name))
 	fmt.Printf("EKOPS: UserData length: %d bytes, hash: %s\n", len(userData), userDataHash)
 
-	for i := 1; i <= expectedCount-actualCount; i++ {
-		// Use deterministic names so manual DNS records can be created before VM creation.
-		ordinal := actualCount + i
-		name := fmt.Sprintf("%s-%d", fi.ValueOf(e.Name), ordinal)
+	for _, name := range missingNames {
 		networkID := fi.ValueOf(e.Network.ID)
 		reservation := e.dhcpReservationForServerName(name)
 		if reservation == nil {
@@ -429,6 +430,51 @@ func (v *ServerGroup) dhcpReservationForServerName(serverName string) *DHCPReser
 		}
 	}
 	return nil
+}
+
+// The API does not apply label selectors, so enforce ownership locally.
+func (v *ServerGroup) matchingServers(servers []*ecloud.Server, cluster string) ([]*ecloud.Server, error) {
+	wanted := map[string]bool{}
+	for _, name := range v.ServerNames {
+		wanted[name] = true
+	}
+	seen := map[string]bool{}
+	var result []*ecloud.Server
+	for _, server := range servers {
+		if server == nil {
+			continue
+		}
+		owned := server.Labels[elemento.TagKubernetesClusterName] == cluster && server.Labels[elemento.TagKubernetesInstanceGroup] == fi.ValueOf(v.Name)
+		if !owned {
+			if wanted[server.Name] {
+				return nil, fmt.Errorf("server name %q already belongs to a different cluster or instance group", server.Name)
+			}
+			continue
+		}
+		if !wanted[server.Name] {
+			return nil, fmt.Errorf("existing server %q does not match the naming plan for instance group %q; automatic renaming is disabled", server.Name, fi.ValueOf(v.Name))
+		}
+		if seen[server.Name] {
+			return nil, fmt.Errorf("duplicate existing server name %q", server.Name)
+		}
+		seen[server.Name] = true
+		result = append(result, server)
+	}
+	return result, nil
+}
+
+func missingServerNames(wanted, existing []string) []string {
+	seen := map[string]bool{}
+	for _, name := range existing {
+		seen[name] = true
+	}
+	var missing []string
+	for _, name := range wanted {
+		if !seen[name] {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }
 
 func safeBytesHash(data []byte) string {

@@ -18,6 +18,7 @@ package elementomodel
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"k8s.io/kops/pkg/apis/kops"
@@ -37,9 +38,6 @@ type DNSModelBuilder struct {
 var _ fi.CloudupModelBuilder = &DNSModelBuilder{}
 
 func (b *DNSModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
-	if err := validateGoogleControlPlaneConfiguration(b.InstanceGroups); err != nil {
-		return err
-	}
 	if !b.Cluster.PublishesDNSRecords() {
 		return nil
 	}
@@ -72,13 +70,8 @@ func (b *ElementoModelContext) elementoDNSRecordTasksForInstanceGroup(ig *kops.I
 		return nil, nil
 	}
 
-	igSize := fi.ValueOf(ig.Spec.MinSize)
 	clusterName := b.ClusterName()
 	zoneName := b.ClusterName()
-	googleControlPlaneIP, externalControlPlane, err := googleControlPlaneIPForInstanceGroup(ig)
-	if err != nil {
-		return nil, err
-	}
 	primaryAPIServer, err := b.elementoPrimaryAPIServerInstanceGroup(ig)
 	if err != nil {
 		return nil, err
@@ -95,25 +88,21 @@ func (b *ElementoModelContext) elementoDNSRecordTasksForInstanceGroup(ig *kops.I
 			TTL:             fi.PtrTo(elementoDNSRecordTTL),
 			Lifecycle:       lifecycle,
 		}
-		if externalControlPlane {
-			task.Data = fi.PtrTo(googleControlPlaneIP)
-			task.DHCPReservation = nil
-		}
 		tasks = append(tasks, task)
 	}
 
-	for ordinal := int32(1); ordinal <= igSize; ordinal++ {
-		serverName := fmt.Sprintf("%s-%d", ig.Name, ordinal)
-		var reservation *elementotasks.DHCPReservation
-		if !externalControlPlane {
-			reservation = &elementotasks.DHCPReservation{
-				Name: fi.PtrTo(serverName),
-			}
+	names, err := b.nodeNamesForInstanceGroup(ig)
+	if err != nil {
+		return nil, err
+	}
+	for index, serverName := range names {
+		reservation := &elementotasks.DHCPReservation{
+			Name: fi.PtrTo(serverName),
 		}
 
 		addRecord(fmt.Sprintf("%s.%s", serverName, clusterName), reservation)
 
-		if !ig.HasAPIServer() || ordinal != 1 {
+		if !ig.HasAPIServer() || index != 0 {
 			continue
 		}
 
@@ -141,29 +130,24 @@ func (b *ElementoModelContext) elementoDNSRecordTasksForInstanceGroup(ig *kops.I
 }
 
 func (b *ElementoModelContext) elementoPrimaryAPIServerInstanceGroup(current *kops.InstanceGroup) (bool, error) {
-	instanceGroups := b.InstanceGroups
+	instanceGroups := b.AllInstanceGroups
+	if instanceGroups == nil {
+		instanceGroups = b.InstanceGroups
+	}
 	if len(instanceGroups) == 0 {
 		instanceGroups = []*kops.InstanceGroup{current}
 	}
+	instanceGroups = append([]*kops.InstanceGroup(nil), instanceGroups...)
+	sort.Slice(instanceGroups, func(i, j int) bool { return instanceGroups[i].Name < instanceGroups[j].Name })
 
-	var firstAPIServer *kops.InstanceGroup
 	for _, candidate := range instanceGroups {
 		if !candidate.HasAPIServer() || fi.ValueOf(candidate.Spec.MinSize) == 0 {
 			continue
 		}
-		if firstAPIServer == nil {
-			firstAPIServer = candidate
-		}
-		_, external, err := googleControlPlaneIPForInstanceGroup(candidate)
-		if err != nil {
-			return false, err
-		}
-		if !external {
-			return candidate.Name == current.Name, nil
-		}
+		return candidate.Name == current.Name, nil
 	}
 
-	return firstAPIServer != nil && firstAPIServer.Name == current.Name, nil
+	return false, nil
 }
 
 type elementoEtcdMember struct {

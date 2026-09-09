@@ -17,9 +17,9 @@ limitations under the License.
 package elementomodel
 
 import (
-	"os"
 	"strings"
 
+	"github.com/Elemento-Modular-Cloud/ecloud-go/ecloud"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/elementotasks"
 )
@@ -34,7 +34,7 @@ type KubernetesAuthModelBuilder struct {
 var _ fi.CloudupModelBuilder = &KubernetesAuthModelBuilder{}
 
 func (b *KubernetesAuthModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
-	target := strings.TrimSpace(os.Getenv("ATOMOS_SERVER1"))
+	target := ecloud.KubernetesServicesTarget()
 	tailnetCIDR := strings.TrimSpace(b.Cluster.Spec.Networking.NetworkCIDR)
 	if tailnetCIDR == "" {
 		tailnetCIDR = "10.0.0.0/16"

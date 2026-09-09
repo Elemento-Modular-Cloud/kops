@@ -41,6 +41,11 @@ type Network struct {
 
 var _ fi.CompareWithID = &Network{}
 
+// Persist placement before any network-dependent provisioning can start.
+func (v *Network) GetDependencies(tasks map[string]fi.CloudupTask) []fi.CloudupTask {
+	return []fi.CloudupTask{tasks["ManagedFile/elemento-placement"]}
+}
+
 func (v *Network) CompareWithID() *string {
 	return v.ID
 }

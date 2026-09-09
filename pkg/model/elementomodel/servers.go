@@ -40,9 +40,6 @@ type ServerGroupModelBuilder struct {
 var _ fi.CloudupModelBuilder = &ServerGroupModelBuilder{}
 
 func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
-	if err := validateGoogleControlPlaneConfiguration(b.InstanceGroups); err != nil {
-		return err
-	}
 	network := b.LinkToNetwork()
 	authService := &elementotasks.KubernetesAuthService{Name: fi.PtrTo(b.ClusterName())}
 	authCluster := &elementotasks.KubernetesAuthCluster{Name: fi.PtrTo(b.ClusterName())}
@@ -74,11 +71,11 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 	}
 
 	for _, ig := range b.InstanceGroups {
-		igSize := fi.ValueOf(ig.Spec.MinSize)
-		googleControlPlaneIP, externalControlPlane, err := googleControlPlaneIPForInstanceGroup(ig)
+		names, err := b.nodeNamesForInstanceGroup(ig)
 		if err != nil {
 			return err
 		}
+		igSize := fi.ValueOf(ig.Spec.MinSize)
 		labels, err := b.CloudTagsForInstanceGroup(ig)
 		if err != nil {
 			return err
@@ -91,7 +88,7 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 		if err != nil {
 			return err
 		}
-		if externalControlPlane || igSize == 0 {
+		if igSize == 0 {
 			c.AddTask(&fitasks.ManagedFile{
 				Name:      fi.PtrTo("kubeenv-" + ig.Name),
 				Lifecycle: b.Lifecycle,
@@ -109,10 +106,6 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 		}
 
 		serverCount := int(igSize)
-		if externalControlPlane {
-			serverCount = 0
-			fmt.Printf("EKOPS: Skipping Elemento VM creation for Google control-plane instance group %q at %s\n", ig.Name, googleControlPlaneIP)
-		}
 
 		fmt.Printf("CREATING server group for instance group %q with size %d\n", ig.Name, serverCount)
 		fmt.Printf("--- End of UserData ---\n")
@@ -136,6 +129,7 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 			SSHKeys:                     sshkeyTasks,
 			Network:                     network,
 			Count:                       serverCount,
+			ServerNames:                 names,
 			Location:                    ig.Spec.Subnets[0],
 			Size:                        ig.Spec.MachineType,
 			Image:                       ig.Spec.Image,
@@ -149,13 +143,10 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 			KubernetesAuthService:       authService,
 			KubernetesAuthInstanceGroup: &elementotasks.KubernetesAuthInstanceGroup{Name: fi.PtrTo(ig.Name), AuthCluster: authCluster},
 		}
-		if !externalControlPlane {
-			for ordinal := int32(1); ordinal <= igSize; ordinal++ {
-				serverName := fmt.Sprintf("%s-%d", ig.Name, ordinal)
-				serverGroup.DHCPReservationTasks = append(serverGroup.DHCPReservationTasks, &elementotasks.DHCPReservation{
-					Name: fi.PtrTo(serverName),
-				})
-			}
+		for _, serverName := range names {
+			serverGroup.DHCPReservationTasks = append(serverGroup.DHCPReservationTasks, &elementotasks.DHCPReservation{
+				Name: fi.PtrTo(serverName),
+			})
 		}
 		if b.Cluster.PublishesDNSRecords() {
 			serverGroup.DNSZoneTask = dnsZoneTask

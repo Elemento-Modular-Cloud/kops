@@ -34,9 +34,6 @@ type DHCPModelBuilder struct {
 var _ fi.CloudupModelBuilder = &DHCPModelBuilder{}
 
 func (b *DHCPModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
-	if err := validateGoogleControlPlaneConfiguration(b.InstanceGroups); err != nil {
-		return err
-	}
 	networkName := b.ClusterName()
 	network := b.LinkToNetwork()
 	dnsZoneTask := &elementotasks.DNSZone{
@@ -56,17 +53,11 @@ func (b *DHCPModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 
 	var previous *elementotasks.DHCPReservation
 	for _, ig := range b.InstanceGroups {
-		googleControlPlaneIP, externalControlPlane, err := googleControlPlaneIPForInstanceGroup(ig)
+		names, err := b.nodeNamesForInstanceGroup(ig)
 		if err != nil {
 			return err
 		}
-		if externalControlPlane {
-			fmt.Printf("EKOPS: Skipping Elemento DHCP reservations for Google control-plane instance group %q at %s\n", ig.Name, googleControlPlaneIP)
-			continue
-		}
-
-		for ordinal := int32(1); ordinal <= fi.ValueOf(ig.Spec.MinSize); ordinal++ {
-			serverName := fmt.Sprintf("%s-%d", ig.Name, ordinal)
+		for _, serverName := range names {
 			macAddress, err := ecloud.GenerateElementoDHCPMACAddress()
 			if err != nil {
 				return fmt.Errorf("generating DHCP MAC address for server %q: %w", serverName, err)

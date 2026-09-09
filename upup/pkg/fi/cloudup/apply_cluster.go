@@ -717,6 +717,7 @@ func (c *ApplyClusterCmd) Run(ctx context.Context) (*ApplyResults, error) {
 				KopsModelContext: modelContext,
 			}
 			l.Builders = append(l.Builders,
+				&elementomodel.PlacementModelBuilder{ElementoModelContext: elementoModelContext, Lifecycle: clusterLifecycle, ConfigBase: configBase},
 				&elementomodel.NetworkModelBuilder{ElementoModelContext: elementoModelContext, Lifecycle: networkLifecycle},
 				&elementomodel.KubernetesAuthModelBuilder{ElementoModelContext: elementoModelContext, Lifecycle: clusterLifecycle},
 				&elementomodel.DHCPModelBuilder{ElementoModelContext: elementoModelContext, Lifecycle: networkLifecycle},
