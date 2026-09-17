@@ -121,3 +121,51 @@ func TestPlacementNetworkDependency(t *testing.T) {
 		t.Fatal(edges)
 	}
 }
+
+func TestExternalPlacementDNSAndDHCPSources(t *testing.T) {
+	for _, allExternal := range []bool{false, true} {
+		b, c := placementBuilderFixture(t)
+		b.externalNodeIPs = map[string]string{"nodes-europe-1": "10.0.253.1"}
+		if allExternal {
+			b.externalNodeIPs["control-plane-europe-1"] = "10.0.254.1"
+		}
+		// Exercise prepared models directly; the provisioning guard stays enabled.
+		dhcp := &DHCPModelBuilder{ElementoModelContext: b.ElementoModelContext, Lifecycle: fi.LifecycleSync}
+		if err := dhcp.Build(c); err != nil {
+			t.Fatal(err)
+		}
+		if c.Tasks["DHCPReservation/nodes-europe-1"] != nil {
+			t.Fatal("external worker received DHCP reservation")
+		}
+		if (c.Tasks["DHCPService/test.k8s"] == nil) != allExternal {
+			t.Fatal("unexpected DHCP service")
+		}
+		if (c.Tasks["DHCPReservation/control-plane-europe-1"] == nil) != allExternal {
+			t.Fatal("unexpected control-plane reservation")
+		}
+		for _, group := range b.InstanceGroups {
+			records, err := b.elementoDNSRecordTasksForInstanceGroup(group, fi.LifecycleSync,
+				&elementotasks.DNSZone{Name: fi.PtrTo("test.k8s")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(records) == 0 {
+				t.Fatal("missing DNS records")
+			}
+			names, err := b.nodeNamesForInstanceGroup(group)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ip := b.externalNodeIPs[names[0]]
+			for _, record := range records {
+				if ip != "" {
+					if fi.ValueOf(record.Data) != ip || record.DHCPReservation != nil {
+						t.Fatal("external DNS must use placement IP")
+					}
+				} else if record.Data != nil || record.DHCPReservation == nil {
+					t.Fatal("AtomOS DNS must use DHCP")
+				}
+			}
+		}
+	}
+}

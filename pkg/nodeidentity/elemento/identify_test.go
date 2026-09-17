@@ -30,11 +30,22 @@ import (
 	cloudelemento "k8s.io/kops/upup/pkg/fi/cloudup/elemento"
 )
 
-func TestStaticNodeIdentityIsDisabledForProvisionedNodes(t *testing.T) {
+func TestIdentifyKnownNodeNamesRequiresAuthService(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		http.Error(w, "identity unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	identifier := &nodeIdentifier{clusterName: "test.k8s", authServiceURL: server.URL,
+		verifierAPIKey: "test-key", httpClient: server.Client()}
 	for _, nodeName := range []string{"control-plane-europe-1", "nodes-europe-1"} {
-		if _, found := staticNodeIdentity(nodeName); found {
-			t.Fatalf("static node identity for %q must be disabled", nodeName)
+		if _, err := identifier.IdentifyNode(context.Background(), &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}); err == nil {
+			t.Fatalf("node %q must not bypass the configured auth service", nodeName)
 		}
+	}
+	if calls != 2 {
+		t.Fatalf("expected two auth service requests, got %d", calls)
 	}
 }
 

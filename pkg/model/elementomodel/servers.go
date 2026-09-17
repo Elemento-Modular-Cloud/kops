@@ -137,6 +137,8 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 			EnableIPv4:                  true,
 			EnableIPv6:                  false,
 			UserData:                    userData,
+			KubeEnv:                     bootConfig,
+			ExternalNodeIPs:             make(map[string]string),
 			Labels:                      labels,
 			RootVolumeSize:              rootVolumeSize,
 			DHCPReservationTasks:        make([]*elementotasks.DHCPReservation, 0, igSize),
@@ -144,9 +146,25 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 			KubernetesAuthInstanceGroup: &elementotasks.KubernetesAuthInstanceGroup{Name: fi.PtrTo(ig.Name), AuthCluster: authCluster},
 		}
 		for _, serverName := range names {
+			if ip := b.externalNodeIPs[serverName]; ip != "" {
+				serverGroup.ExternalNodeIPs[serverName] = ip
+				continue
+			}
 			serverGroup.DHCPReservationTasks = append(serverGroup.DHCPReservationTasks, &elementotasks.DHCPReservation{
 				Name: fi.PtrTo(serverName),
 			})
+		}
+		if len(serverGroup.ExternalNodeIPs) > 0 && ig.Spec.Role == kops.InstanceGroupRoleControlPlane {
+			// Both etcd clusters must identify the same member slot for this group.
+			for _, member := range elementoEtcdMembersForInstanceGroup(b.Cluster.Spec.EtcdClusters, ig.Name) {
+				if serverGroup.EtcdMemberIndex != nil && *serverGroup.EtcdMemberIndex != member.index {
+					return fmt.Errorf("external control-plane group %q has inconsistent etcd member indices", ig.Name)
+				}
+				serverGroup.EtcdMemberIndex = fi.PtrTo(member.index)
+			}
+			if len(names) != 1 {
+				return fmt.Errorf("external control-plane group %q requires one node per etcd member", ig.Name)
+			}
 		}
 		if b.Cluster.PublishesDNSRecords() {
 			serverGroup.DNSZoneTask = dnsZoneTask

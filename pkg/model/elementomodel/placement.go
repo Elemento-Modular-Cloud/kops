@@ -59,6 +59,12 @@ func (b *PlacementModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	if err := plan.ValidateProvisioning(); err != nil {
 		return err
 	}
+	b.externalNodeIPs = make(map[string]string)
+	for _, node := range plan.Nodes {
+		if node.Infrastructure.Provider != "elemento" {
+			b.externalNodeIPs[node.Name] = node.InternalIP
+		}
+	}
 	data, err = json.MarshalIndent(plan, "", "  ")
 	if err != nil {
 		return err

@@ -71,36 +71,6 @@ type authNodeIdentity struct {
 	State              string            `json:"state"`
 }
 
-type staticNodeInfo struct {
-	InstanceID string
-	ProviderID string
-	Labels     map[string]string
-}
-
-var staticNodesByName = map[string]staticNodeInfo{
-	// Static identities from the original three-node development scenario are
-	// intentionally disabled. Uncomment them only when reproducing that exact
-	// environment; normal provisioning must resolve the UUID from ecloud-go.
-	// "control-plane-europe-1": {
-	// 	InstanceID: "fc72216e-6fb0-4cbf-a2be-3973da79f955",
-	// 	Labels: map[string]string{
-	// 		nodelabels.RoleLabelControlPlane20: "",
-	// 	},
-	// },
-	// "nodes-europe-1": {
-	// 	InstanceID: "e4ff7b13-51c1-48bf-9ba9-c5fb5839c358",
-	// 	Labels: map[string]string{
-	// 		nodelabels.RoleLabelNode16: "",
-	// 	},
-	// },
-	// "nodes-europe-2": {
-	// 	InstanceID: "f1dc002b-a660-423f-8850-8b3fc28c1625",
-	// 	Labels: map[string]string{
-	// 		nodelabels.RoleLabelNode16: "",
-	// 	},
-	// },
-}
-
 // New creates and returns a nodeidentity.Identifier for Nodes running on Elemento
 func New(CacheNodeidentityInfo bool, clusterName string, verifierOptions *elemento.ElementoVerifierOptions) (nodeidentity.Identifier, error) {
 	elementoClient, err := ecloud.NewClient("kops-elemento", "1.0")
@@ -138,9 +108,6 @@ func New(CacheNodeidentityInfo bool, clusterName string, verifierOptions *elemen
 
 // IdentifyNode queries Elemento for the node identity information
 func (i *nodeIdentifier) IdentifyNode(ctx context.Context, node *corev1.Node) (*nodeidentity.Info, error) {
-	if info, ok := staticNodeIdentity(node.Name); ok {
-		return info, nil
-	}
 	if i.authServiceURL != "" {
 		return i.identifyNodeFromAuthService(ctx, node)
 	}
@@ -343,27 +310,6 @@ func readRequiredFile(path, description string) (string, error) {
 		return "", fmt.Errorf("Elemento %s file %q is empty", description, path)
 	}
 	return value, nil
-}
-
-func staticNodeIdentity(nodeName string) (*nodeidentity.Info, bool) {
-	static, ok := staticNodesByName[nodeName]
-	if !ok {
-		return nil, false
-	}
-	providerID := static.ProviderID
-	if providerID == "" {
-		providerID = "elemento://" + static.InstanceID
-	}
-	labels := map[string]string{}
-	for key, value := range static.Labels {
-		labels[key] = value
-	}
-	return &nodeidentity.Info{
-		InstanceID:  static.InstanceID,
-		ProviderID:  providerID,
-		Labels:      labels,
-		Initialized: true,
-	}, true
 }
 
 // stringKeyFunc is a string as cache key function

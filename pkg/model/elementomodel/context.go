@@ -25,6 +25,8 @@ import (
 
 type ElementoModelContext struct {
 	*model.KopsModelContext
+	// Populated from the validated plan, never from provider-specific IP env vars.
+	externalNodeIPs map[string]string
 }
 
 func (b *ElementoModelContext) LinkToNetwork() *elementotasks.Network {

@@ -49,7 +49,7 @@ func (b *DHCPModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		Network:     network,
 		DNSZoneTask: dnsZoneTask,
 	}
-	c.AddTask(service)
+	serviceAdded := false
 
 	var previous *elementotasks.DHCPReservation
 	for _, ig := range b.InstanceGroups {
@@ -58,6 +58,13 @@ func (b *DHCPModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			return err
 		}
 		for _, serverName := range names {
+			if b.externalNodeIPs[serverName] != "" {
+				continue
+			}
+			if !serviceAdded {
+				c.AddTask(service)
+				serviceAdded = true
+			}
 			macAddress, err := ecloud.GenerateElementoDHCPMACAddress()
 			if err != nil {
 				return fmt.Errorf("generating DHCP MAC address for server %q: %w", serverName, err)

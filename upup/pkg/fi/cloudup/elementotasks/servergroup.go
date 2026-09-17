@@ -54,6 +54,10 @@ type ServerGroup struct {
 	EnableIPv6 bool
 
 	UserData fi.Resource
+	// KubeEnv is passed directly to the SDK, without fetching it back from S3.
+	KubeEnv         fi.Resource
+	ExternalNodeIPs map[string]string
+	EtcdMemberIndex *int
 
 	Labels map[string]string
 
@@ -97,6 +101,9 @@ func (v *ServerGroup) GetDependencies(tasks map[string]fi.CloudupTask) []fi.Clou
 	}
 	if v.UserData != nil {
 		deps = append(deps, fi.FindDependencies(tasks, v.UserData)...)
+	}
+	if v.KubeEnv != nil {
+		deps = append(deps, fi.FindDependencies(tasks, v.KubeEnv)...)
 	}
 
 	return deps
@@ -296,6 +303,13 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 	if err != nil {
 		return err
 	}
+	kubeEnv := ""
+	if e.KubeEnv != nil {
+		kubeEnv, err = fi.ResourceAsString(e.KubeEnv)
+		if err != nil {
+			return fmt.Errorf("reading role-specific kube_env: %w", err)
+		}
+	}
 	authTarget := ""
 	if e.KubernetesAuthService != nil {
 		authTarget = e.KubernetesAuthService.AtomOSTarget
@@ -325,17 +339,22 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 
 	for _, name := range missingNames {
 		networkID := fi.ValueOf(e.Network.ID)
-		reservation := e.dhcpReservationForServerName(name)
-		if reservation == nil {
-			return fmt.Errorf("failed to find DHCP reservation task for server %q", name)
+		internalIPAddress := e.ExternalNodeIPs[name]
+		var attachments []ecloud.ServerNetworkAttachment
+		if internalIPAddress == "" {
+			reservation := e.dhcpReservationForServerName(name)
+			if reservation == nil {
+				return fmt.Errorf("failed to find DHCP reservation task for server %q", name)
+			}
+			macAddress := fi.ValueOf(reservation.MACAddress)
+			if macAddress == "" {
+				return fmt.Errorf("DHCP reservation task for server %q has no MAC address", name)
+			}
+			internalIPAddress = strings.TrimSpace(fi.ValueOf(reservation.IPAddress))
+			attachments = []ecloud.ServerNetworkAttachment{{NetworkID: networkID, MACAddress: macAddress}}
 		}
-		macAddress := fi.ValueOf(reservation.MACAddress)
-		if macAddress == "" {
-			return fmt.Errorf("DHCP reservation task for server %q has no MAC address", name)
-		}
-		internalIPAddress := strings.TrimSpace(fi.ValueOf(reservation.IPAddress))
 		if net.ParseIP(internalIPAddress) == nil {
-			return fmt.Errorf("DHCP reservation task for server %q has invalid IP address %q", name, internalIPAddress)
+			return fmt.Errorf("server %q has invalid internal IP address %q", name, internalIPAddress)
 		}
 
 		// Initialize labels if nil
@@ -352,12 +371,7 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 					ID: networkID,
 				},
 			},
-			MacAddressConfig: []ecloud.ServerNetworkAttachment{
-				{
-					NetworkID:  networkID,
-					MACAddress: macAddress,
-				},
-			},
+			MacAddressConfig: attachments,
 			Datacenter: &ecloud.Datacenter{
 				Location: e.Location,
 			},
@@ -365,6 +379,8 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 				Name: e.Size,
 			},
 			UserData:             userData,
+			KubeEnv:              kubeEnv,
+			EtcdMemberIndex:      e.EtcdMemberIndex,
 			Labels:               labels,
 			DNSIPAddress:         dnsIPAddress,
 			InternalIPAddress:    internalIPAddress,
@@ -391,8 +407,8 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 
 		fmt.Printf("EKOPS: Creating server %q with options: Location=%s, Size=%s, Image=%s\n",
 			name, e.Location, e.Size, e.Image)
-		fmt.Printf("EKOPS: Using network %q with MAC address %q for server %q\n",
-			networkID, macAddress, name)
+		fmt.Printf("EKOPS: Using network %q with internal IP %q for server %q\n",
+			networkID, internalIPAddress, name)
 
 		fmt.Printf("EKOPS: Calling client.Create() for server %q\n", name)
 

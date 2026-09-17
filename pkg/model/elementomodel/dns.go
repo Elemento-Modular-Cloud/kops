@@ -88,6 +88,12 @@ func (b *ElementoModelContext) elementoDNSRecordTasksForInstanceGroup(ig *kops.I
 			TTL:             fi.PtrTo(elementoDNSRecordTTL),
 			Lifecycle:       lifecycle,
 		}
+		if reservation != nil {
+			if ip := b.externalNodeIPs[fi.ValueOf(reservation.Name)]; ip != "" {
+				task.Data = fi.PtrTo(ip)
+				task.DHCPReservation = nil
+			}
+		}
 		tasks = append(tasks, task)
 	}
 
