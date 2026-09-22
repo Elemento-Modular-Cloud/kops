@@ -67,13 +67,13 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/azure"
 	"k8s.io/kops/upup/pkg/fi/cloudup/do"
+	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce"
 	gcetpm "k8s.io/kops/upup/pkg/fi/cloudup/gce/tpm"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetznertasks"
 	"k8s.io/kops/upup/pkg/fi/cloudup/openstack"
 	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
-	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
 	"k8s.io/kops/util/pkg/env"
 	"k8s.io/kops/util/pkg/maps"
 	"sigs.k8s.io/yaml"
@@ -831,7 +831,6 @@ func (tf *TemplateFunctions) DNSControllerArgv() ([]string, error) {
 			argv = append(argv, "--dns=openstack-designate")
 		case kops.CloudProviderScaleway:
 			argv = append(argv, "--dns=scaleway")
-
 		default:
 			return nil, fmt.Errorf("unhandled cloudprovider %q", cluster.GetCloudProvider())
 		}
