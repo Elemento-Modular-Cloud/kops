@@ -120,21 +120,20 @@ func (b *KubeletOptionsBuilder) configureKubelet(cluster *kops.Cluster, kubelet 
 	const kubeconfigPath = "/var/lib/kubelet/kubeconfig"
 	kubelet.KubeconfigPath = kubeconfigPath
 
-	cloudProvider := cluster.GetCloudProvider()
-
 	kubelet.CgroupRoot = "/"
 
+	cloudProvider := cluster.GetCloudProvider()
 	klog.V(1).Infof("Cloud Provider: %s", cloudProvider)
-	if cloudProvider == kops.CloudProviderAWS {
-		kubelet.CloudProvider = "aws"
-	}
-
-	if cloudProvider == kops.CloudProviderDO {
+	if cloudProvider == kops.CloudProviderMetal {
+		// metal does not (yet) have a cloud-controller-manager, so we don't need to set the cloud-provider flag
+		// If we do set it to external, kubelet will taint the node with the node.kops.k8s.io/uninitialized taint
+		// and there is no cloud-controller-manager to remove it
+		kubelet.CloudProvider = ""
+	} else {
 		kubelet.CloudProvider = "external"
 	}
 
 	if cloudProvider == kops.CloudProviderGCE {
-		kubelet.CloudProvider = "gce"
 		kubelet.HairpinMode = "promiscuous-bridge"
 
 		if cluster.Spec.CloudConfig == nil {
@@ -144,6 +143,8 @@ func (b *KubeletOptionsBuilder) configureKubelet(cluster *kops.Cluster, kubelet 
 		cluster.Spec.CloudProvider.GCE.NodeTags = fi.PtrTo(gce.TagForRole(b.ClusterName, kops.InstanceGroupRoleNode))
 	}
 
+<<<<<<< HEAD
+=======
 	if cloudProvider == kops.CloudProviderHetzner {
 		kubelet.CloudProvider = "external"
 	}
@@ -191,10 +192,12 @@ func (b *KubeletOptionsBuilder) configureKubelet(cluster *kops.Cluster, kubelet 
 		}
 	}
 
+>>>>>>> 2fdf5a2a5a (delete vendor folder)
 	// Set systemd as the default cgroup driver for kubelet
-	if kubelet.CgroupDriver == "" {
-		kubelet.CgroupDriver = "systemd"
-	}
+	// In Kubernetes 1.34, with the KubeletCgroupDriverFromCRI feature gate enabled and a container runtime
+	// that supports the RuntimeConfig CRI RPC, the kubelet automatically detects the appropriate cgroup driver
+	// from the runtime, and ignores the cgroupDriver setting within the kubelet configuration.
+	kubelet.CgroupDriver = "systemd"
 
 	if kubelet.ProtectKernelDefaults == nil {
 		kubelet.ProtectKernelDefaults = fi.PtrTo(true)
@@ -210,7 +213,9 @@ func (b *KubeletOptionsBuilder) configureKubelet(cluster *kops.Cluster, kubelet 
 		kubelet.ShutdownGracePeriodCriticalPods = &metav1.Duration{Duration: 0}
 	}
 
-	kubelet.RegisterSchedulable = fi.PtrTo(true)
+	if kubernetesVersion.IsLT("1.34") {
+		kubelet.RegisterSchedulable = fi.PtrTo(true)
+	}
 
 	return nil
 }

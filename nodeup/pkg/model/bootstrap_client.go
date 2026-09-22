@@ -34,6 +34,7 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce/tpm/gcetpmsigner"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner"
+	"k8s.io/kops/upup/pkg/fi/cloudup/linode"
 	"k8s.io/kops/upup/pkg/fi/cloudup/openstack"
 	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
@@ -94,6 +95,8 @@ func (b BootstrapClientBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 			return err
 		}
 		authenticator = a
+	case kops.CloudProviderLinode:
+		a, err := linode.NewLinodeAuthenticator()
 	case kops.CloudProviderElemento:
 		a, err := elemento.NewElementoAuthenticator()
 		if err != nil {
@@ -118,12 +121,7 @@ func (b BootstrapClientBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 		Path:   "/",
 	}
 
-	bootstrapClient := &kopscontrollerclient.Client{
-		Authenticator: authenticator,
-		CAs:           []byte(b.NodeupConfig.CAs[fi.CertificateIDCA]),
-		BaseURL:       baseURL,
-	}
-
+	bootstrapClient := kopscontrollerclient.New(authenticator, []byte(b.NodeupConfig.CAs[fi.CertificateIDCA]), baseURL)
 	bootstrapClientTask := &nodetasks.BootstrapClientTask{
 		Client:     bootstrapClient,
 		Certs:      b.bootstrapCerts,

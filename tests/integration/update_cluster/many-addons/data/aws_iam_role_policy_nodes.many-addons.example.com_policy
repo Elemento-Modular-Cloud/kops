@@ -2,18 +2,6 @@
   "Statement": [
     {
       "Action": [
-        "s3:GetBucketLocation",
-        "s3:GetEncryptionConfiguration",
-        "s3:ListBucket",
-        "s3:ListBucketVersions"
-      ],
-      "Effect": "Allow",
-      "Resource": [
-        "arn:aws-test:s3:::placeholder-read-bucket"
-      ]
-    },
-    {
-      "Action": [
         "ec2:CreateTags"
       ],
       "Effect": "Allow",
@@ -23,7 +11,6 @@
     },
     {
       "Action": [
-        "autoscaling:DescribeAutoScalingInstances",
         "ec2:AssignPrivateIpAddresses",
         "ec2:AttachNetworkInterface",
         "ec2:CreateNetworkInterface",
@@ -31,14 +18,11 @@
         "ec2:DescribeInstanceTypes",
         "ec2:DescribeInstances",
         "ec2:DescribeNetworkInterfaces",
-        "ec2:DescribeRegions",
+        "ec2:DescribeSubnets",
         "ec2:DescribeTags",
         "ec2:DetachNetworkInterface",
         "ec2:ModifyNetworkInterfaceAttribute",
-        "ec2:UnassignPrivateIpAddresses",
-        "iam:GetServerCertificate",
-        "iam:ListServerCertificates",
-        "kms:GenerateRandom"
+        "ec2:UnassignPrivateIpAddresses"
       ],
       "Effect": "Allow",
       "Resource": "*"

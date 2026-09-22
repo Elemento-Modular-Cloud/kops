@@ -51,6 +51,8 @@ type S3Path struct {
 	scheme string
 	// sse specifies if server side encryption should be enabled
 	sse bool
+	// optFn configures provider-specific S3 client options.
+	optFn func(*s3.Options)
 }
 
 var (
@@ -64,7 +66,7 @@ type S3Acl struct {
 	RequestACL *types.ObjectCannedACL
 }
 
-func newS3Path(s3Context *S3Context, scheme string, bucket string, key string, sse bool) *S3Path {
+func newS3Path(s3Context *S3Context, scheme string, bucket string, key string, sse bool, optFn func(*s3.Options)) *S3Path {
 	bucket = strings.TrimSuffix(bucket, "/")
 	key = strings.TrimPrefix(key, "/")
 
@@ -74,6 +76,7 @@ func newS3Path(s3Context *S3Context, scheme string, bucket string, key string, s
 		key:       key,
 		scheme:    scheme,
 		sse:       sse,
+		optFn:     optFn,
 	}
 }
 
@@ -267,6 +270,7 @@ func (p *S3Path) Join(relativePath ...string) Path {
 		key:       joined,
 		scheme:    p.scheme,
 		sse:       p.sse,
+		optFn:     p.optFn,
 	}
 }
 
@@ -282,7 +286,7 @@ func (p *S3Path) getServerSideEncryption(ctx context.Context) (sse types.ServerS
 		if err != nil {
 			return "", "", err
 		}
-		defaultEncryption := bucketDetails.hasServerSideEncryptionByDefault(ctx)
+		defaultEncryption := bucketDetails.hasServerSideEncryptionByDefault(ctx, p.optFn)
 		if defaultEncryption {
 			sseLog = "DefaultBucketEncryption"
 		} else {
@@ -465,6 +469,7 @@ func (p *S3Path) ReadDir() ([]Path, error) {
 				etag:      o.ETag,
 				scheme:    p.scheme,
 				sse:       p.sse,
+				optFn:     p.optFn,
 			}
 			paths = append(paths, child)
 		}
@@ -507,6 +512,7 @@ func (p *S3Path) ReadTree(ctx context.Context) ([]Path, error) {
 				etag:      o.ETag,
 				scheme:    p.scheme,
 				sse:       p.sse,
+				optFn:     p.optFn,
 			}
 			paths = append(paths, child)
 		}
@@ -529,7 +535,7 @@ func (p *S3Path) client(ctx context.Context) (*s3.Client, error) {
 		return nil, err
 	}
 
-	client, err := p.s3Context.getClient(ctx, bucketDetails.region)
+	client, err := p.s3Context.getClient(ctx, bucketDetails.region, p.optFn)
 	if err != nil {
 		return nil, err
 	}
@@ -644,6 +650,10 @@ func (p *S3Path) IsBucketPublic(ctx context.Context) (bool, error) {
 }
 
 func (p *S3Path) IsPublic() (bool, error) {
+	if p.scheme == "linode" {
+		// Linode (Akamai) does not implement GetObjectAcl. In that case we conservatively treat the object as non-public and continue.
+		return false, nil
+	}
 	ctx := context.TODO()
 	client, err := p.client(ctx)
 	if err != nil {
@@ -696,7 +706,8 @@ func (p *S3Path) RenderTerraform(w *terraformWriter.TerraformWriter, name string
 	}
 
 	// render DO's terraform
-	if p.scheme == "do" {
+	switch p.scheme {
+	case "do":
 
 		content, err := w.AddFileBytes("digitalocean_spaces_bucket_object", name, "content", bytes, false)
 		if err != nil {
@@ -719,7 +730,7 @@ func (p *S3Path) RenderTerraform(w *terraformWriter.TerraformWriter, name string
 		return w.RenderResource("digitalocean_spaces_bucket_object", name, tf)
 
 		// render Scaleway's Terraform objects
-	} else if p.scheme == "scw" {
+	case "scw":
 
 		content, err := w.AddFileBytes("scaleway_object", name, "content", bytes, false)
 		if err != nil {
@@ -733,7 +744,7 @@ func (p *S3Path) RenderTerraform(w *terraformWriter.TerraformWriter, name string
 		}
 		return w.RenderResource("scaleway_object", name, tf)
 
-	} else {
+	default:
 		bucketDetails, err := p.getBucketDetails(ctx)
 		if err != nil {
 			return err

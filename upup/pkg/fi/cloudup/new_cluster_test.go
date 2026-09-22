@@ -18,12 +18,14 @@ package cloudup
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"k8s.io/kops/util/pkg/vfs"
 	"sigs.k8s.io/yaml"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	api "k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/diff"
 	"k8s.io/kops/upup/pkg/fi"
@@ -266,18 +268,6 @@ func TestSetupNetworking(t *testing.T) {
 		},
 		{
 			options: NewClusterOptions{
-				Networking: "canal",
-			},
-			expected: api.Cluster{
-				Spec: api.ClusterSpec{
-					Networking: api.NetworkingSpec{
-						Canal: &api.CanalNetworkingSpec{},
-					},
-				},
-			},
-		},
-		{
-			options: NewClusterOptions{
 				Networking: "kube-router",
 			},
 			expected: api.Cluster{
@@ -425,7 +415,7 @@ func TestSetupTopology(t *testing.T) {
 					Name: "test",
 				},
 				Spec: api.ClusterSpec{
-					KubernetesVersion: "v1.29.0",
+					KubernetesVersion: "v1.31.0",
 					Networking: api.NetworkingSpec{
 						Topology: &api.TopologySpec{
 							DNS: api.DNSTypeNone,
@@ -438,7 +428,7 @@ func TestSetupTopology(t *testing.T) {
 					Name: "test",
 				},
 				Spec: api.ClusterSpec{
-					KubernetesVersion: "v1.29.0",
+					KubernetesVersion: "v1.31.0",
 					Networking: api.NetworkingSpec{
 						Topology: &api.TopologySpec{
 							DNS: api.DNSTypeNone,
@@ -458,7 +448,7 @@ func TestSetupTopology(t *testing.T) {
 					Name: "test",
 				},
 				Spec: api.ClusterSpec{
-					KubernetesVersion: "v1.29.0",
+					KubernetesVersion: "v1.31.0",
 					Networking: api.NetworkingSpec{
 						Topology: &api.TopologySpec{
 							DNS: api.DNSTypePublic,
@@ -471,7 +461,7 @@ func TestSetupTopology(t *testing.T) {
 					Name: "test",
 				},
 				Spec: api.ClusterSpec{
-					KubernetesVersion: "v1.29.0",
+					KubernetesVersion: "v1.31.0",
 					Networking: api.NetworkingSpec{
 						Topology: &api.TopologySpec{
 							DNS: api.DNSTypePublic,
@@ -521,7 +511,7 @@ func TestDefaultImage(t *testing.T) {
 				},
 			},
 			architecture: architectures.ArchitectureAmd64,
-			expected:     "099720109477/ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20221018",
+			expected:     "099720109477/ubuntu/images/hvm-ssd-gp3/ubuntu-resolute-26.04-amd64-server-20221018",
 		},
 		{
 			cluster: &api.Cluster{
@@ -533,7 +523,7 @@ func TestDefaultImage(t *testing.T) {
 				},
 			},
 			architecture: architectures.ArchitectureArm64,
-			expected:     "099720109477/ubuntu/images/hvm-ssd/ubuntu-focal-20.04-arm64-server-20221018",
+			expected:     "099720109477/ubuntu/images/hvm-ssd-gp3/ubuntu-resolute-26.04-arm64-server-20221018",
 		},
 		{
 			cluster: &api.Cluster{
@@ -545,7 +535,7 @@ func TestDefaultImage(t *testing.T) {
 				},
 			},
 			architecture: architectures.ArchitectureAmd64,
-			expected:     "Canonical:0001-com-ubuntu-server-focal:20_04-lts-gen2:20.04.202210180",
+			expected:     "Canonical:ubuntu-26_04-lts:server:26.04.202210180",
 		},
 		{
 			cluster: &api.Cluster{
@@ -557,7 +547,7 @@ func TestDefaultImage(t *testing.T) {
 				},
 			},
 			architecture: architectures.ArchitectureAmd64,
-			expected:     "ubuntu-os-cloud/ubuntu-2004-focal-v20221018",
+			expected:     "ubuntu-os-cloud/ubuntu-2604-resolute-amd64-v20221018",
 		},
 		{
 			cluster: &api.Cluster{
@@ -595,6 +585,18 @@ func TestDefaultImage(t *testing.T) {
 			architecture: architectures.ArchitectureAmd64,
 			expected:     defaultScalewayImageNoble,
 		},
+		{
+			cluster: &api.Cluster{
+				Spec: api.ClusterSpec{
+					KubernetesVersion: "v1.32.0",
+					CloudProvider: api.CloudProviderSpec{
+						Linode: &api.LinodeSpec{},
+					},
+				},
+			},
+			architecture: architectures.ArchitectureAmd64,
+			expected:     defaultLinodeImageNoble,
+		},
 	}
 
 	channel, err := api.LoadChannel(vfs.NewTestingVFSContext(), "file://tests/channels/channel.yaml")
@@ -611,5 +613,53 @@ func TestDefaultImage(t *testing.T) {
 		if actual != test.expected {
 			t.Errorf("unexpected default image for cluster %s: expected=%q, actual=%q", fi.DebugAsJsonString(test.cluster.Spec), test.expected, actual)
 		}
+	}
+}
+
+func TestSetupZonesLinodeSingleRegion(t *testing.T) {
+	opt := &NewClusterOptions{Zones: []string{"us-east"}}
+	cluster := &api.Cluster{
+		Spec: api.ClusterSpec{
+			CloudProvider: api.CloudProviderSpec{Linode: &api.LinodeSpec{}},
+		},
+	}
+
+	zones := sets.NewString("us-east")
+	zoneToSubnetsMap, err := setupZones(opt, cluster, zones)
+	if err != nil {
+		t.Fatalf("setupZones returned error: %v", err)
+	}
+
+	subnets := zoneToSubnetsMap["us-east"]
+	if got, want := len(subnets), 1; got != want {
+		t.Fatalf("unexpected subnet count for region: got %d, want %d", got, want)
+	}
+
+	subnet := subnets[0]
+	if got, want := subnet.Name, "us-east"; got != want {
+		t.Fatalf("unexpected subnet name: got %q, want %q", got, want)
+	}
+	if got, want := subnet.Region, "us-east"; got != want {
+		t.Fatalf("unexpected subnet region: got %q, want %q", got, want)
+	}
+	if got, want := subnet.Zone, "us-east"; got != want {
+		t.Fatalf("unexpected subnet zone: got %q, want %q", got, want)
+	}
+}
+
+func TestSetupZonesLinodeSingleRegionOnly(t *testing.T) {
+	opt := &NewClusterOptions{Zones: []string{"us-east", "eu-west"}}
+	cluster := &api.Cluster{
+		Spec: api.ClusterSpec{
+			CloudProvider: api.CloudProviderSpec{Linode: &api.LinodeSpec{}},
+		},
+	}
+
+	_, err := setupZones(opt, cluster, sets.NewString("us-east", "eu-west"))
+	if err == nil {
+		t.Fatalf("expected error when multiple regions are specified for Linode")
+	}
+	if !strings.Contains(err.Error(), "one region only") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

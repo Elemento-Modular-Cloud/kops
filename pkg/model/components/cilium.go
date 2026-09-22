@@ -40,11 +40,15 @@ func (b *CiliumOptionsBuilder) BuildOptions(o *kops.Cluster) error {
 	}
 
 	if c.Version == "" {
-		c.Version = "v1.16.7"
+		c.Version = "v1.18.6"
 	}
 
 	if c.EnableEndpointHealthChecking == nil {
 		c.EnableEndpointHealthChecking = fi.PtrTo(true)
+	}
+
+	if c.EnableHostFirewall == nil {
+		c.EnableHostFirewall = fi.PtrTo(false)
 	}
 
 	if c.IdentityAllocationMode == "" {
@@ -161,6 +165,10 @@ func (b *CiliumOptionsBuilder) BuildOptions(o *kops.Cluster) error {
 		c.EncryptionType = kops.CiliumEncryptionTypeIPSec
 	}
 
+	if c.CniExclusive == nil {
+		c.CniExclusive = fi.PtrTo(true)
+	}
+
 	hubble := c.Hubble
 	if hubble != nil {
 		if hubble.Enabled == nil {
@@ -179,6 +187,17 @@ func (b *CiliumOptionsBuilder) BuildOptions(o *kops.Cluster) error {
 		}
 	} else {
 		c.Ingress = &kops.CiliumIngressSpec{
+			Enabled: fi.PtrTo(false),
+		}
+	}
+
+	gatewayAPI := c.GatewayAPI
+	if gatewayAPI != nil {
+		if gatewayAPI.Enabled == nil {
+			gatewayAPI.Enabled = fi.PtrTo(true)
+		}
+	} else {
+		c.GatewayAPI = &kops.CiliumGatewayAPISpec{
 			Enabled: fi.PtrTo(false),
 		}
 	}

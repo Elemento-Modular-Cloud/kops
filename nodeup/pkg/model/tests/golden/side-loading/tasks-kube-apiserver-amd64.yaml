@@ -6,7 +6,6 @@ contents: |
       dns.alpha.kubernetes.io/external: api.minimal.example.com
       dns.alpha.kubernetes.io/internal: api.internal.minimal.example.com
       kubectl.kubernetes.io/default-container: kube-apiserver
-    creationTimestamp: null
     labels:
       k8s-app: kube-apiserver
     name: kube-apiserver
@@ -21,18 +20,15 @@ contents: |
       - --anonymous-auth=false
       - --api-audiences=kubernetes.svc.default
       - --apiserver-count=1
-      - --authorization-mode=AlwaysAllow
+      - --authorization-mode=Node,RBAC
       - --bind-address=0.0.0.0
       - --client-ca-file=/srv/kubernetes/ca.crt
-      - --cloud-config=/etc/kubernetes/in-tree-cloud.config
-      - --cloud-provider=external
-      - --enable-admission-plugins=NamespaceLifecycle,LimitRanger,ServiceAccount,DefaultStorageClass,DefaultTolerationSeconds,MutatingAdmissionWebhook,ValidatingAdmissionWebhook,NodeRestriction,ResourceQuota
+      - --enable-admission-plugins=DefaultStorageClass,DefaultTolerationSeconds,LimitRanger,MutatingAdmissionWebhook,NamespaceLifecycle,NodeRestriction,ResourceQuota,RuntimeClass,ServiceAccount,ValidatingAdmissionPolicy,ValidatingAdmissionWebhook
       - --etcd-cafile=/srv/kubernetes/kube-apiserver/etcd-ca.crt
       - --etcd-certfile=/srv/kubernetes/kube-apiserver/etcd-client.crt
       - --etcd-keyfile=/srv/kubernetes/kube-apiserver/etcd-client.key
       - --etcd-servers-overrides=/events#https://127.0.0.1:4002
       - --etcd-servers=https://127.0.0.1:4001
-      - --feature-gates=InTreePluginAWSUnregister=true
       - --kubelet-client-certificate=/srv/kubernetes/kube-apiserver/kubelet-api.crt
       - --kubelet-client-key=/srv/kubernetes/kube-apiserver/kubelet-api.key
       - --kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP
@@ -55,23 +51,44 @@ contents: |
       - --v=2
       command:
       - /go-runner
-      image: registry.k8s.io/kube-apiserver-amd64:v1.27.0
+      image: registry.k8s.io/kube-apiserver-amd64:v1.35.0
       livenessProbe:
+        failureThreshold: 8
         httpGet:
           host: 127.0.0.1
-          path: /healthz
+          path: /livez
           port: 443
           scheme: HTTPS
-        initialDelaySeconds: 45
+        initialDelaySeconds: 10
+        periodSeconds: 10
         timeoutSeconds: 15
       name: kube-apiserver
       ports:
       - containerPort: 443
         hostPort: 443
         name: https
+      readinessProbe:
+        failureThreshold: 3
+        httpGet:
+          host: 127.0.0.1
+          path: /healthz
+          port: 443
+          scheme: HTTPS
+        periodSeconds: 1
+        timeoutSeconds: 15
       resources:
         requests:
           cpu: 150m
+      startupProbe:
+        failureThreshold: 30
+        httpGet:
+          host: 127.0.0.1
+          path: /livez
+          port: 443
+          scheme: HTTPS
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        timeoutSeconds: 300
       volumeMounts:
       - mountPath: /var/log/kube-apiserver.log
         name: logfile
@@ -101,9 +118,6 @@ contents: |
         readOnly: true
       - mountPath: /etc/openssl
         name: etcopenssl
-        readOnly: true
-      - mountPath: /etc/kubernetes/in-tree-cloud.config
-        name: cloudconfig
         readOnly: true
       - mountPath: /srv/kubernetes/ca.crt
         name: kubernetesca
@@ -150,9 +164,6 @@ contents: |
     - hostPath:
         path: /etc/openssl
       name: etcopenssl
-    - hostPath:
-        path: /etc/kubernetes/in-tree-cloud.config
-      name: cloudconfig
     - hostPath:
         path: /srv/kubernetes/ca.crt
       name: kubernetesca

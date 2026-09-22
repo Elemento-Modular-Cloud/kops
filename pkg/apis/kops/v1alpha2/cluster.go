@@ -267,6 +267,7 @@ type KarpenterConfig struct {
 	LogEncoding   string             `json:"logEncoding,omitempty"`
 	LogLevel      string             `json:"logLevel,omitempty"`
 	Image         string             `json:"image,omitempty"`
+	FeatureGates  string             `json:"featureGates,omitempty"`
 	MemoryLimit   *resource.Quantity `json:"memoryLimit,omitempty"`
 	MemoryRequest *resource.Quantity `json:"memoryRequest,omitempty"`
 	CPURequest    *resource.Quantity `json:"cpuRequest,omitempty"`
@@ -276,10 +277,18 @@ type KarpenterConfig struct {
 type ServiceAccountIssuerDiscoveryConfig struct {
 	// DiscoveryStore is the VFS path to where OIDC Issuer Discovery metadata is stored.
 	DiscoveryStore string `json:"discoveryStore,omitempty"`
+	// DiscoveryService configures discovery using a hosted discovery service.
+	DiscoveryService *DiscoveryServiceOptions `json:"discoveryService,omitempty"`
 	// EnableAWSOIDCProvider will provision an AWS OIDC provider that trusts the ServiceAccount Issuer
 	EnableAWSOIDCProvider bool `json:"enableAWSOIDCProvider,omitempty"`
 	// AdditionalAudiences adds user defined audiences to the provisioned AWS OIDC provider
 	AdditionalAudiences []string `json:"additionalAudiences,omitempty"`
+}
+
+// DiscoveryServiceOptions configures a hosted discovery service.
+type DiscoveryServiceOptions struct {
+	// URL is the base URL of the discovery service, including universe ID if applicable.
+	URL string `json:"url,omitempty"`
 }
 
 // ServiceAccountExternalPermissions grants a ServiceAccount permissions to external resources.
@@ -578,6 +587,9 @@ type KubeDNSConfig struct {
 	MemoryLimit *resource.Quantity `json:"memoryLimit,omitempty"`
 	// NodeLocalDNS specifies the configuration for the node-local-dns addon
 	NodeLocalDNS *NodeLocalDNSConfig `json:"nodeLocalDNS,omitempty"`
+	// PodAnnotations makes possible to add additional annotations to CoreDNS Pods.
+	// Default: none
+	PodAnnotations map[string]string `json:"podAnnotations,omitempty"`
 }
 
 // NodeLocalDNSConfig are options of the node-local-dns
@@ -624,6 +636,9 @@ type ExternalDNSConfig struct {
 	// 'dns-controller' will use kOps DNS Controller.
 	// 'external-dns' will use kubernetes-sigs/external-dns.
 	Provider ExternalDNSProvider `json:"provider,omitempty"`
+	// PriorityClassName overrides the priorityClassName on the dns-controller pod.
+	// Defaults to "system-cluster-critical" when unset.
+	PriorityClassName *string `json:"priorityClassName,omitempty"`
 }
 
 // EtcdProviderType describes etcd cluster provisioning types (Standalone, Manager)
@@ -636,7 +651,7 @@ const (
 
 // EtcdClusterSpec is the etcd cluster specification
 type EtcdClusterSpec struct {
-	// Name is the name of the etcd cluster (main, events etc)
+	// Name is the name of the etcd cluster (main, events, leases etc)
 	Name string `json:"name,omitempty"`
 	// Provider is the provider used to run etcd: Manager, Legacy.
 	// Defaults to Manager.
@@ -692,6 +707,8 @@ type EtcdManagerSpec struct {
 	DiscoveryPollInterval *metav1.Duration `json:"discoveryPollInterval,omitempty"`
 	// ListenMetricsURLs is the list of URLs to listen on that will respond to both the /metrics and /health endpoints
 	ListenMetricsURLs []string `json:"listenMetricsURLs,omitempty"`
+	// ListenClientHTTPURLs is the list of URLs to listen on for HTTP-only client traffic
+	ListenClientHTTPURLs []string `json:"listenClientHTTPURLs,omitempty"`
 	// LogLevel allows the klog library verbose log level to be set for etcd-manager. The default is 6.
 	// https://github.com/google/glog#verbose-logging
 	LogLevel *int32 `json:"logLevel,omitempty"`
@@ -894,4 +911,8 @@ type WarmPoolSpec struct {
 	// EnableLifecycleHook determines if an ASG lifecycle hook will be added ensuring that nodeup runs to completion.
 	// Note that the metadata API must be protected from arbitrary Pods when this is enabled.
 	EnableLifecycleHook bool `json:"enableLifecycleHook,omitempty"`
+	// LifecycleHookTimeout is the timeout for the ASG lifecycle hook in seconds.
+	LifecycleHookTimeout *int32 `json:"lifecycleHookTimeout,omitempty"`
+	// AdditionalImages is a list of additional container images to pull into the warm pool instances.
+	AdditionalImages []string `json:"additionalImages,omitempty"`
 }

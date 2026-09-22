@@ -66,10 +66,8 @@ func ListResourcesGCE(gceCloud gce.GCECloud, clusterInfo resources.ClusterInfo) 
 	clusterUsesNoneDNS := clusterInfo.UsesNoneDNS
 
 	ctx := context.TODO()
-
 	region := gceCloud.Region()
-
-	resources := make(map[string]*resources.Resource)
+	allResources := make(map[string]*resources.Resource)
 
 	d := &clusterDiscoveryGCE{
 		cloud:       gceCloud,
@@ -106,7 +104,6 @@ func ListResourcesGCE(gceCloud gce.GCECloud, clusterInfo resources.ClusterInfo) 
 		d.listForwardingRules,
 		d.listFirewallRules,
 		d.listGCEDisks,
-		// TODO: Find routes via instances (via instance groups)
 		d.listAddresses,
 		d.listSubnets,
 		d.listRouters,
@@ -114,6 +111,10 @@ func ListResourcesGCE(gceCloud gce.GCECloud, clusterInfo resources.ClusterInfo) 
 		d.listServiceAccounts,
 		d.listBackendServices,
 		d.listHealthchecks,
+		// Note: Order matters here..this is last because it depends on other resources to be listed.
+		func() ([]*resources.Resource, error) {
+			return d.listRoutes(ctx, allResources)
+		},
 	}
 	if !dns.IsGossipClusterName(clusterName) && !clusterUsesNoneDNS {
 		listFunctions = append(listFunctions, d.listGCEDNSZone)
@@ -125,27 +126,16 @@ func ListResourcesGCE(gceCloud gce.GCECloud, clusterInfo resources.ClusterInfo) 
 			return nil, err
 		}
 		for _, t := range resourceTrackers {
-			resources[t.Type+":"+t.ID] = t
+			allResources[t.Type+":"+t.ID] = t
 		}
 	}
 
-	// We try to clean up orphaned routes.
-	{
-		resourceTrackers, err := d.listRoutes(ctx, resources)
-		if err != nil {
-			return nil, err
-		}
-		for _, t := range resourceTrackers {
-			resources[t.Type+":"+t.ID] = t
-		}
-	}
-
-	for k, t := range resources {
+	for k, t := range allResources {
 		if t.Done {
-			delete(resources, k)
+			delete(allResources, k)
 		}
 	}
-	return resources, nil
+	return allResources, nil
 }
 
 type clusterDiscoveryGCE struct {
@@ -1059,6 +1049,10 @@ func deleteServiceAccount(cloud fi.Cloud, r *resources.Resource) error {
 // containsOnlyListedIGMs returns true if all the given backend service's backends
 // are contained in the provided list of IGM resources.
 func containsOnlyListedIGMs(svc *compute.BackendService, igms []*resources.Resource) bool {
+	if len(svc.Backends) == 0 {
+		return false
+	}
+
 	for _, be := range svc.Backends {
 		listed := false
 		for _, igm := range igms {
@@ -1083,10 +1077,10 @@ func (d *clusterDiscoveryGCE) listBackendServices() ([]*resources.Resource, erro
 	svcs, err := c.Compute().RegionBackendServices().List(context.Background(), c.Project(), c.Region())
 	if err != nil {
 		if gce.IsNotFound(err) {
-			klog.Infof("backend services not found, assuming none exist in project: %q region: %q", c.Project(), c.Region())
+			klog.Infof("BackendService not found, assuming none exist in project: %q region: %q", c.Project(), c.Region())
 			return nil, nil
 		}
-		return nil, fmt.Errorf("Failed to list backend services: %w", err)
+		return nil, fmt.Errorf("failed to list backend services: %w", err)
 	}
 	// TODO: cache, for efficiency, if needed.
 	// Find all relevant backend services by finding all the cluster's IGMs, and then
@@ -1106,6 +1100,10 @@ func (d *clusterDiscoveryGCE) listBackendServices() ([]*resources.Resource, erro
 				Deleter: func(cloud fi.Cloud, r *resources.Resource) error {
 					op, err := c.Compute().RegionBackendServices().Delete(c.Project(), c.Region(), svc.Name)
 					if err != nil {
+						if gce.IsNotFound(err) {
+							klog.Infof("BackendService not found, assuming deleted: %q", r.Name)
+							return nil
+						}
 						return err
 					}
 					return c.WaitForOp(op)
@@ -1146,6 +1144,10 @@ func (d *clusterDiscoveryGCE) listHealthchecks() ([]*resources.Resource, error) 
 			Deleter: func(cloud fi.Cloud, r *resources.Resource) error {
 				op, err := c.Compute().RegionHealthChecks().Delete(c.Project(), c.Region(), gce.LastComponent(hc))
 				if err != nil {
+					if gce.IsNotFound(err) {
+						klog.Infof("Healthcheck not found, assuming deleted: %q", r.Name)
+						return nil
+					}
 					return err
 				}
 				return c.WaitForOp(op)
@@ -1221,7 +1223,7 @@ func deleteNetwork(cloud fi.Cloud, r *resources.Resource) error {
 	op, err := c.Compute().Networks().Delete(u.Project, u.Name)
 	if err != nil {
 		if gce.IsNotFound(err) {
-			klog.Infof("network not found, assuming deleted: %q", o.SelfLink)
+			klog.Infof("Network not found, assuming deleted: %q", o.SelfLink)
 			return nil
 		}
 		return fmt.Errorf("error deleting network %s: %v", o.SelfLink, err)

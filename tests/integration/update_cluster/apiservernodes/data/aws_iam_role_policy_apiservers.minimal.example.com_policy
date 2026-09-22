@@ -21,19 +21,27 @@
     },
     {
       "Action": [
-        "autoscaling:DescribeAutoScalingInstances",
-        "ec2:DescribeInstanceTypes",
-        "ec2:DescribeInstances",
-        "ec2:DescribeRegions",
-        "iam:GetServerCertificate",
-        "iam:ListServerCertificates",
-        "kms:CreateGrant",
         "kms:Decrypt",
-        "kms:DescribeKey",
         "kms:Encrypt",
         "kms:GenerateDataKey*",
-        "kms:GenerateRandom",
         "kms:ReEncrypt*"
+      ],
+      "Condition": {
+        "StringLike": {
+          "kms:ViaService": [
+            "ec2.us-test-1.amazonaws.com",
+            "s3.*.amazonaws.com"
+          ]
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "*"
+    },
+    {
+      "Action": [
+        "ec2:DescribeInstanceTypes",
+        "kms:CreateGrant",
+        "kms:DescribeKey"
       ],
       "Effect": "Allow",
       "Resource": "*"

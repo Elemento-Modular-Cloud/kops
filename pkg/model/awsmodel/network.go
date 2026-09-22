@@ -21,7 +21,6 @@ import (
 	"net"
 	"strings"
 
-	aws "k8s.io/cloud-provider-aws/pkg/providers/v1"
 	"k8s.io/klog/v2"
 
 	"k8s.io/kops/pkg/apis/kops"
@@ -243,22 +242,22 @@ func (b *NetworkModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 
 			switch subnetSpec.Type {
 			case kops.SubnetTypePublic, kops.SubnetTypeUtility:
-				tags[aws.TagNameSubnetPublicELB] = "1"
+				tags[awsup.TagNameSubnetPublicELB] = "1"
 
 				// AWS ALB contoller won't provision any internal ELBs unless this tag is set.
 				// So we add this to public subnets as well if we do not have any private subnets.
 				// AWS cannot provision internal load balancers into networks with an IPv6 default
 				// route to an Internet Gateway, though.
 				if !haveAnyPrivate && !b.Cluster.Spec.IsIPv6Only() {
-					tags[aws.TagNameSubnetInternalELB] = "1"
+					tags[awsup.TagNameSubnetInternalELB] = "1"
 				}
 
 			case kops.SubnetTypeDualStack:
-				tags[aws.TagNameSubnetInternalELB] = "1"
+				tags[awsup.TagNameSubnetInternalELB] = "1"
 
 			case kops.SubnetTypePrivate:
 				if !haveDualStack[subnetSpec.Zone] {
-					tags[aws.TagNameSubnetInternalELB] = "1"
+					tags[awsup.TagNameSubnetInternalELB] = "1"
 				}
 
 			default:

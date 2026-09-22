@@ -44,7 +44,7 @@ func (p *PoolMonitor) GetDependencies(tasks map[string]fi.CloudupTask) []fi.Clou
 	return deps
 }
 
-var _ fi.CompareWithID = &PoolMonitor{}
+var _ fi.CompareWithID = (*PoolMonitor)(nil)
 
 func (p *PoolMonitor) CompareWithID() *string {
 	return p.ID
@@ -62,7 +62,7 @@ func (p *PoolMonitor) Find(context *fi.CloudupContext) (*PoolMonitor, error) {
 	if err != nil {
 		return nil, err
 	}
-	if rs == nil || len(rs) == 0 {
+	if len(rs) == 0 {
 		return nil, nil
 	} else if len(rs) != 1 {
 		return nil, fmt.Errorf("found multiple monitors with name: %s", fi.ValueOf(p.Name))

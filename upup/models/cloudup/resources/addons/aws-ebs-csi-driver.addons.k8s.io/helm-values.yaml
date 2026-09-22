@@ -1,0 +1,115 @@
+# These are used to generate the template file
+# helm repo list | grep -q aws-ebs-csi-driver || helm repo add aws-ebs-csi-driver https://kubernetes-sigs.github.io/aws-ebs-csi-driver
+# helm repo update
+# helm template aws-ebs-csi-driver aws-ebs-csi-driver/aws-ebs-csi-driver -n kube-system -f helm-values.yaml --no-hooks
+image:
+  repository: registry.k8s.io/provider-aws/aws-ebs-csi-driver
+  tag: "{{ .Version }}"
+
+controller:
+  enableMetrics: true
+  logLevel: 5
+  volumeModificationFeature:
+    enabled: true
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: "topology.kubernetes.io/zone"
+      whenUnsatisfiable: ScheduleAnyway
+    - maxSkew: 1
+      topologyKey: "kubernetes.io/hostname"
+      whenUnsatisfiable: DoNotSchedule
+  podDisruptionBudget:
+    enabled: true
+    maxUnavailable: 1
+
+sidecars:
+  provisioner:
+    image:
+      repository: registry.k8s.io/sig-storage/csi-provisioner
+    logLevel: 5
+    resources:
+      requests:
+        cpu: 10m
+        memory: 40Mi
+      limits:
+        memory: 256Mi
+  attacher:
+    image:
+      repository: registry.k8s.io/sig-storage/csi-attacher
+    logLevel: 5
+    resources:
+      requests:
+        cpu: 10m
+        memory: 40Mi
+      limits:
+        memory: 256Mi
+  snapshotter:
+    forceEnable: true
+    image:
+      repository: registry.k8s.io/sig-storage/csi-snapshotter
+    logLevel: 5
+    resources:
+      requests:
+        cpu: 10m
+        memory: 40Mi
+      limits:
+        memory: 256Mi
+  resizer:
+    image:
+      repository: registry.k8s.io/sig-storage/csi-resizer
+    logLevel: 5
+    resources:
+      requests:
+        cpu: 10m
+        memory: 40Mi
+      limits:
+        memory: 256Mi
+  livenessProbe:
+    image:
+      repository: registry.k8s.io/sig-storage/livenessprobe
+    resources:
+      requests:
+        cpu: 10m
+        memory: 40Mi
+      limits:
+        memory: 256Mi
+  nodeDriverRegistrar:
+    image:
+      repository: registry.k8s.io/sig-storage/csi-node-driver-registrar
+    logLevel: 5
+    resources:
+      requests:
+        cpu: 10m
+        memory: 40Mi
+      limits:
+        memory: 256Mi
+  volumemodifier:
+    logLevel: 5
+
+node:
+  enableWindows: false
+  logLevel: 5
+  priorityClassName: system-node-critical
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: topology.kubernetes.io/zone
+                operator: Exists
+              - key: eks.amazonaws.com/compute-type
+                operator: NotIn
+                values:
+                  - fargate
+                  - auto
+                  - hybrid
+              - key: node.kubernetes.io/instance-type
+                operator: NotIn
+                values:
+                  - a1.medium
+                  - a1.large
+                  - a1.xlarge
+                  - a1.2xlarge
+                  - a1.4xlarge
+
+nodeAllocatableUpdatePeriodSeconds: 10

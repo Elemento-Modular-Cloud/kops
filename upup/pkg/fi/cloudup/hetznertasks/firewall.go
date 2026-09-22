@@ -21,7 +21,7 @@ import (
 	"net"
 	"strconv"
 
-	"github.com/hetznercloud/hcloud-go/hcloud"
+	"github.com/hetznercloud/hcloud-go/v2/hcloud"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner"
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraform"
@@ -32,17 +32,17 @@ type Firewall struct {
 	Name      *string
 	Lifecycle fi.Lifecycle
 
-	ID       *int
+	ID       *int64
 	Selector string
 	Rules    []*FirewallRule
 
 	Labels map[string]string
 }
 
-var _ fi.CompareWithID = &Firewall{}
+var _ fi.CompareWithID = (*Firewall)(nil)
 
 func (v *Firewall) CompareWithID() *string {
-	return fi.PtrTo(strconv.Itoa(fi.ValueOf(v.ID)))
+	return fi.PtrTo(strconv.FormatInt(fi.ValueOf(v.ID), 10))
 }
 
 func (v *Firewall) Find(c *fi.CloudupContext) (*Firewall, error) {
@@ -201,7 +201,7 @@ type FirewallRule struct {
 	Port      *string
 }
 
-var _ fi.CloudupHasDependencies = &FirewallRule{}
+var _ fi.CloudupHasDependencies = (*FirewallRule)(nil)
 
 func (e *FirewallRule) GetDependencies(tasks map[string]fi.CloudupTask) []fi.CloudupTask {
 	return nil

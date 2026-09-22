@@ -294,6 +294,24 @@ spec:
 
 Note that burstable instances are always included in the set of eligible instances.
 
+You can exclude instance types from the set of eligible instances using `excludedInstanceTypes`.
+You can use strings with one or more wild cards, represented by an asterisk (*), to exclude an instance type, size, or generation.
+For example, `m7i.8xlarge`, `c7*.*`, `m7a.*`, `r*`, `*3*`.
+
+```
+spec:
+  mixedInstancesPolicy:
+    instanceRequirements:
+      cpu:
+        min: "2"
+        max: "16"
+      memory:
+        min: "2G"
+      excludedInstanceTypes:
+      - t2.*
+      - t3.*
+```
+
 ## warmPool (AWS Only)
 
 {{ kops_feature_table(kops_added_default='1.21') }}
@@ -319,18 +337,32 @@ spec:
 You can also specify defaults for all instance groups of type Node or APIServer by setting the `warmPool` field in the cluster spec.
 If warm pools are enabled at the cluster spec level, you can disable them at the instance group level by setting `maxSize: 0`.
 
+### Additional container images
+In some cases it can be convenient to download large container images during the warming phase to reduce the startup time of workloads after a node has been requested and joined the cluster. Additional images can be specified via the `additionalImages` field.
+
+```yaml
+spec:
+  warmPool:
+    additionalImages:
+      - nvcr.io/nvidia/tritonserver:24.10-py3
+      - nvcr.io/nvidia/tritonserver:25.11-vllm-python-py3
+```
+
 ### Lifecycle hook
 
 By default AWS does not guarantee that the kOps configuration will run to completion. Nor that the instance will timely shut down after completion if the instance is allowed to run that long. In order to guarantee this, a lifecycle hook is needed.
 
 **You have to ensure your metadata API is protected if you enable this. If not, any Pod in the cluster will be able to complete the lifecycle hook with the `ABANDONED` result, preventing any instance from ever joining the cluster.**
 
-The following config will enable the lifecycle hook as well as protect the metadata API from abuse:
+By default the lifecycle hook will timeout after 600s. A custom timeout can be set via the `lifecycleHookTimeout` field in the `warmPool` spec. This might be needed if larger additional container images are pulled during the warmup phase so these tasks can finish.
+
+The following config will enable the lifecycle hook, set the timeout to 900s as well as protect the metadata API from abuse:
 
 ```yaml
 spec:
   warmPool:
     enableLifecycleHook: true
+    lifecycleHookTimeout: 900    
   instanceMetadata:
     httpPutResponseHopLimit: 1
     httpTokens: required

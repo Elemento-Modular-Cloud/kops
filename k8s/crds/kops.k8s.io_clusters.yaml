@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.17.0
+    controller-gen.kubebuilder.io/version: v0.20.0
   name: clusters.kops.k8s.io
 spec:
   group: kops.k8s.io
@@ -264,6 +264,24 @@ spec:
                 description: AWSLoadbalancerControllerConfig determines the AWS LB
                   controller configuration.
                 properties:
+                  cpuLimit:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      CPULimit, cpu limit compute resource for AWS Load Balancer Controller.
+                      Default: 200m
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  cpuRequest:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      CPURequest, cpu request compute resource for AWS Load Balancer Controller.
+                      Default: 100m
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
                   enableShield:
                     description: |-
                       EnableShield specifies whether the controller can enable Shield Advanced.
@@ -284,6 +302,24 @@ spec:
                       Enabled enables the loadbalancer controller.
                       Default: false
                     type: boolean
+                  memoryLimit:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      MemoryLimit, memory limit compute resource for AWS Load Balancer Controller.
+                      Default: 500Mi
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  memoryRequest:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      MemoryRequest, memory request compute resource for AWS Load Balancer Controller.
+                      Default: 200Mi
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
                   version:
                     description: Version is the container image tag used.
                     type: string
@@ -446,9 +482,18 @@ spec:
                   gcpPDCSIDriver:
                     description: GCPPDCSIDriver is the config for the GCP PD CSI driver
                     properties:
+                      defaultStorageClassName:
+                        description: Default StorageClassName is the name of the default
+                          StorageClass created for GCP PD CSI driver.
+                        type: string
                       enabled:
                         description: Enabled enables the GCP PD CSI driver
                         type: boolean
+                      version:
+                        description: |-
+                          Version is the container image tag used.
+                          Default: The latest stable release which is compatible with your Kubernetes version
+                        type: string
                     type: object
                   manageStorageClasses:
                     description: |-
@@ -458,6 +503,11 @@ spec:
                   multizone:
                     description: GCE cloud-config options
                     type: boolean
+                  nlbSecurityGroupMode:
+                    description: |-
+                      NLBSecurityGroupMode determines if the Cloud Controller Manager supports and manages
+                      security groups for Network Load Balancers (AWS only). Valid value: "Managed"
+                    type: string
                   nodeIPFamilies:
                     description: NodeIPFamilies controls the IP families reported
                       for each node (AWS only).
@@ -621,6 +671,10 @@ spec:
                     description: Allow the cluster to run without the cluster-id on
                       cloud instances
                     type: boolean
+                  azureNodeManagerImage:
+                    description: AzureNodeManagerImage is the OCI image of the Azure
+                      cloud node manager.
+                    type: string
                   cidrAllocatorType:
                     description: CIDRAllocatorType specifies the type of CIDR allocator
                       to use.
@@ -890,13 +944,35 @@ spec:
                       - type: integer
                       - type: string
                       x-kubernetes-int-or-string: true
-                    description: ConfigAdditions adds additional config entries to
-                      the generated config file.
+                    description: |-
+                      ConfigAdditions adds additional config entries to the generated config file.
+                      Paths are written to the config as-is, so they must match the schema version of the
+                      configured containerd: v2 paths (e.g. plugins."io.containerd.grpc.v1.cri".*) for
+                      containerd < 2.0, v3 paths (e.g. plugins."io.containerd.cri.v1.runtime".*) for >= 2.0.
                     type: object
                   configOverride:
                     description: ConfigOverride is the complete containerd config
                       file provided by the user.
                     type: string
+                  gvisor:
+                    description: GVisor configures the gVisor (runsc) sandboxed runtime.
+                    properties:
+                      enabled:
+                        description: Enabled determines if kOps will install the gVisor
+                          runtime.
+                        type: boolean
+                      platform:
+                        description: |-
+                          Platform is the gVisor execution platform: "systrap" (default, works
+                          everywhere including VMs) or "kvm" (bare-metal with KVM support).
+                        type: string
+                    type: object
+                  installCriCtl:
+                    description: InstallCriCtl installs crictl (default "false").
+                    type: boolean
+                  installNerdCtl:
+                    description: InstallNerdCtl installs nerdctl (default "false").
+                    type: boolean
                   logLevel:
                     description: LogLevel controls the logging details [trace, debug,
                       info, warn, error, fatal, panic] (default "info").
@@ -932,10 +1008,14 @@ spec:
                           Enabled determines if kOps will install the Nvidia GPU runtime and drivers.
                           They will only be installed on intances that has an Nvidia GPU.
                         type: boolean
+                      image:
+                        description: Image defines the container image used to deploy
+                          the Nvidia Kubernetes Device Plugin.
+                        type: string
                       package:
                         description: |-
                           Package is the name of the nvidia driver package that will be installed.
-                          Default is "nvidia-headless-460-server".
+                          Default is "nvidia-driver-535-server".
                         type: string
                     type: object
                   packages:
@@ -991,6 +1071,9 @@ spec:
                         description: Version used to pick the runc package.
                         type: string
                     type: object
+                  sandboxImage:
+                    description: SandboxImage is the image used for the sandbox container.
+                    type: string
                   selinuxEnabled:
                     description: SelinuxEnabled enables SELinux support
                     type: boolean
@@ -1002,6 +1085,10 @@ spec:
                     description: State directory for execution state files (default
                       "/run/containerd").
                     type: string
+                  useECRCredentialsForMirrors:
+                    description: Enables Kubelet ECR Credential helper to pass credentials
+                      to containerd mirrors, to use ECR as a pull-through cache
+                    type: boolean
                   version:
                     description: Version used to pick the containerd package.
                     type: string
@@ -1359,6 +1446,12 @@ spec:
                         image:
                           description: Image is the etcd manager image to use.
                           type: string
+                        listenClientHTTPURLs:
+                          description: ListenClientHTTPURLs is the list of URLs to
+                            listen on for HTTP-only client traffic
+                          items:
+                            type: string
+                          type: array
                         listenMetricsURLs:
                           description: ListenMetricsURLs is the list of URLs to listen
                             on that will respond to both the /metrics and /health
@@ -1382,8 +1475,8 @@ spec:
                       pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                       x-kubernetes-int-or-string: true
                     name:
-                      description: Name is the name of the etcd cluster (main, events
-                        etc)
+                      description: Name is the name of the etcd cluster (main, events,
+                        leases etc)
                       type: string
                     provider:
                       description: |-
@@ -1402,6 +1495,11 @@ spec:
                     description: Disable indicates we do not wish to run the dns-controller
                       addon
                     type: boolean
+                  priorityClassName:
+                    description: |-
+                      PriorityClassName overrides the priorityClassName on the dns-controller pod.
+                      Defaults to "system-cluster-critical" when unset.
+                    type: string
                   provider:
                     description: |-
                       Provider determines which implementation of ExternalDNS to use.
@@ -1611,6 +1709,8 @@ spec:
                     x-kubernetes-int-or-string: true
                   enabled:
                     type: boolean
+                  featureGates:
+                    type: string
                   image:
                     type: string
                   logEncoding:
@@ -1817,6 +1917,11 @@ spec:
                     description: CloudProvider is the name of the cloudProvider we
                       are using, aws, gce etcd
                     type: string
+                  compactionInterval:
+                    description: |-
+                      CompactionInterval is an interval of requesting compaction from apiserver.
+                      If the value is 0, no compaction will be issued.
+                    type: string
                   corsAllowedOrigins:
                     description: |-
                       CorsAllowedOrigins is a list of origins for CORS. An allowed origin can be a regular
@@ -1847,6 +1952,11 @@ spec:
                   defaultUnreachableTolerationSeconds:
                     description: DefaultUnreachableTolerationSeconds
                     format: int64
+                    type: integer
+                  deleteCollectionWorkers:
+                    description: DeleteCollectionWorkers indicates the number of workers
+                      spawned for DeleteCollection call. These are used to speed up
+                      namespace cleanup.
                     type: integer
                   disableAdmissionPlugins:
                     description: DisableAdmissionPlugins is a list of disabled admission
@@ -1894,8 +2004,9 @@ spec:
                         in a Container.
                       properties:
                         name:
-                          description: Name of the environment variable. Must be a
-                            C_IDENTIFIER.
+                          description: |-
+                            Name of the environment variable.
+                            May consist of any printable ASCII characters except '='.
                           type: string
                         value:
                           description: |-
@@ -1951,6 +2062,43 @@ spec:
                                   type: string
                               required:
                               - fieldPath
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            fileKeyRef:
+                              description: |-
+                                FileKeyRef selects a key of the env file.
+                                Requires the EnvFiles feature gate to be enabled.
+                              properties:
+                                key:
+                                  description: |-
+                                    The key within the env file. An invalid key will prevent the pod from starting.
+                                    The keys defined within a source may consist of any printable ASCII characters except '='.
+                                    During Alpha stage of the EnvFiles feature gate, the key size is limited to 128 characters.
+                                  type: string
+                                optional:
+                                  default: false
+                                  description: |-
+                                    Specify whether the file or its key must be defined. If the file or key
+                                    does not exist, then the env var is not published.
+                                    If optional is set to true and the specified key does not exist,
+                                    the environment variable will not be set in the Pod's containers.
+
+                                    If optional is set to false and the specified key does not exist,
+                                    an error will be returned during Pod creation.
+                                  type: boolean
+                                path:
+                                  description: |-
+                                    The path within the volume from which to select the file.
+                                    Must be relative and may not contain the '..' path or start with '..'.
+                                  type: string
+                                volumeName:
+                                  description: The name of the volume mount containing
+                                    the env file.
+                                  type: string
+                              required:
+                              - key
+                              - path
+                              - volumeName
                               type: object
                               x-kubernetes-map-type: atomic
                             resourceFieldRef:
@@ -2046,6 +2194,11 @@ spec:
                     description: FeatureGates is set of key=value pairs that describe
                       feature gates for alpha/experimental features.
                     type: object
+                  goawayChance:
+                    description: GoawayChance is the probability that send a GOAWAY
+                      to HTTP/2 clients. Default to 0, means never send GOAWAY. Max
+                      is 0.02 to prevent break the apiserver.
+                    type: string
                   http2MaxStreamsPerConnection:
                     description: HTTP2MaxStreamsPerConnection sets the limit that
                       the server gives to clients for the maximum number of streams
@@ -2938,7 +3091,6 @@ spec:
                                         pod labels will be ignored. The default value is empty.
                                         The same key is forbidden to exist in both matchLabelKeys and labelSelector.
                                         Also, matchLabelKeys cannot be set when labelSelector isn't set.
-                                        This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                       items:
                                         type: string
                                       type: array
@@ -2953,7 +3105,6 @@ spec:
                                         pod labels will be ignored. The default value is empty.
                                         The same key is forbidden to exist in both mismatchLabelKeys and labelSelector.
                                         Also, mismatchLabelKeys cannot be set when labelSelector isn't set.
-                                        This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                       items:
                                         type: string
                                       type: array
@@ -3120,7 +3271,6 @@ spec:
                                     pod labels will be ignored. The default value is empty.
                                     The same key is forbidden to exist in both matchLabelKeys and labelSelector.
                                     Also, matchLabelKeys cannot be set when labelSelector isn't set.
-                                    This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                   items:
                                     type: string
                                   type: array
@@ -3135,7 +3285,6 @@ spec:
                                     pod labels will be ignored. The default value is empty.
                                     The same key is forbidden to exist in both mismatchLabelKeys and labelSelector.
                                     Also, mismatchLabelKeys cannot be set when labelSelector isn't set.
-                                    This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                   items:
                                     type: string
                                   type: array
@@ -3229,8 +3378,8 @@ spec:
                               most preferred is the one with the greatest sum of weights, i.e.
                               for each node that meets all of the scheduling requirements (resource
                               request, requiredDuringScheduling anti-affinity expressions, etc.),
-                              compute a sum by iterating through the elements of this field and adding
-                              "weight" to the sum if the node has pods which matches the corresponding podAffinityTerm; the
+                              compute a sum by iterating through the elements of this field and subtracting
+                              "weight" from the sum if the node has pods which matches the corresponding podAffinityTerm; the
                               node(s) with the highest sum are the most preferred.
                             items:
                               description: The weights of all of the matched WeightedPodAffinityTerm
@@ -3300,7 +3449,6 @@ spec:
                                         pod labels will be ignored. The default value is empty.
                                         The same key is forbidden to exist in both matchLabelKeys and labelSelector.
                                         Also, matchLabelKeys cannot be set when labelSelector isn't set.
-                                        This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                       items:
                                         type: string
                                       type: array
@@ -3315,7 +3463,6 @@ spec:
                                         pod labels will be ignored. The default value is empty.
                                         The same key is forbidden to exist in both mismatchLabelKeys and labelSelector.
                                         Also, mismatchLabelKeys cannot be set when labelSelector isn't set.
-                                        This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                       items:
                                         type: string
                                       type: array
@@ -3482,7 +3629,6 @@ spec:
                                     pod labels will be ignored. The default value is empty.
                                     The same key is forbidden to exist in both matchLabelKeys and labelSelector.
                                     Also, matchLabelKeys cannot be set when labelSelector isn't set.
-                                    This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                   items:
                                     type: string
                                   type: array
@@ -3497,7 +3643,6 @@ spec:
                                     pod labels will be ignored. The default value is empty.
                                     The same key is forbidden to exist in both mismatchLabelKeys and labelSelector.
                                     Also, mismatchLabelKeys cannot be set when labelSelector isn't set.
-                                    This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                   items:
                                     type: string
                                   type: array
@@ -3684,6 +3829,13 @@ spec:
                           Default: none
                         type: object
                     type: object
+                  podAnnotations:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      PodAnnotations makes possible to add additional annotations to CoreDNS Pods.
+                      Default: none
+                    type: object
                   provider:
                     description: Provider indicates whether CoreDNS or kube-dns will
                       be the default service discovery.
@@ -3722,9 +3874,10 @@ spec:
                         operator:
                           description: |-
                             Operator represents a key's relationship to the value.
-                            Valid operators are Exists and Equal. Defaults to Equal.
+                            Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
                             Exists is equivalent to wildcard for value, so that a pod can
                             tolerate all taints of a particular category.
+                            Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
                           type: string
                         tolerationSeconds:
                           description: |-
@@ -4066,8 +4219,9 @@ spec:
                       that will be used to get client certificate for kubelet
                     type: string
                   cgroupDriver:
-                    description: CgroupDriver allows the explicit setting of the kubelet
-                      cgroup driver. If omitted, defaults to cgroupfs.
+                    description: |-
+                      CgroupDriver allows the explicit setting of the kubelet cgroup driver.
+                      DEPRECATED: The cgroup driver is automatically detected.
                     type: string
                   cgroupRoot:
                     description: cgroupRoot is the root cgroup to use for pods. This
@@ -4111,6 +4265,12 @@ spec:
                     description: CpuManagerPolicy allows for changing the default
                       policy of None to static
                     type: string
+                  crashLoopBackOffMaxContainerRestartPeriod:
+                    description: CrashLoopBackOffMaxContainerRestartPeriod is the
+                      maximum duration the backoff delay can accrue to for container
+                      restarts, minimum 1 second, maximum 300 seconds. If not set,
+                      defaults to the internal crashloopbackoff maximum (300s).
+                    type: string
                   dockerDisableSharedPID:
                     description: DockerDisableSharedPID was removed.
                     type: boolean
@@ -4138,6 +4298,12 @@ spec:
                   eventQPS:
                     description: EventQPS if > 0, limit event creations per second
                       to this value.  If 0, unlimited.
+                    format: int32
+                    type: integer
+                  eventRecordQPS:
+                    description: |-
+                      EventRecordQPS is the maximum event creations per second. If 0, there is no limit enforced.
+                      Default: 50
                     format: int32
                     type: integer
                   evictionHard:
@@ -4241,6 +4407,11 @@ spec:
                     description: Integrate with the kernel memcg notification to determine
                       if memory eviction thresholds are crossed rather than polling.
                     type: boolean
+                  kubeAPIQPS:
+                    description: KubeAPIQPS Burst to use while talking with kubernetes
+                      apiserver. (default 50)
+                    format: int32
+                    type: integer
                   kubeReserved:
                     additionalProperties:
                       type: string
@@ -4267,6 +4438,14 @@ spec:
                     type: string
                   logLevel:
                     description: LogLevel is the logging level of the kubelet
+                    format: int32
+                    type: integer
+                  maxParallelImagePulls:
+                    description: |-
+                      MaxParallelImagePulls sets the maximum number of image pulls in parallel.
+                      This field cannot be set if SerializeImagePulls is true.
+                      Setting it to nil means no limit.
+                      Default: nil
                     format: int32
                     type: integer
                   maxPods:
@@ -4296,6 +4475,12 @@ spec:
                     description: NodeLabels to add when registering the node in the
                       cluster.
                     type: object
+                  nodeLeaseDurationSeconds:
+                    description: |-
+                      NodeLeaseDurationSeconds is the duration the Kubelet will set on its corresponding Lease, in seconds.
+                      Default: 40
+                    format: int32
+                    type: integer
                   nodeStatusUpdateFrequency:
                     description: |-
                       NodeStatusUpdateFrequency Specifies how often kubelet posts node status to master (default 10s)
@@ -4316,8 +4501,9 @@ spec:
                       In cluster mode, this is obtained from the master.
                     type: string
                   podInfraContainerImage:
-                    description: PodInfraContainerImage is the image whose network/ipc
-                      containers in each pod will use.
+                    description: |-
+                      PodInfraContainerImage is the image whose network/ipc containers in each pod will use.
+                      DEPRECATED: Image garbage collector will get sandbox image information from CRI.
                     type: string
                   podManifestPath:
                     description: config is the path to the config file or directory
@@ -4331,7 +4517,7 @@ spec:
                   protectKernelDefaults:
                     description: |-
                       Default kubelet behaviour for kernel tuning. If set, kubelet errors if any of kernel tunables is different than kubelet defaults.
-                      (DEPRECATED: This parameter should be set via the config file specified by the Kubelet's --config flag.
+                      DEPRECATED: This parameter should be set via the config file specified by the Kubelet's --config flag.
                     type: boolean
                   readOnlyPort:
                     description: ReadOnlyPort is the port used by the kubelet api
@@ -4519,8 +4705,9 @@ spec:
                       that will be used to get client certificate for kubelet
                     type: string
                   cgroupDriver:
-                    description: CgroupDriver allows the explicit setting of the kubelet
-                      cgroup driver. If omitted, defaults to cgroupfs.
+                    description: |-
+                      CgroupDriver allows the explicit setting of the kubelet cgroup driver.
+                      DEPRECATED: The cgroup driver is automatically detected.
                     type: string
                   cgroupRoot:
                     description: cgroupRoot is the root cgroup to use for pods. This
@@ -4564,6 +4751,12 @@ spec:
                     description: CpuManagerPolicy allows for changing the default
                       policy of None to static
                     type: string
+                  crashLoopBackOffMaxContainerRestartPeriod:
+                    description: CrashLoopBackOffMaxContainerRestartPeriod is the
+                      maximum duration the backoff delay can accrue to for container
+                      restarts, minimum 1 second, maximum 300 seconds. If not set,
+                      defaults to the internal crashloopbackoff maximum (300s).
+                    type: string
                   dockerDisableSharedPID:
                     description: DockerDisableSharedPID was removed.
                     type: boolean
@@ -4591,6 +4784,12 @@ spec:
                   eventQPS:
                     description: EventQPS if > 0, limit event creations per second
                       to this value.  If 0, unlimited.
+                    format: int32
+                    type: integer
+                  eventRecordQPS:
+                    description: |-
+                      EventRecordQPS is the maximum event creations per second. If 0, there is no limit enforced.
+                      Default: 50
                     format: int32
                     type: integer
                   evictionHard:
@@ -4694,6 +4893,11 @@ spec:
                     description: Integrate with the kernel memcg notification to determine
                       if memory eviction thresholds are crossed rather than polling.
                     type: boolean
+                  kubeAPIQPS:
+                    description: KubeAPIQPS Burst to use while talking with kubernetes
+                      apiserver. (default 50)
+                    format: int32
+                    type: integer
                   kubeReserved:
                     additionalProperties:
                       type: string
@@ -4720,6 +4924,14 @@ spec:
                     type: string
                   logLevel:
                     description: LogLevel is the logging level of the kubelet
+                    format: int32
+                    type: integer
+                  maxParallelImagePulls:
+                    description: |-
+                      MaxParallelImagePulls sets the maximum number of image pulls in parallel.
+                      This field cannot be set if SerializeImagePulls is true.
+                      Setting it to nil means no limit.
+                      Default: nil
                     format: int32
                     type: integer
                   maxPods:
@@ -4749,6 +4961,12 @@ spec:
                     description: NodeLabels to add when registering the node in the
                       cluster.
                     type: object
+                  nodeLeaseDurationSeconds:
+                    description: |-
+                      NodeLeaseDurationSeconds is the duration the Kubelet will set on its corresponding Lease, in seconds.
+                      Default: 40
+                    format: int32
+                    type: integer
                   nodeStatusUpdateFrequency:
                     description: |-
                       NodeStatusUpdateFrequency Specifies how often kubelet posts node status to master (default 10s)
@@ -4769,8 +4987,9 @@ spec:
                       In cluster mode, this is obtained from the master.
                     type: string
                   podInfraContainerImage:
-                    description: PodInfraContainerImage is the image whose network/ipc
-                      containers in each pod will use.
+                    description: |-
+                      PodInfraContainerImage is the image whose network/ipc containers in each pod will use.
+                      DEPRECATED: Image garbage collector will get sandbox image information from CRI.
                     type: string
                   podManifestPath:
                     description: config is the path to the config file or directory
@@ -4784,7 +5003,7 @@ spec:
                   protectKernelDefaults:
                     description: |-
                       Default kubelet behaviour for kernel tuning. If set, kubelet errors if any of kernel tunables is different than kubelet defaults.
-                      (DEPRECATED: This parameter should be set via the config file specified by the Kubelet's --config flag.
+                      DEPRECATED: This parameter should be set via the config file specified by the Kubelet's --config flag.
                     type: boolean
                   readOnlyPort:
                     description: ReadOnlyPort is the port used by the kubelet api
@@ -5006,7 +5225,12 @@ spec:
                           Options: Disable (default for IPv4), Enable, or DoNothing
                         type: string
                       bpfEnabled:
-                        description: BPFEnabled enables the eBPF dataplane mode.
+                        description: |-
+                          BPFEnabled enables the eBPF dataplane mode. When set to true, kube-proxy
+                          must be disabled (spec.kubeProxy.enabled=false); kops will default it
+                          at cluster creation. Calico's BPF mode replaces kube-proxy and from
+                          v3.31 binds the kube-proxy healthz port (10256), so running both
+                          produces a port conflict.
                         type: boolean
                       bpfExternalServiceMode:
                         description: |-
@@ -5093,6 +5317,11 @@ spec:
                         description: MTU to be set in the cni-network-config for calico.
                         format: int32
                         type: integer
+                      nftablesMode:
+                        description: |-
+                          NFTablesMode configures nftables support in Felix
+                          Options: Disabled, Enabled, Auto
+                        type: string
                       prometheusGoMetricsEnabled:
                         description: PrometheusGoMetricsEnabled enables Prometheus
                           Go runtime metrics collection
@@ -5297,6 +5526,11 @@ spec:
                           BPFLBMapMax is the maximum number of entries in bpf lb service, backend and affinity maps.
                           Default: 65536
                         type: integer
+                      bpfLBSock:
+                        description: |-
+                          BPFLBSock enables socket-based LB for E/W traffic.
+                          Default: false
+                        type: boolean
                       bpfLBSockHostNSOnly:
                         description: |-
                           BPFLBSockHostNSOnly enables skipping socket LB for services when inside a pod namespace,
@@ -5342,6 +5576,11 @@ spec:
                       cniBinPath:
                         description: CniBinPath is unused.
                         type: string
+                      cniExclusive:
+                        description: |-
+                          CniExclusive configures whether to remove other CNI configuration files.
+                          Default: true
+                        type: boolean
                       containerRuntime:
                         description: ContainerRuntime is unused.
                         items:
@@ -5410,6 +5649,11 @@ spec:
                         description: |-
                           EnableEndpointHealthChecking enables connectivity health checking between virtual endpoints.
                           Default: true
+                        type: boolean
+                      enableHostFirewall:
+                        description: |-
+                          EnableHostFirewall enables the host firewall in the Cilium agent.
+                          Default: false
                         type: boolean
                       enableHostReachableServices:
                         description: |-
@@ -5485,6 +5729,27 @@ spec:
                           The cluster is operated by cilium-etcd-operator.
                           Default: false
                         type: boolean
+                      extraConfig:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          ExtraConfig is appended to the cilium-config ConfigMap. Keys here override any value
+                          rendered by kops. All values must be strings (e.g. "true", not true).
+                        type: object
+                      gatewayAPI:
+                        description: GatewayAPI specifies the configuration for Cilium
+                          Gateway API settings.
+                        properties:
+                          enableSecretsSync:
+                            description: |-
+                              EnableSecretsSync specifies whether synchronization of secrets is enabled.
+                              Default: true
+                            type: boolean
+                          enabled:
+                            description: Enabled specifies whether Cilium Gateway
+                              API is enabled.
+                            type: boolean
+                        type: object
                       hubble:
                         description: Hubble configures the Hubble service on the Cilium
                           agent.
@@ -6041,6 +6306,12 @@ spec:
                       Only used in Queue Processor mode.
                       Default: false
                     type: boolean
+                  enableOutOfServiceTaint:
+                    description: |-
+                      EnableOutOfServiceTaint makes node termination handler apply the node.kubernetes.io/out-of-service taint
+                      to nodes during non-graceful shutdown, allowing Kubernetes to quickly detach volumes and reschedule pods.
+                      Default: false
+                    type: boolean
                   enableRebalanceDraining:
                     description: |-
                       EnableRebalanceDraining makes node termination handler drain nodes when the rebalance recommendation notice is received.
@@ -6223,6 +6494,15 @@ spec:
                     items:
                       type: string
                     type: array
+                  discoveryService:
+                    description: DiscoveryService configures discovery using a hosted
+                      discovery service.
+                    properties:
+                      url:
+                        description: URL is the base URL of the discovery service,
+                          including universe ID if applicable.
+                        type: string
+                    type: object
                   discoveryStore:
                     description: DiscoveryStore is the VFS path to where OIDC Issuer
                       Discovery metadata is stored.
@@ -6362,7 +6642,6 @@ spec:
                       loadBalancer:
                         properties:
                           additionalSecurityGroups:
-                            description: AdditionalSecurityGroups is unused
                             items:
                               type: string
                             type: array
@@ -6402,11 +6681,22 @@ spec:
                 description: WarmPool defines the default warm pool settings for instance
                   groups (AWS only).
                 properties:
+                  additionalImages:
+                    description: AdditionalImages is a list of additional container
+                      images to pull into the warm pool instances.
+                    items:
+                      type: string
+                    type: array
                   enableLifecycleHook:
                     description: |-
                       EnableLifecycleHook determines if an ASG lifecycle hook will be added ensuring that nodeup runs to completion.
                       Note that the metadata API must be protected from arbitrary Pods when this is enabled.
                     type: boolean
+                  lifecycleHookTimeout:
+                    description: LifecycleHookTimeout is the timeout for the ASG lifecycle
+                      hook in seconds.
+                    format: int32
+                    type: integer
                   maxSize:
                     description: |-
                       MaxSize is the maximum size of the warm pool. The desired size of the instance group

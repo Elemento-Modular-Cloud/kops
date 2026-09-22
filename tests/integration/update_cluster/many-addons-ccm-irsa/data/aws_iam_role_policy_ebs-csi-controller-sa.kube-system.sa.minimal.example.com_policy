@@ -6,7 +6,6 @@
         "StringEquals": {
           "aws:RequestTag/KubernetesCluster": "minimal.example.com",
           "ec2:CreateAction": [
-            "CreateVolume",
             "CreateSnapshot"
           ]
         }
@@ -37,21 +36,84 @@
       ]
     },
     {
+      "Action": "ec2:CreateVolume",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/KubernetesCluster": "minimal.example.com"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws-test:ec2:*:*:snapshot/*"
+      ]
+    },
+    {
+      "Action": "ec2:CreateTags",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/KubernetesCluster": "minimal.example.com",
+          "ec2:CreateAction": [
+            "CopyVolumes",
+            "CreateVolume"
+          ]
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws-test:ec2:*:*:snapshot/*",
+        "arn:aws-test:ec2:*:*:volume/*"
+      ]
+    },
+    {
       "Action": [
-        "ec2:CreateSnapshot",
-        "ec2:DescribeAccountAttributes",
-        "ec2:DescribeAvailabilityZones",
-        "ec2:DescribeInstances",
-        "ec2:DescribeSnapshots",
-        "ec2:DescribeTags",
-        "ec2:DescribeVolumes",
-        "ec2:DescribeVolumesModifications",
-        "kms:CreateGrant",
+        "ec2:CreateTags",
+        "ec2:DeleteTags"
+      ],
+      "Condition": {
+        "Null": {
+          "aws:RequestTag/KubernetesCluster": "true"
+        },
+        "StringEquals": {
+          "aws:ResourceTag/KubernetesCluster": "minimal.example.com"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws-test:ec2:*:*:snapshot/*",
+        "arn:aws-test:ec2:*:*:volume/*"
+      ]
+    },
+    {
+      "Action": [
         "kms:Decrypt",
-        "kms:DescribeKey",
         "kms:Encrypt",
         "kms:GenerateDataKey*",
         "kms:ReEncrypt*"
+      ],
+      "Condition": {
+        "StringLike": {
+          "kms:ViaService": [
+            "ec2.us-test-1.amazonaws.com",
+            "s3.*.amazonaws.com"
+          ]
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "*"
+    },
+    {
+      "Action": [
+        "ec2:CreateSnapshot",
+        "ec2:DescribeAvailabilityZones",
+        "ec2:DescribeInstanceTypes",
+        "ec2:DescribeInstances",
+        "ec2:DescribeSnapshots",
+        "ec2:DescribeTags",
+        "ec2:DescribeVolumeStatus",
+        "ec2:DescribeVolumes",
+        "ec2:DescribeVolumesModifications",
+        "kms:CreateGrant",
+        "kms:DescribeKey"
       ],
       "Effect": "Allow",
       "Resource": "*"
@@ -62,7 +124,7 @@
         "ec2:DeleteSnapshot",
         "ec2:DeleteVolume",
         "ec2:DetachVolume",
-        "ec2:ModifyInstanceAttribute",
+        "ec2:EnableFastSnapshotRestores",
         "ec2:ModifyVolume"
       ],
       "Condition": {
@@ -75,6 +137,7 @@
     },
     {
       "Action": [
+        "ec2:CopyVolumes",
         "ec2:CreateSnapshot",
         "ec2:CreateVolume"
       ],

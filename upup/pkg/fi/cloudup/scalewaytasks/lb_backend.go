@@ -44,10 +44,10 @@ type LBBackend struct {
 	LoadBalancer *LoadBalancer
 }
 
-var _ fi.CloudupTask = &LBBackend{}
-var _ fi.CompareWithID = &LBBackend{}
+var _ fi.CloudupTask = (*LBBackend)(nil)
+var _ fi.CompareWithID = (*LBBackend)(nil)
 
-var _ fi.CloudupHasDependencies = &LBBackend{}
+var _ fi.CloudupHasDependencies = (*LBBackend)(nil)
 
 func (l *LBBackend) GetDependencies(tasks map[string]fi.CloudupTask) []fi.CloudupTask {
 	var deps []fi.CloudupTask
@@ -221,7 +221,7 @@ func (l *LBBackend) RenderTerraform(t *terraform.TerraformTarget, actual, expect
 	for _, server := range servers {
 		tfInstance := server.(terraformInstance)
 		if role := scaleway.InstanceRoleFromTags(tfInstance.Tags); role == scaleway.TagRoleControlPlane {
-			serverIPs = append(serverIPs, terraformWriter.LiteralProperty("scaleway_instance_server", fi.ValueOf(tfInstance.Name), "private_ip"))
+			serverIPs = append(serverIPs, terraformWriter.LiteralProperty("scaleway_instance_server", fi.ValueOf(tfInstance.Name), "private_ips[0].address"))
 		}
 	}
 

@@ -68,6 +68,10 @@ func (p *SeedProvider) GetSeeds() ([]string, error) {
 	}
 
 	for _, server := range servers {
+		// Seed only from control-plane nodes; workers do not run gossip.
+		if scaleway.InstanceRoleFromTags(server.Tags) != scaleway.TagRoleControlPlane {
+			continue
+		}
 		ip, err := scwCloud.GetServerIP(server.ID, server.Zone)
 		if err != nil {
 			return nil, fmt.Errorf("getting server IP: %w", err)

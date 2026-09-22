@@ -5,7 +5,7 @@ options:
   machineType: "E2_HIGHCPU_32"
 steps:
   # Push the images
-  - name: "mirror.gcr.io/library/golang:1.24.1-bookworm"
+  - name: "mirror.gcr.io/library/golang:1.26.5-trixie"
     id: images
     entrypoint: make
     env:
@@ -18,10 +18,12 @@ steps:
     args:
       - kops-utils-cp-push
       - kops-controller-push
+      - kops-channels-push
       - dns-controller-push
       - kube-apiserver-healthcheck-push
+      - discovery-server-push
   # Push the artifacts
-  - name: "mirror.gcr.io/library/golang:1.24.1-bookworm"
+  - name: "mirror.gcr.io/library/golang:1.26.5-trixie"
     id: artifacts
     entrypoint: make
     env:
@@ -36,7 +38,7 @@ steps:
     args:
       - gcs-upload-and-tag
   # Build cloudbuild artifacts (for attestation)
-  - name: "mirror.gcr.io/library/golang:1.24.1-bookworm"
+  - name: "mirror.gcr.io/library/golang:1.26.5-trixie"
     id: cloudbuild-artifacts
     entrypoint: make
     env:

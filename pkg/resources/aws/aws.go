@@ -328,17 +328,27 @@ func DeleteInstances(cloud fi.Cloud, t []*resources.Resource) error {
 	c := cloud.(awsup.AWSCloud)
 
 	var ids []string
+	var hasXenHyervisor bool
 	for i, instance := range t {
 		ids = append(ids, instance.ID)
+		if instance.Obj.(ec2types.Instance).Hypervisor == ec2types.HypervisorTypeXen {
+			hasXenHyervisor = true
+		}
 		if len(ids) < 100 && i < len(t)-1 {
 			continue
 		}
 
 		klog.Infof("Terminating %d EC2 instances", len(ids))
 		request := &ec2.TerminateInstancesInput{
-			InstanceIds: ids,
+			InstanceIds:    ids,
+			SkipOsShutdown: aws.Bool(true),
+		}
+		if hasXenHyervisor {
+			// SkipOsShutdown is not supported on Xen instance types.
+			request.SkipOsShutdown = aws.Bool(false)
 		}
 		ids = []string{}
+		hasXenHyervisor = false
 		_, err := c.EC2().TerminateInstances(ctx, request)
 		if err != nil {
 			if awsup.AWSErrorCode(err) == "InvalidInstanceID.NotFound" {
@@ -462,7 +472,7 @@ func (s *dumpState) getImageInfo(imageID string) (*imageInfo, error) {
 func guessSSHUser(image *ec2types.Image) string {
 	owner := aws.ToString(image.OwnerId)
 	switch owner {
-	case awsup.WellKnownAccountAmazonLinux2, awsup.WellKnownAccountRedhat:
+	case awsup.WellKnownAccountAmazonLinux2023, awsup.WellKnownAccountRedhat:
 		return "ec2-user"
 	case awsup.WellKnownAccountDebian:
 		return "admin"
@@ -1583,7 +1593,25 @@ func DescribeELBs(cloud fi.Cloud) ([]elbtypes.LoadBalancerDescription, map[strin
 
 		tagResponse, err := c.ELB().DescribeTags(ctx, tagRequest)
 		if err != nil {
-			return nil, nil, fmt.Errorf("error listing elb Tags: %v", err)
+			// An ELB may be deleted between DescribeLoadBalancers and DescribeTags;
+			// in that case the batched call fails, so fall back to per-ELB lookups.
+			if awsup.AWSErrorCode(err) != "LoadBalancerNotFound" {
+				return nil, nil, fmt.Errorf("error listing elb Tags: %v", err)
+			}
+			tagResponse = &elb.DescribeTagsOutput{}
+			for _, name := range tagRequest.LoadBalancerNames {
+				resp, err := c.ELB().DescribeTags(ctx, &elb.DescribeTagsInput{
+					LoadBalancerNames: []string{name},
+				})
+				if err != nil {
+					if awsup.AWSErrorCode(err) == "LoadBalancerNotFound" {
+						klog.V(2).Infof("ELB %q was deleted before tags could be listed", name)
+						continue
+					}
+					return nil, nil, fmt.Errorf("error listing elb Tags: %v", err)
+				}
+				tagResponse.TagDescriptions = append(tagResponse.TagDescriptions, resp.TagDescriptions...)
+			}
 		}
 
 		for _, t := range tagResponse.TagDescriptions {

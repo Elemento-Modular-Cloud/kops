@@ -152,22 +152,32 @@ func (b *FirewallModelBuilder) addETCDRules(c *fi.CloudupModelBuilderContext, sg
 	nodeName := b.SecurityGroupName(kops.InstanceGroupRoleNode)
 	nodeSG := sgMap[nodeName]
 
+	etcdClientMax := wellknownports.EtcdEventsClientPort
+	etcdPeerMax := wellknownports.EtcdEventsPeerPort
+	for _, c := range b.Cluster.Spec.EtcdClusters {
+		if c.Name == "leases" {
+			etcdClientMax = wellknownports.EtcdLeasesClientPort
+			etcdPeerMax = wellknownports.EtcdLeasesPeerPort
+			break
+		}
+	}
+
 	// ETCD Peer Discovery
 	etcdRule := &openstacktasks.SecurityGroupRule{
 		Lifecycle:    b.Lifecycle,
 		Direction:    s(string(rules.DirIngress)),
 		Protocol:     s(string(rules.ProtocolTCP)),
 		EtherType:    s(IPV4),
-		PortRangeMin: i(4001),
-		PortRangeMax: i(4002),
+		PortRangeMin: i(wellknownports.EtcdMainClientPort),
+		PortRangeMax: i(etcdClientMax),
 	}
 	etcdPeerRule := &openstacktasks.SecurityGroupRule{
 		Lifecycle:    b.Lifecycle,
 		Direction:    s(string(rules.DirIngress)),
 		Protocol:     s(string(rules.ProtocolTCP)),
 		EtherType:    s(IPV4),
-		PortRangeMin: i(2380),
-		PortRangeMax: i(2381),
+		PortRangeMin: i(wellknownports.EtcdMainPeerPort),
+		PortRangeMax: i(etcdPeerMax),
 	}
 	b.addDirectionalGroupRule(c, masterSG, masterSG, etcdRule)
 	b.addDirectionalGroupRule(c, masterSG, masterSG, etcdPeerRule)
@@ -178,8 +188,8 @@ func (b *FirewallModelBuilder) addETCDRules(c *fi.CloudupModelBuilderContext, sg
 			Direction:    s(string(rules.DirIngress)),
 			Protocol:     s(string(rules.ProtocolTCP)),
 			EtherType:    s(IPV4),
-			PortRangeMin: i(2382),
-			PortRangeMax: i(2382),
+			PortRangeMin: i(wellknownports.EtcdCiliumPeerPort),
+			PortRangeMax: i(wellknownports.EtcdCiliumPeerPort),
 		}
 		etcdCiliumGRPCRule := &openstacktasks.SecurityGroupRule{
 			Lifecycle:    b.Lifecycle,
@@ -518,7 +528,7 @@ func (b *FirewallModelBuilder) addCNIRules(c *fi.CloudupModelBuilderContext, sgM
 	}
 
 	if b.Cluster.Spec.Networking.Calico != nil {
-		tcpPorts = append(tcpPorts, 179)
+		tcpPorts = append(tcpPorts, wellknownports.BGP)
 		protocols = append(protocols, ProtocolIPEncap)
 	}
 
@@ -706,10 +716,7 @@ func (b *FirewallModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 
 	sgMap := make(map[string]*openstacktasks.SecurityGroup)
 
-	useVIPACL := false
-	if b.UseLoadBalancerForAPI() && b.UseVIPACL() {
-		useVIPACL = true
-	}
+	useVIPACL := b.UseLoadBalancerForAPI() && b.UseVIPACL()
 	sg := &openstacktasks.SecurityGroup{
 		Name:             s(b.APIResourceName()),
 		Lifecycle:        b.Lifecycle,
@@ -729,11 +736,12 @@ func (b *FirewallModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			Lifecycle:   b.Lifecycle,
 			RemoveGroup: false,
 		}
-		if role == kops.InstanceGroupRoleBastion {
+		switch role {
+		case kops.InstanceGroupRoleBastion:
 			sg.RemoveExtraRules = []string{"port=22"}
-		} else if role == kops.InstanceGroupRoleNode {
+		case kops.InstanceGroupRoleNode:
 			sg.RemoveExtraRules = []string{"port=22", "port=10250"}
-		} else if role == kops.InstanceGroupRoleControlPlane {
+		case kops.InstanceGroupRoleControlPlane:
 			sg.RemoveExtraRules = []string{"port=22", "port=443", "port=10250"}
 		}
 		c.AddTask(sg)

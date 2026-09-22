@@ -19,10 +19,12 @@ package model
 import (
 	"context"
 	"fmt"
+	"net"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/flagbuilder"
 	"k8s.io/kops/pkg/k8scodecs"
@@ -34,7 +36,7 @@ import (
 	"k8s.io/kops/pkg/wellknownusers"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
-	"k8s.io/kops/util/pkg/proxy"
+	"k8s.io/kops/util/pkg/env"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -74,6 +76,55 @@ func (b *KubeAPIServerBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 		}
 		if localIP != "" {
 			kubeAPIServer.AdvertiseAddress = localIP
+		}
+	}
+
+	if b.CloudProvider() == kops.CloudProviderMetal {
+		// Workaround for https://github.com/kubernetes/kubernetes/issues/111671
+		if b.IsIPv6Only() {
+			interfaces, err := net.Interfaces()
+			if err != nil {
+				return fmt.Errorf("getting local network interfaces: %w", err)
+			}
+			var ipv6s []net.IP
+			for _, intf := range interfaces {
+				addresses, err := intf.Addrs()
+				if err != nil {
+					return fmt.Errorf("getting addresses for network interface %q: %w", intf.Name, err)
+				}
+				for _, addr := range addresses {
+					ip, _, err := net.ParseCIDR(addr.String())
+					if ip == nil {
+						return fmt.Errorf("parsing ip address %q (bound to network %q): %w", addr.String(), intf.Name, err)
+					}
+					if ip.To4() != nil {
+						// We're only looking for ipv6
+						continue
+					}
+					if ip.IsLinkLocalUnicast() {
+						klog.V(4).Infof("ignoring link-local unicast addr %v", addr)
+						continue
+					}
+					if ip.IsLinkLocalMulticast() {
+						klog.V(4).Infof("ignoring link-local multicast addr %v", addr)
+						continue
+					}
+					if ip.IsLoopback() {
+						klog.V(4).Infof("ignoring loopback addr %v", addr)
+						continue
+					}
+					ipv6s = append(ipv6s, ip)
+				}
+			}
+			if len(ipv6s) > 1 {
+				klog.Warningf("found multiple ipv6s, choosing first: %v", ipv6s)
+			}
+			if len(ipv6s) == 0 {
+				klog.Warningf("did not find ipv6 address for kube-apiserver --advertise-address")
+			}
+			if len(ipv6s) > 0 {
+				kubeAPIServer.AdvertiseAddress = ipv6s[0].String()
+			}
 		}
 	}
 
@@ -543,12 +594,16 @@ func (b *KubeAPIServerBuilder) buildPod(ctx context.Context, kubeAPIServer *kops
 		clusterName := b.NodeupConfig.ClusterName
 		mainEtcdDNSName := "main.etcd.internal." + clusterName
 		eventsEtcdDNSName := "events.etcd.internal." + clusterName
+		leasesEtcdDNSName := "leases.etcd.internal." + clusterName
 		for i := range kubeAPIServer.EtcdServers {
 			kubeAPIServer.EtcdServers[i] = strings.ReplaceAll(kubeAPIServer.EtcdServers[i], "127.0.0.1", mainEtcdDNSName)
 		}
 		for i := range kubeAPIServer.EtcdServersOverrides {
 			if strings.HasPrefix(kubeAPIServer.EtcdServersOverrides[i], "/events") {
 				kubeAPIServer.EtcdServersOverrides[i] = strings.ReplaceAll(kubeAPIServer.EtcdServersOverrides[i], "127.0.0.1", eventsEtcdDNSName)
+			}
+			if strings.HasPrefix(kubeAPIServer.EtcdServersOverrides[i], "coordination.k8s.io/leases") {
+				kubeAPIServer.EtcdServersOverrides[i] = strings.ReplaceAll(kubeAPIServer.EtcdServersOverrides[i], "127.0.0.1", leasesEtcdDNSName)
 			}
 		}
 	}
@@ -571,10 +626,6 @@ func (b *KubeAPIServerBuilder) buildPod(ctx context.Context, kubeAPIServer *kops
 	flags, err := flagbuilder.BuildFlagsList(kubeAPIServer)
 	if err != nil {
 		return nil, fmt.Errorf("error building kube-apiserver flags: %v", err)
-	}
-
-	if b.IsKubernetesLT("1.33") {
-		flags = append(flags, fmt.Sprintf("--cloud-config=%s", InTreeCloudConfigFilePath))
 	}
 
 	pod := &v1.Pod{
@@ -659,22 +710,6 @@ func (b *KubeAPIServerBuilder) buildPod(ctx context.Context, kubeAPIServer *kops
 		}
 	}
 
-	if b.IsKubernetesLT("1.31") {
-		// Compatibility: Use the old healthz probe for older clusters
-		for _, probe := range allProbes {
-			probe.HTTPGet.Path = "/healthz"
-		}
-
-		// Compatibility: Don't use startup probe / readiness probe
-		startupProbe = nil
-		readinessProbe = nil
-
-		// Compatibility: use old livenessProbe values
-		livenessProbe.FailureThreshold = 0
-		livenessProbe.PeriodSeconds = 0
-		livenessProbe.InitialDelaySeconds = 45
-	}
-
 	resourceRequests := v1.ResourceList{}
 	resourceLimits := v1.ResourceList{}
 
@@ -701,7 +736,7 @@ func (b *KubeAPIServerBuilder) buildPod(ctx context.Context, kubeAPIServer *kops
 	container := &v1.Container{
 		Name:           "kube-apiserver",
 		Image:          image,
-		Env:            append(kubeAPIServer.Env, proxy.GetProxyEnvVars(b.NodeupConfig.Networking.EgressProxy)...),
+		Env:            append(kubeAPIServer.Env, env.GetProxyEnvVars(b.NodeupConfig.Networking.EgressProxy)...),
 		LivenessProbe:  livenessProbe,
 		ReadinessProbe: readinessProbe,
 		StartupProbe:   startupProbe,
@@ -744,11 +779,9 @@ func (b *KubeAPIServerBuilder) buildPod(ctx context.Context, kubeAPIServer *kops
 	}
 
 	for _, path := range b.SSLHostPaths() {
-		name := strings.Replace(path, "/", "", -1)
+		name := strings.ReplaceAll(path, "/", "")
 		kubemanifest.AddHostPathMapping(pod, container, name, path)
 	}
-
-	kubemanifest.AddHostPathMapping(pod, container, "cloudconfig", InTreeCloudConfigFilePath)
 
 	kubemanifest.AddHostPathMapping(pod, container, "kubernetesca", filepath.Join(b.PathSrvKubernetes(), "ca.crt"))
 

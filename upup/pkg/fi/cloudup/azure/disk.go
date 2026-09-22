@@ -18,8 +18,10 @@ package azure
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	compute "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute"
 )
@@ -35,7 +37,7 @@ type disksClientImpl struct {
 	c *compute.DisksClient
 }
 
-var _ DisksClient = &disksClientImpl{}
+var _ DisksClient = (*disksClientImpl)(nil)
 
 func (c *disksClientImpl) CreateOrUpdate(ctx context.Context, resourceGroupName, diskName string, parameters compute.Disk) (*compute.Disk, error) {
 	future, err := c.c.BeginCreateOrUpdate(ctx, resourceGroupName, diskName, parameters, nil)
@@ -50,11 +52,19 @@ func (c *disksClientImpl) CreateOrUpdate(ctx context.Context, resourceGroupName,
 }
 
 func (c *disksClientImpl) List(ctx context.Context, resourceGroupName string) ([]*compute.Disk, error) {
+	if resourceGroupName == "" {
+		return nil, nil
+	}
+
 	var l []*compute.Disk
-	pager := c.c.NewListPager(nil)
+	pager := c.c.NewListByResourceGroupPager(resourceGroupName, nil)
 	for pager.More() {
 		resp, err := pager.NextPage(ctx)
 		if err != nil {
+			var respErr *azcore.ResponseError
+			if errors.As(err, &respErr) && respErr.ErrorCode == "ResourceGroupNotFound" {
+				return nil, nil
+			}
 			return nil, fmt.Errorf("listing disks: %w", err)
 		}
 		l = append(l, resp.Value...)

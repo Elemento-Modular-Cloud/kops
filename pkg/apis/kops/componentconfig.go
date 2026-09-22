@@ -27,21 +27,23 @@ type KubeletConfigSpec struct {
 	// APIServers is not used for clusters version 1.6 and later - flag removed
 	APIServers string `json:"apiServers,omitempty" flag:"api-servers"`
 	// AnonymousAuth permits you to control auth to the kubelet api
-	AnonymousAuth *bool `json:"anonymousAuth,omitempty" flag:"anonymous-auth"`
+	AnonymousAuth *bool `json:"anonymousAuth,omitempty" flag:"-"`
 	// AuthorizationMode is the authorization mode the kubelet is running in
-	AuthorizationMode string `json:"authorizationMode,omitempty" flag:"authorization-mode"`
+	AuthorizationMode string `json:"authorizationMode,omitempty" flag:"-"`
 	// BootstrapKubeconfig is the path to a kubeconfig file that will be used to get client certificate for kubelet
 	BootstrapKubeconfig string `json:"bootstrapKubeconfig,omitempty" flag:"bootstrap-kubeconfig"`
 	// ClientCAFile is the path to a CA certificate
-	ClientCAFile string `json:"clientCAFile,omitempty" flag:"client-ca-file"`
-	// TODO: Remove unused TLSCertFile
-	TLSCertFile string `json:"tlsCertFile,omitempty" flag:"tls-cert-file"`
-	// TODO: Remove unused TLSPrivateKeyFile
-	TLSPrivateKeyFile string `json:"tlsPrivateKeyFile,omitempty" flag:"tls-private-key-file"`
+	ClientCAFile string `json:"clientCAFile,omitempty" flag:"-"`
+	// TLSCertFile is the path to the kubelet's serving cert. Set automatically
+	// by nodeup to a cert+CA bundle; users should not set this directly.
+	TLSCertFile string `json:"tlsCertFile,omitempty" flag:"-"`
+	// TLSPrivateKeyFile is the path to the private key for the kubelet's
+	// serving cert. Set automatically by nodeup; users should not set this directly.
+	TLSPrivateKeyFile string `json:"tlsPrivateKeyFile,omitempty" flag:"-"`
 	// TLSCipherSuites indicates the allowed TLS cipher suite
-	TLSCipherSuites []string `json:"tlsCipherSuites,omitempty" flag:"tls-cipher-suites"`
+	TLSCipherSuites []string `json:"tlsCipherSuites,omitempty" flag:"-"`
 	// TLSMinVersion indicates the minimum TLS version allowed
-	TLSMinVersion string `json:"tlsMinVersion,omitempty" flag:"tls-min-version"`
+	TLSMinVersion string `json:"tlsMinVersion,omitempty" flag:"-"`
 	// KubeconfigPath is the path of kubeconfig for the kubelet
 	KubeconfigPath string `json:"kubeconfigPath,omitempty" flag:"kubeconfig"`
 	// RequireKubeconfig indicates a kubeconfig is required
@@ -49,48 +51,49 @@ type KubeletConfigSpec struct {
 	// LogFormat is the logging format of the kubelet.
 	// Supported values: text, json.
 	// Default: text
-	LogFormat string `json:"logFormat,omitempty" flag:"logging-format" flag-empty:"text"`
+	LogFormat string `json:"logFormat,omitempty" flag:"-"`
 	// LogLevel is the logging level of the kubelet
 	LogLevel *int32 `json:"logLevel,omitempty" flag:"v" flag-empty:"0"`
 	// config is the path to the config file or directory of files
-	PodManifestPath string `json:"podManifestPath,omitempty" flag:"pod-manifest-path"`
+	PodManifestPath string `json:"podManifestPath,omitempty" flag:"-"`
 	// HostnameOverride is the hostname used to identify the kubelet instead of the actual hostname.
 	HostnameOverride string `json:"hostnameOverride,omitempty" flag:"hostname-override"`
 	// PodInfraContainerImage is the image whose network/ipc containers in each pod will use.
-	PodInfraContainerImage string `json:"podInfraContainerImage,omitempty" flag:"pod-infra-container-image"`
+	// DEPRECATED: Image garbage collector will get sandbox image information from CRI.
+	PodInfraContainerImage string `json:"podInfraContainerImage,omitempty"`
 	// SeccompDefault enables the use of `RuntimeDefault` as the default seccomp profile for all workloads.
-	SeccompDefault *bool `json:"seccompDefault,omitempty" flag:"seccomp-default"`
+	SeccompDefault *bool `json:"seccompDefault,omitempty" flag:"-"`
 	// SeccompProfileRoot is the directory path for seccomp profiles.
 	SeccompProfileRoot *string `json:"seccompProfileRoot,omitempty" flag:"seccomp-profile-root"`
 	// AllowPrivileged enables containers to request privileged mode (defaults to false)
 	AllowPrivileged *bool `json:"allowPrivileged,omitempty" flag:"allow-privileged"`
 	// EnableDebuggingHandlers enables server endpoints for log collection and local running of containers and commands
-	EnableDebuggingHandlers *bool `json:"enableDebuggingHandlers,omitempty" flag:"enable-debugging-handlers"`
+	EnableDebuggingHandlers *bool `json:"enableDebuggingHandlers,omitempty" flag:"-"`
 	// RegisterNode enables automatic registration with the apiserver.
 	RegisterNode *bool `json:"registerNode,omitempty" flag:"register-node"`
 	// NodeStatusUpdateFrequency Specifies how often kubelet posts node status to master (default 10s)
 	// must work with nodeMonitorGracePeriod in KubeControllerManagerConfig.
-	NodeStatusUpdateFrequency *metav1.Duration `json:"nodeStatusUpdateFrequency,omitempty" flag:"node-status-update-frequency"`
+	NodeStatusUpdateFrequency *metav1.Duration `json:"nodeStatusUpdateFrequency,omitempty" flag:"-"`
 	// ClusterDomain is the DNS domain for this cluster
-	ClusterDomain string `json:"clusterDomain,omitempty" flag:"cluster-domain"`
+	ClusterDomain string `json:"clusterDomain,omitempty" flag:"-"`
 	// ClusterDNS is the IP address for a cluster DNS server
-	ClusterDNS string `json:"clusterDNS,omitempty" flag:"cluster-dns"`
+	ClusterDNS string `json:"clusterDNS,omitempty" flag:"-"`
 	// NetworkPluginName is the name of the network plugin to be invoked for various events in kubelet/pod lifecycle
 	NetworkPluginName *string `json:"networkPluginName,omitempty" flag:"network-plugin"`
 	// CloudProvider is the provider for cloud services.
 	CloudProvider string `json:"cloudProvider,omitempty" flag:"cloud-provider"`
 	// KubeletCgroups is the absolute name of cgroups to isolate the kubelet in.
-	KubeletCgroups string `json:"kubeletCgroups,omitempty" flag:"kubelet-cgroups"`
+	KubeletCgroups string `json:"kubeletCgroups,omitempty" flag:"-"`
 	// Cgroups that container runtime is expected to be isolated in.
 	RuntimeCgroups string `json:"runtimeCgroups,omitempty" flag:"runtime-cgroups"`
 	// ReadOnlyPort is the port used by the kubelet api for read-only access (default 10255)
-	ReadOnlyPort *int32 `json:"readOnlyPort,omitempty" flag:"read-only-port"`
+	ReadOnlyPort *int32 `json:"readOnlyPort,omitempty" flag:"-"`
 	// SystemCgroups is absolute name of cgroups in which to place
 	// all non-kernel processes that are not already in a container. Empty
 	// for no container. Rolling back the flag requires a reboot.
-	SystemCgroups string `json:"systemCgroups,omitempty" flag:"system-cgroups"`
+	SystemCgroups string `json:"systemCgroups,omitempty" flag:"-"`
 	// cgroupRoot is the root cgroup to use for pods. This is handled by the container runtime on a best effort basis.
-	CgroupRoot string `json:"cgroupRoot,omitempty" flag:"cgroup-root"`
+	CgroupRoot string `json:"cgroupRoot,omitempty" flag:"-"`
 	// configureCBR0 enables the kubelet to configure cbr0 based on Node.Spec.PodCIDR.
 	ConfigureCBR0 *bool `json:"configureCbr0,omitempty" flag:"configure-cbr0"`
 	// How should the kubelet configure the container bridge for hairpin packets.
@@ -102,25 +105,25 @@ type KubeletConfigSpec struct {
 	// Setting --configure-cbr0 to false implies that to achieve hairpin NAT
 	// one must set --hairpin-mode=veth-flag, because bridge assumes the
 	// existence of a container bridge named cbr0.
-	HairpinMode string `json:"hairpinMode,omitempty" flag:"hairpin-mode"`
+	HairpinMode string `json:"hairpinMode,omitempty" flag:"-"`
 	// The node has babysitter process monitoring docker and kubelet. Removed as of 1.7
 	BabysitDaemons *bool `json:"babysitDaemons,omitempty" flag:"babysit-daemons"`
 	// MaxPods is the number of pods that can run on this Kubelet.
-	MaxPods *int32 `json:"maxPods,omitempty" flag:"max-pods"`
+	MaxPods *int32 `json:"maxPods,omitempty" flag:"-"`
 	// NvidiaGPUs is the number of NVIDIA GPU devices on this node.
 	NvidiaGPUs int32 `json:"nvidiaGPUs,omitempty" flag:"experimental-nvidia-gpus" flag-empty:"0"`
 	// PodCIDR is the CIDR to use for pod IP addresses, only used in standalone mode.
 	// In cluster mode, this is obtained from the master.
-	PodCIDR string `json:"podCIDR,omitempty" flag:"pod-cidr"`
+	PodCIDR string `json:"podCIDR,omitempty" flag:"-"`
 	// ResolverConfig is the resolver configuration file used as the basis for the container DNS resolution configuration."), []
-	ResolverConfig *string `json:"resolvConf,omitempty" flag:"resolv-conf" flag-include-empty:"true"`
+	ResolverConfig *string `json:"resolvConf,omitempty" flag:"-"`
 	// ReconcileCIDR is Reconcile node CIDR with the CIDR specified by the
 	// API server. No-op if register-node or configure-cbr0 is false.
 	ReconcileCIDR *bool `json:"reconcileCIDR,omitempty" flag:"reconcile-cidr"`
 	// registerSchedulable tells the kubelet to register the node as schedulable. No-op if register-node is false.
 	RegisterSchedulable *bool `json:"registerSchedulable,omitempty" flag:"register-schedulable"`
 	// SerializeImagePulls when enabled, tells the Kubelet to pull images one at a time.
-	SerializeImagePulls *bool `json:"serializeImagePulls,omitempty" flag:"serialize-image-pulls"`
+	SerializeImagePulls *bool `json:"serializeImagePulls,omitempty" flag:"-"`
 	// NodeLabels to add when registering the node in the cluster.
 	NodeLabels map[string]string `json:"nodeLabels,omitempty" flag:"node-labels"`
 	// NonMasqueradeCIDR configures masquerading: traffic to IPs outside this range will use IP masquerade.
@@ -132,105 +135,118 @@ type KubeletConfigSpec struct {
 	// computed (such as IPSEC).
 	NetworkPluginMTU *int32 `json:"networkPluginMTU,omitempty" flag:"network-plugin-mtu"`
 	// imageMinimumGCAge is the minimum age for an unused image before it is garbage collected. Default: "2m"
-	ImageMinimumGCAge *string `json:"imageMinimumGCAge,omitempty" flag:"image-minimum-gc-age"`
+	// Kept as a flag so explicit zero is preserved; the upstream config field is non-pointer with omitempty and would drop a zero value.
+	ImageMinimumGCAge *metav1.Duration `json:"imageMinimumGCAge,omitempty" flag:"image-minimum-gc-age"`
 	// imageMaximumGCAge is the maximum age an image can be unused before it is garbage collected.
 	// The default of this field is "0s", which disables this field--meaning images won't be garbage
 	// collected based on being unused for too long. Default: "0s" (disabled)
-	ImageMaximumGCAge *string `json:"imageMaximumGCAge,omitempty" flag:"image-maximum-gc-age"`
+	ImageMaximumGCAge *metav1.Duration `json:"imageMaximumGCAge,omitempty"`
+	// MaxParallelImagePulls sets the maximum number of image pulls in parallel.
+	// This field cannot be set if SerializeImagePulls is true.
+	// Setting it to nil means no limit.
+	// Default: nil
+	MaxParallelImagePulls *int32 `json:"maxParallelImagePulls,omitempty"`
 	// ImageGCHighThresholdPercent is the percent of disk usage after which
 	// image garbage collection is always run.
-	ImageGCHighThresholdPercent *int32 `json:"imageGCHighThresholdPercent,omitempty" flag:"image-gc-high-threshold"`
+	ImageGCHighThresholdPercent *int32 `json:"imageGCHighThresholdPercent,omitempty" flag:"-"`
 	// ImageGCLowThresholdPercent is the percent of disk usage before which
 	// image garbage collection is never run. Lowest disk usage to garbage
 	// collect to.
-	ImageGCLowThresholdPercent *int32 `json:"imageGCLowThresholdPercent,omitempty" flag:"image-gc-low-threshold"`
+	ImageGCLowThresholdPercent *int32 `json:"imageGCLowThresholdPercent,omitempty" flag:"-"`
 	// ImagePullProgressDeadline is the timeout for image pulls
 	// If no pulling progress is made before this deadline, the image pulling will be cancelled. (default 1m0s)
 	ImagePullProgressDeadline *metav1.Duration `json:"imagePullProgressDeadline,omitempty" flag:"image-pull-progress-deadline"`
 	// Comma-delimited list of hard eviction expressions.  For example, 'memory.available<300Mi'.
-	EvictionHard *string `json:"evictionHard,omitempty" flag:"eviction-hard"`
+	EvictionHard *string `json:"evictionHard,omitempty" flag:"-"`
 	// Comma-delimited list of soft eviction expressions.  For example, 'memory.available<300Mi'.
-	EvictionSoft string `json:"evictionSoft,omitempty" flag:"eviction-soft"`
+	EvictionSoft string `json:"evictionSoft,omitempty" flag:"-"`
 	// Comma-delimited list of grace periods for each soft eviction signal.  For example, 'memory.available=30s'.
-	EvictionSoftGracePeriod string `json:"evictionSoftGracePeriod,omitempty" flag:"eviction-soft-grace-period"`
+	EvictionSoftGracePeriod string `json:"evictionSoftGracePeriod,omitempty" flag:"-"`
 	// Duration for which the kubelet has to wait before transitioning out of an eviction pressure condition.
-	EvictionPressureTransitionPeriod *metav1.Duration `json:"evictionPressureTransitionPeriod,omitempty" flag:"eviction-pressure-transition-period" flag-empty:"0s"`
+	EvictionPressureTransitionPeriod *metav1.Duration `json:"evictionPressureTransitionPeriod,omitempty" flag:"-"`
 	// Maximum allowed grace period (in seconds) to use when terminating pods in response to a soft eviction threshold being met.
-	EvictionMaxPodGracePeriod int32 `json:"evictionMaxPodGracePeriod,omitempty" flag:"eviction-max-pod-grace-period" flag-empty:"0"`
+	EvictionMaxPodGracePeriod int32 `json:"evictionMaxPodGracePeriod,omitempty" flag:"-"`
 	// Comma-delimited list of minimum reclaims (e.g. imagefs.available=2Gi) that describes the minimum amount of resource the kubelet will reclaim when performing a pod eviction if that resource is under pressure.
-	EvictionMinimumReclaim string `json:"evictionMinimumReclaim,omitempty" flag:"eviction-minimum-reclaim"`
+	EvictionMinimumReclaim string `json:"evictionMinimumReclaim,omitempty" flag:"-"`
 	// The full path of the directory in which to search for additional third party volume plugins (this path must be writeable, dependent on your choice of OS)
-	VolumePluginDirectory string `json:"volumePluginDirectory,omitempty" flag:"volume-plugin-dir"`
+	VolumePluginDirectory string `json:"volumePluginDirectory,omitempty" flag:"-"`
 	// Taints to add when registering a node in the cluster
-	Taints []string `json:"taints,omitempty" flag:"register-with-taints"`
+	Taints []string `json:"taints,omitempty" flag:"-"`
 	// FeatureGates is set of key=value pairs that describe feature gates for alpha/experimental features.
-	FeatureGates map[string]string `json:"featureGates,omitempty" flag:"feature-gates"`
+	FeatureGates map[string]string `json:"featureGates,omitempty" flag:"-"`
 	// Integrate with the kernel memcg notification to determine if memory eviction thresholds are crossed rather than polling.
-	KernelMemcgNotification *bool `json:"kernelMemcgNotification,omitempty" flag:"kernel-memcg-notification"`
+	KernelMemcgNotification *bool `json:"kernelMemcgNotification,omitempty" flag:"-"`
 	// Resource reservation for kubernetes system daemons like the kubelet, container runtime, node problem detector, etc.
-	KubeReserved map[string]string `json:"kubeReserved,omitempty" flag:"kube-reserved"`
+	KubeReserved map[string]string `json:"kubeReserved,omitempty" flag:"-"`
 	// Control group for kube daemons.
-	KubeReservedCgroup string `json:"kubeReservedCgroup,omitempty" flag:"kube-reserved-cgroup"`
+	KubeReservedCgroup string `json:"kubeReservedCgroup,omitempty" flag:"-"`
 	// Capture resource reservation for OS system daemons like sshd, udev, etc.
-	SystemReserved map[string]string `json:"systemReserved,omitempty" flag:"system-reserved"`
+	SystemReserved map[string]string `json:"systemReserved,omitempty" flag:"-"`
 	// Parent control group for OS system daemons.
-	SystemReservedCgroup string `json:"systemReservedCgroup,omitempty" flag:"system-reserved-cgroup"`
+	SystemReservedCgroup string `json:"systemReservedCgroup,omitempty" flag:"-"`
 	// Enforce Allocatable across pods whenever the overall usage across all pods exceeds Allocatable.
-	EnforceNodeAllocatable string `json:"enforceNodeAllocatable,omitempty" flag:"enforce-node-allocatable"`
+	EnforceNodeAllocatable string `json:"enforceNodeAllocatable,omitempty" flag:"-"`
 	// RuntimeRequestTimeout is timeout for runtime requests on - pull, logs, exec and attach
+	// Kept as a flag so explicit zero is preserved; the upstream config field is non-pointer with omitempty and would drop a zero value.
 	RuntimeRequestTimeout *metav1.Duration `json:"runtimeRequestTimeout,omitempty" flag:"runtime-request-timeout"`
 	// VolumeStatsAggPeriod is the interval for kubelet to calculate and cache the volume disk usage for all pods and volumes
+	// Kept as a flag so explicit zero is preserved; the upstream config field is non-pointer with omitempty and would drop a zero value.
 	VolumeStatsAggPeriod *metav1.Duration `json:"volumeStatsAggPeriod,omitempty" flag:"volume-stats-agg-period"`
 	// Tells the Kubelet to fail to start if swap is enabled on the node.
-	FailSwapOn *bool `json:"failSwapOn,omitempty" flag:"fail-swap-on"`
+	FailSwapOn *bool `json:"failSwapOn,omitempty" flag:"-"`
 	// ExperimentalAllowedUnsafeSysctls are passed to the kubelet config to whitelist allowable sysctls
 	// Was promoted to beta and renamed. https://github.com/kubernetes/kubernetes/pull/63717
 	ExperimentalAllowedUnsafeSysctls []string `json:"experimentalAllowedUnsafeSysctls,omitempty" flag:"experimental-allowed-unsafe-sysctls"`
 	// AllowedUnsafeSysctls are passed to the kubelet config to whitelist allowable sysctls
-	AllowedUnsafeSysctls []string `json:"allowedUnsafeSysctls,omitempty" flag:"allowed-unsafe-sysctls"`
+	AllowedUnsafeSysctls []string `json:"allowedUnsafeSysctls,omitempty" flag:"-"`
 	// StreamingConnectionIdleTimeout is the maximum time a streaming connection can be idle before the connection is automatically closed
+	// Kept as a flag so explicit zero is preserved; the upstream config field is non-pointer with omitempty and would drop a zero value.
 	StreamingConnectionIdleTimeout *metav1.Duration `json:"streamingConnectionIdleTimeout,omitempty" flag:"streaming-connection-idle-timeout"`
 	// DockerDisableSharedPID was removed.
 	DockerDisableSharedPID *bool `json:"-"`
 	// RootDir is the directory path for managing kubelet files (volume mounts,etc)
 	RootDir string `json:"rootDir,omitempty" flag:"root-dir"`
 	// AuthenticationTokenWebhook uses the TokenReview API to determine authentication for bearer tokens.
-	AuthenticationTokenWebhook *bool `json:"authenticationTokenWebhook,omitempty" flag:"authentication-token-webhook"`
+	AuthenticationTokenWebhook *bool `json:"authenticationTokenWebhook,omitempty" flag:"-"`
 	// AuthenticationTokenWebhook sets the duration to cache responses from the webhook token authenticator. Default is 2m. (default 2m0s)
+	// Kept as a flag so explicit zero is preserved; the upstream config field is non-pointer with omitempty and would drop a zero value.
 	AuthenticationTokenWebhookCacheTTL *metav1.Duration `json:"authenticationTokenWebhookCacheTTL,omitempty" flag:"authentication-token-webhook-cache-ttl"`
 	// CPUCFSQuota enables CPU CFS quota enforcement for containers that specify CPU limits
-	CPUCFSQuota *bool `json:"cpuCFSQuota,omitempty" flag:"cpu-cfs-quota"`
+	CPUCFSQuota *bool `json:"cpuCFSQuota,omitempty" flag:"-"`
 	// CPUCFSQuotaPeriod sets CPU CFS quota period value, cpu.cfs_period_us, defaults to Linux Kernel default
-	CPUCFSQuotaPeriod *metav1.Duration `json:"cpuCFSQuotaPeriod,omitempty" flag:"cpu-cfs-quota-period"`
+	CPUCFSQuotaPeriod *metav1.Duration `json:"cpuCFSQuotaPeriod,omitempty" flag:"-"`
 	// CpuManagerPolicy allows for changing the default policy of None to static
-	CpuManagerPolicy string `json:"cpuManagerPolicy,omitempty" flag:"cpu-manager-policy"`
+	CpuManagerPolicy string `json:"cpuManagerPolicy,omitempty" flag:"-"`
 	// RegistryPullQPS if > 0, limit registry pull QPS to this value.  If 0, unlimited. (default 5)
-	RegistryPullQPS *int32 `json:"registryPullQPS,omitempty" flag:"registry-qps"`
+	RegistryPullQPS *int32 `json:"registryPullQPS,omitempty" flag:"-"`
 	// RegistryBurst Maximum size of a bursty pulls, temporarily allows pulls to burst to this number, while still not exceeding registry-qps. Only used if --registry-qps > 0 (default 10)
+	// Kept as a flag so explicit zero is preserved; the upstream config field is non-pointer with omitempty and would drop a zero value.
 	RegistryBurst *int32 `json:"registryBurst,omitempty" flag:"registry-burst"`
 	// TopologyManagerPolicy determines the allocation policy for the topology manager.
-	TopologyManagerPolicy string `json:"topologyManagerPolicy,omitempty" flag:"topology-manager-policy"`
+	TopologyManagerPolicy string `json:"topologyManagerPolicy,omitempty" flag:"-"`
 	// rotateCertificates enables client certificate rotation.
-	RotateCertificates *bool `json:"rotateCertificates,omitempty" flag:"rotate-certificates"`
+	RotateCertificates *bool `json:"rotateCertificates,omitempty" flag:"-"`
 	// Default kubelet behaviour for kernel tuning. If set, kubelet errors if any of kernel tunables is different than kubelet defaults.
-	// (DEPRECATED: This parameter should be set via the config file specified by the Kubelet's --config flag.
-	ProtectKernelDefaults *bool `json:"protectKernelDefaults,omitempty" flag:"protect-kernel-defaults"`
-	// CgroupDriver allows the explicit setting of the kubelet cgroup driver. If omitted, defaults to cgroupfs.
-	CgroupDriver string `json:"cgroupDriver,omitempty" flag:"cgroup-driver"`
+	// DEPRECATED: This parameter should be set via the config file specified by the Kubelet's --config flag.
+	ProtectKernelDefaults *bool `json:"protectKernelDefaults,omitempty" flag:"-"`
+	// CgroupDriver allows the explicit setting of the kubelet cgroup driver.
+	// DEPRECATED: The cgroup driver is automatically detected.
+	CgroupDriver string `json:"cgroupDriver,omitempty" flag:"-"`
 	// HousekeepingInterval allows to specify interval between container housekeepings.
 	HousekeepingInterval *metav1.Duration `json:"housekeepingInterval,omitempty" flag:"housekeeping-interval"`
 	// EventQPS if > 0, limit event creations per second to this value.  If 0, unlimited.
-	EventQPS *int32 `json:"eventQPS,omitempty" flag:"event-qps" flag-empty:"0"`
+	EventQPS *int32 `json:"eventQPS,omitempty" flag:"-"`
 	// EventBurst temporarily allows event records to burst to this number, while still not exceeding EventQPS. Only used if EventQPS > 0.
+	// Kept as a flag so explicit zero is preserved; the upstream config field is non-pointer with omitempty and would drop a zero value.
 	EventBurst *int32 `json:"eventBurst,omitempty" flag:"event-burst"`
 	// ContainerLogMaxSize is the maximum size (e.g. 10Mi) of container log file before it is rotated.
-	ContainerLogMaxSize string `json:"containerLogMaxSize,omitempty" flag:"container-log-max-size"`
+	ContainerLogMaxSize string `json:"containerLogMaxSize,omitempty" flag:"-"`
 	// ContainerLogMaxFiles is the maximum number of container log files that can be present for a container. The number must be >= 2.
-	ContainerLogMaxFiles *int32 `json:"containerLogMaxFiles,omitempty" flag:"container-log-max-files"`
+	ContainerLogMaxFiles *int32 `json:"containerLogMaxFiles,omitempty" flag:"-"`
 	// EnableCadvisorJsonEndpoints enables cAdvisor json `/spec` and `/stats/*` endpoints. Defaults to False.
 	EnableCadvisorJsonEndpoints *bool `json:"enableCadvisorJsonEndpoints,omitempty" flag:"enable-cadvisor-json-endpoints"`
 	// PodPidsLimit is the maximum number of pids in any pod.
-	PodPidsLimit *int64 `json:"podPidsLimit,omitempty" flag:"pod-max-pids"`
+	PodPidsLimit *int64 `json:"podPidsLimit,omitempty" flag:"-"`
 	// ExperimentalAllocatableIgnoreEviction enables ignoring Hard Eviction Thresholds while calculating Node Allocatable
 	ExperimentalAllocatableIgnoreEviction *bool `json:"experimentalAllocatableIgnoreEviction,omitempty" flag:"experimental-allocatable-ignore-eviction"`
 
@@ -243,6 +259,16 @@ type KubeletConfigSpec struct {
 	// MemorySwapBehavior defines how swap is used by container workloads.
 	// Supported values: LimitedSwap, "UnlimitedSwap.
 	MemorySwapBehavior string `json:"memorySwapBehavior,omitempty"`
+	// CrashLoopBackOffMaxContainerRestartPeriod is the maximum duration the backoff delay can accrue to for container restarts, minimum 1 second, maximum 300 seconds. If not set, defaults to the internal crashloopbackoff maximum (300s).
+	CrashLoopBackOffMaxContainerRestartPeriod *metav1.Duration `json:"crashLoopBackOffMaxContainerRestartPeriod,omitempty"`
+	// KubeAPIQPS Burst to use while talking with kubernetes apiserver. (default 50)
+	KubeAPIQPS *int32 `json:"kubeAPIQPS,omitempty" flag:"kube-api-qps"`
+	// EventRecordQPS is the maximum event creations per second. If 0, there is no limit enforced.
+	// Default: 50
+	EventRecordQPS *int32 `json:"eventRecordQPS,omitempty"`
+	// NodeLeaseDurationSeconds is the duration the Kubelet will set on its corresponding Lease, in seconds.
+	// Default: 40
+	NodeLeaseDurationSeconds *int32 `json:"nodeLeaseDurationSeconds,omitempty"`
 }
 
 // KubeProxyConfig defines the configuration for a proxy
@@ -302,6 +328,9 @@ type KubeAPIServerConfig struct {
 	LogLevel int32 `json:"logLevel,omitempty" flag:"v" flag-empty:"0"`
 	// CloudProvider is the name of the cloudProvider we are using, aws, gce etcd
 	CloudProvider string `json:"cloudProvider,omitempty" flag:"cloud-provider"`
+	// CompactionInterval is an interval of requesting compaction from apiserver.
+	// If the value is 0, no compaction will be issued.
+	CompactionInterval *metav1.Duration `json:"compactionInterval,omitempty" flag:"etcd-compaction-interval"`
 	// SecurePort is the port the kube runs on
 	SecurePort int32 `json:"securePort,omitempty" flag:"secure-port"`
 	// InsecurePort is the port the insecure api runs
@@ -470,6 +499,8 @@ type KubeAPIServerConfig struct {
 	RequestheaderAllowedNames []string `json:"requestheaderAllowedNames,omitempty" flag:"requestheader-allowed-names"`
 	// FeatureGates is set of key=value pairs that describe feature gates for alpha/experimental features.
 	FeatureGates map[string]string `json:"featureGates,omitempty" flag:"feature-gates"`
+	// GoawayChance is the probability that send a GOAWAY to HTTP/2 clients. Default to 0, means never send GOAWAY. Max is 0.02 to prevent break the apiserver.
+	GoawayChance string `json:"goawayChance,omitempty" flag:"goaway-chance"`
 	// MaxRequestsInflight The maximum number of non-mutating requests in flight at a given time.
 	MaxRequestsInflight int32 `json:"maxRequestsInflight,omitempty" flag:"max-requests-inflight" flag-empty:"0"`
 	// MaxMutatingRequestsInflight The maximum number of mutating requests in flight at a given time. Defaults to 200
@@ -549,6 +580,9 @@ type KubeAPIServerConfig struct {
 	DefaultNotReadyTolerationSeconds *int64 `json:"defaultNotReadyTolerationSeconds,omitempty" flag:"default-not-ready-toleration-seconds"`
 	// DefaultUnreachableTolerationSeconds indicates the tolerationSeconds of the toleration for unreachable:NoExecute that is added by default to every pod that does not already have such a toleration.
 	DefaultUnreachableTolerationSeconds *int64 `json:"defaultUnreachableTolerationSeconds,omitempty" flag:"default-unreachable-toleration-seconds"`
+
+	// DeleteCollectionWorkers indicates the number of workers spawned for DeleteCollection call. These are used to speed up namespace cleanup.
+	DeleteCollectionWorkers int `json:"deleteCollectionWorkers,omitempty" flag:"delete-collection-workers" flag-empty:"0"`
 
 	// Env allows users to pass in env variables to the apiserver container.
 	// This can be useful to control some environment runtime settings, such as GOMEMLIMIT and GOCG to tweak the memory settings of the apiserver
@@ -754,6 +788,8 @@ type CloudControllerManagerConfig struct {
 	NodeStatusUpdateFrequency *metav1.Duration `json:"nodeStatusUpdateFrequency,omitempty" flag:"node-status-update-frequency"`
 	// ConcurrentNodeSyncs is the number of workers concurrently synchronizing nodes. (default: 1)
 	ConcurrentNodeSyncs *int32 `json:"concurrentNodeSyncs,omitempty" flag:"concurrent-node-syncs"`
+	// AzureNodeManagerImage is the OCI image of the Azure cloud node manager.
+	AzureNodeManagerImage string `json:"azureNodeManagerImage,omitempty"`
 }
 
 // KubeSchedulerConfig is the configuration for the kube-scheduler
@@ -980,6 +1016,11 @@ type EBSCSIDriverSpec struct {
 type PDCSIDriver struct {
 	// Enabled enables the GCP PD CSI driver
 	Enabled *bool `json:"enabled,omitempty"`
+	// Version is the container image tag used.
+	// Default: The latest stable release which is compatible with your Kubernetes version
+	Version *string `json:"version,omitempty"`
+	// Default StorageClassName is the name of the default StorageClass created for GCP PD CSI driver.
+	DefaultStorageClassName *string `json:"defaultStorageClassName,omitempty"`
 }
 
 // SnapshotControllerConfig is the config for the CSI Snapshot Controller
@@ -1014,6 +1055,11 @@ type NodeTerminationHandlerSpec struct {
 	// EnableRebalanceDraining makes node termination handler drain nodes when the rebalance recommendation notice is received.
 	// Default: false
 	EnableRebalanceDraining *bool `json:"enableRebalanceDraining,omitempty"`
+
+	// EnableOutOfServiceTaint makes node termination handler apply the node.kubernetes.io/out-of-service taint
+	// to nodes during non-graceful shutdown, allowing Kubernetes to quickly detach volumes and reschedule pods.
+	// Default: false
+	EnableOutOfServiceTaint *bool `json:"enableOutOfServiceTaint,omitempty"`
 
 	// EnablePrometheusMetrics enables the "/metrics" endpoint.
 	// Default: false
@@ -1214,6 +1260,18 @@ type LoadBalancerControllerSpec struct {
 	// EnableShield specifies whether the controller can enable Shield Advanced.
 	// Default: false
 	EnableShield bool `json:"enableShield,omitempty"`
+	// CPURequest, cpu request compute resource for AWS Load Balancer Controller.
+	// Default: 100m
+	CPURequest *resource.Quantity `json:"cpuRequest,omitempty"`
+	// CPULimit, cpu limit compute resource for AWS Load Balancer Controller.
+	// Default: 200m
+	CPULimit *resource.Quantity `json:"cpuLimit,omitempty"`
+	// MemoryRequest, memory request compute resource for AWS Load Balancer Controller.
+	// Default: 200Mi
+	MemoryRequest *resource.Quantity `json:"memoryRequest,omitempty"`
+	// MemoryLimit, memory limit compute resource for AWS Load Balancer Controller.
+	// Default: 500Mi
+	MemoryLimit *resource.Quantity `json:"memoryLimit,omitempty"`
 }
 
 // HasAdmissionController checks if a specific admission controller is enabled

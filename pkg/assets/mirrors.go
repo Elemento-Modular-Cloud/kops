@@ -22,12 +22,6 @@ import (
 	"k8s.io/kops"
 )
 
-const (
-	// defaultKopsMirrorBase will be detected and automatically set to pull from the defaultKopsMirrors
-	kopsDefaultBase      = "https://artifacts.k8s.io/binaries/kops/%s/"
-	githubKopsMirrorBase = "https://github.com/kubernetes/kops/releases/download/v%s/"
-)
-
 type mirrorConfig struct {
 	Base    string
 	Mirrors []string
@@ -38,19 +32,6 @@ var wellKnownMirrors = []mirrorConfig{
 		Base: "https://artifacts.k8s.io/binaries/kops/{kopsVersion}/",
 		Mirrors: []string{
 			"https://github.com/kubernetes/kops/releases/download/v{kopsVersion}/",
-		},
-	},
-	{
-		Base: "https://storage.googleapis.com/k8s-artifacts-cni/release/",
-		Mirrors: []string{
-			"https://github.com/containernetworking/plugins/releases/download/",
-		},
-	},
-	{
-		Base: "https://dl.k8s.io/release/",
-		Mirrors: []string{
-			// We include this mirror in case dl.k8s.io is not directly reachable.
-			"https://cdn.dl.k8s.io/release/",
 		},
 	},
 }
@@ -81,8 +62,6 @@ func (m *mirrorConfig) findMirrors(u string) ([]string, bool) {
 			suffix = strings.ReplaceAll(suffix, "linux-arm64-nodeup", "nodeup-linux-arm64")
 			suffix = strings.ReplaceAll(suffix, "linux-amd64-protokube", "protokube-linux-amd64")
 			suffix = strings.ReplaceAll(suffix, "linux-arm64-protokube", "protokube-linux-arm64")
-			suffix = strings.ReplaceAll(suffix, "linux-amd64-channels", "channels-linux-amd64")
-			suffix = strings.ReplaceAll(suffix, "linux-arm64-channels", "channels-linux-arm64")
 		}
 
 		mirrors = append(mirrors, mirror+suffix)

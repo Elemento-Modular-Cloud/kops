@@ -20,6 +20,10 @@ AWS Load Balancer Controller offers additional functionality for provisioning EL
 spec:
   awsLoadBalancerController:
     enabled: true
+    cpuRequest: "100m"
+    cpuLimit: "200m"
+    memoryRequest: "200Mi"
+    memoryLimit: "500Mi"
 ```
 
 Though the AWS Load Balancer Controller can integrate the AWS WAF and
@@ -37,6 +41,10 @@ spec:
     enabled: true
     enableWAF: true
     enableWAFv2: true
+    cpuRequest: "100m"
+    cpuLimit: "200m"
+    memoryRequest: "200Mi"
+    memoryLimit: "500Mi"
 ```
 
 Note that the controller will only succeed in associating one WAF with
@@ -399,16 +407,19 @@ spec:
 
 ## Custom addons
 
-The command `kops create cluster` does not support specifying addons to be added to the cluster when it is created. Instead they can be added after cluster creation using kubectl. Alternatively when creating a cluster from a yaml manifest, addons can be specified using `spec.addons`.
+Static addons are configured with `spec.addons`. Each entry points to a manifest that the control plane can read.
 
 ```yaml
 spec:
   addons:
-  - manifest: s3://my-kops-addons/addon.yaml
+  - manifest: https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml
 ```
 
-The docs about the [addon management](contributing/addons.md#addon-management) describe in more detail how to define a addon resource with regards to versioning.
-Here is a minimal example of an addon manifest that would install two different addons.
+Starting with kOps 1.36, that file can be a regular Kubernetes resource manifest. For example, the manifest above installs the Gateway API CRDs. kOps applies the resources as-is.
+
+It can also be a kOps `Addons` index. Use this when one entry in `spec.addons` should point at multiple versioned manifests. The [addon management](contributing/addons.md#addon-management) docs describe versioned addon indexes in more detail.
+
+Here is a minimal `Addons` index that installs two addons.
 
 ```yaml
 kind: Addons
@@ -428,7 +439,7 @@ spec:
     manifest: bar.addons.org.io/v0.0.1.yaml
 ```
 
-In this example the folder structure should look like this;
+In this example, the file structure should look like this:
 
 ```
 addon.yaml
@@ -438,7 +449,7 @@ addon.yaml
     v0.0.1.yaml
 ```
 
-The yaml files in the foo/bar folders can be any kubernetes resource. Typically this file structure would be pushed to S3 or another of the supported backends and then referenced as above in `spec.addons`. In order for master nodes to be able to access the S3 bucket containing the addon manifests, one might have to add additional iam policies to the master nodes using `spec.additionalPolicies`, like so:
+The YAML files in the foo/bar folders can be any Kubernetes resource manifest. Typically this file structure would be pushed to S3 or another supported backend and then referenced from `spec.addons`. If master nodes need access to an S3 bucket containing addon manifests, add IAM policies using `spec.additionalPolicies`, like so:
 
 ```yaml
 spec:

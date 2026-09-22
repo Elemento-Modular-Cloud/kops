@@ -24,6 +24,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"k8s.io/kops/protokube/pkg/gossip"
+	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 )
 
 type SeedProvider struct {
@@ -47,6 +48,11 @@ func (p *SeedProvider) GetSeeds() ([]string, error) {
 	request.Filters = append(request.Filters, ec2types.Filter{
 		Name:   aws.String("instance-state-name"),
 		Values: []string{"running", "pending"},
+	})
+	// Seed only from control-plane nodes; workers do not run gossip.
+	request.Filters = append(request.Filters, ec2types.Filter{
+		Name:   aws.String("tag-key"),
+		Values: []string{awsup.TagNameRolePrefix + awsup.TagRoleControlPlane},
 	})
 
 	var seeds []string

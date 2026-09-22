@@ -68,7 +68,7 @@ data:
     .:53 {
         errors
         health {
-          lameduck 5s
+          lameduck 10s
         }
         ready
         kubernetes {{ KubeDNS.Domain }}. in-addr.arpa ip6.arpa {
@@ -122,6 +122,12 @@ spec:
     metadata:
       labels:
         k8s-app: kube-dns
+      {{- if KubeDNS.PodAnnotations }}
+      annotations:
+        {{- range $key, $value := KubeDNS.PodAnnotations }}
+        {{ $key }}: "{{ $value }}"
+        {{- end }}
+      {{- end }}
     spec:
       priorityClassName: system-cluster-critical
       serviceAccountName: coredns
@@ -132,7 +138,7 @@ spec:
         - key: "CriticalAddonsOnly"
           operator: "Exists"
         {{- end }}
-        {{- if KarpenterEnabled }}
+        {{- if IsControlPlaneMode }}
         - key: node-role.kubernetes.io/master
           operator: Exists
         - key: node-role.kubernetes.io/control-plane
@@ -145,22 +151,25 @@ spec:
 {{ ToYAML .KubeDNS.Affinity | indent 8 }}
 {{- end }}
       topologySpreadConstraints:
+{{- if ne GetCloudProvider "metal" }}
+      # Metal provider doesn't add the "topology.kubernetes.io/zone" label
       - maxSkew: 1
         topologyKey: "topology.kubernetes.io/zone"
         whenUnsatisfiable: ScheduleAnyway
         labelSelector:
           matchLabels:
             k8s-app: kube-dns
+{{- end }}
       - maxSkew: 1
         topologyKey: "kubernetes.io/hostname"
-        # Normally we use DoNotSchedule here, but because CoreDNS autoscales, we cannot guarantee this constraint can be satisfied
-        whenUnsatisfiable: ScheduleAnyway
+        whenUnsatisfiable: DoNotSchedule
+        nodeTaintsPolicy: Honor
         labelSelector:
           matchLabels:
             k8s-app: kube-dns
       containers:
       - name: coredns
-        image: {{ if KubeDNS.CoreDNSImage }}{{ KubeDNS.CoreDNSImage }}{{ else }}registry.k8s.io/coredns/coredns:v1.11.3{{ end }}
+        image: {{ if KubeDNS.CoreDNSImage }}{{ KubeDNS.CoreDNSImage }}{{ else }}registry.k8s.io/coredns/coredns:v1.14.2{{ end }}
         imagePullPolicy: IfNotPresent
         resources:
           limits:
@@ -211,6 +220,9 @@ spec:
           successThreshold: 1
           failureThreshold: 5
         readinessProbe:
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 1
           httpGet:
             path: /ready
             port: 8181
@@ -338,7 +350,7 @@ spec:
     spec:
       containers:
       - name: autoscaler
-        image: {{ if KubeDNS.CPAImage }}{{ KubeDNS.CPAImage }}{{ else }}registry.k8s.io/cpa/cluster-proportional-autoscaler:v1.8.9{{ end }}
+        image: {{ if KubeDNS.CPAImage }}{{ KubeDNS.CPAImage }}{{ else }}registry.k8s.io/cpa/cluster-proportional-autoscaler:v1.9.0{{ end }}
         resources:
             requests:
                 cpu: "20m"
@@ -353,7 +365,9 @@ spec:
           - --default-params={"linear":{"coresPerReplica":256,"nodesPerReplica":16,"preventSinglePointFailure":true}}
           - --logtostderr=true
           - --v=2
+      {{- if not IsControlPlaneMode }}
       priorityClassName: system-cluster-critical
+      {{- end }}
       tolerations:
         {{- if KubeDNS.Tolerations }}
 {{ ToYAML .KubeDNS.Tolerations | indent 8 }}

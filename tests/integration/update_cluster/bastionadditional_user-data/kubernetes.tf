@@ -598,6 +598,17 @@ resource "aws_launch_template" "bastion-bastionuserdata-example-com" {
       "kubernetes.io/cluster/bastionuserdata.example.com" = "owned"
     }
   }
+  tag_specifications {
+    resource_type = "network-interface"
+    tags = {
+      "KubernetesCluster"                                 = "bastionuserdata.example.com"
+      "Name"                                              = "bastion.bastionuserdata.example.com"
+      "aws-node-termination-handler/managed"              = ""
+      "k8s.io/role/bastion"                               = "1"
+      "kops.k8s.io/instancegroup"                         = "bastion"
+      "kubernetes.io/cluster/bastionuserdata.example.com" = "owned"
+    }
+  }
   tags = {
     "KubernetesCluster"                                 = "bastionuserdata.example.com"
     "Name"                                              = "bastion.bastionuserdata.example.com"
@@ -667,6 +678,21 @@ resource "aws_launch_template" "master-us-test-1a-masters-bastionuserdata-exampl
   }
   tag_specifications {
     resource_type = "volume"
+    tags = {
+      "KubernetesCluster"                                                                                     = "bastionuserdata.example.com"
+      "Name"                                                                                                  = "master-us-test-1a.masters.bastionuserdata.example.com"
+      "aws-node-termination-handler/managed"                                                                  = ""
+      "k8s.io/cluster-autoscaler/node-template/label/kops.k8s.io/kops-controller-pki"                         = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node-role.kubernetes.io/control-plane"                   = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node.kubernetes.io/exclude-from-external-load-balancers" = ""
+      "k8s.io/role/control-plane"                                                                             = "1"
+      "k8s.io/role/master"                                                                                    = "1"
+      "kops.k8s.io/instancegroup"                                                                             = "master-us-test-1a"
+      "kubernetes.io/cluster/bastionuserdata.example.com"                                                     = "owned"
+    }
+  }
+  tag_specifications {
+    resource_type = "network-interface"
     tags = {
       "KubernetesCluster"                                                                                     = "bastionuserdata.example.com"
       "Name"                                                                                                  = "master-us-test-1a.masters.bastionuserdata.example.com"
@@ -756,6 +782,18 @@ resource "aws_launch_template" "nodes-bastionuserdata-example-com" {
       "kubernetes.io/cluster/bastionuserdata.example.com"                          = "owned"
     }
   }
+  tag_specifications {
+    resource_type = "network-interface"
+    tags = {
+      "KubernetesCluster"                                                          = "bastionuserdata.example.com"
+      "Name"                                                                       = "nodes.bastionuserdata.example.com"
+      "aws-node-termination-handler/managed"                                       = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node-role.kubernetes.io/node" = ""
+      "k8s.io/role/node"                                                           = "1"
+      "kops.k8s.io/instancegroup"                                                  = "nodes"
+      "kubernetes.io/cluster/bastionuserdata.example.com"                          = "owned"
+    }
+  }
   tags = {
     "KubernetesCluster"                                                          = "bastionuserdata.example.com"
     "Name"                                                                       = "nodes.bastionuserdata.example.com"
@@ -773,7 +811,7 @@ resource "aws_lb" "bastion-bastionuserdata-example-com" {
   internal                         = false
   load_balancer_type               = "network"
   name                             = "bastion-bastionuserdata-e-4grhsv"
-  security_groups                  = [aws_security_group.bastion-elb-bastionuserdata-example-com.id]
+  security_groups                  = ["sg-exampleid", aws_security_group.bastion-elb-bastionuserdata-example-com.id]
   subnet_mapping {
     subnet_id = aws_subnet.utility-us-test-1a-bastionuserdata-example-com.id
   }
@@ -1002,6 +1040,14 @@ resource "aws_s3_object" "kops-version-txt" {
   bucket                 = "testingBucket"
   content                = file("${path.module}/data/aws_s3_object_kops-version.txt_content")
   key                    = "clusters.example.com/bastionuserdata.example.com/kops-version.txt"
+  provider               = aws.files
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_object" "manifests-channels-kops-channels" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_object_manifests-channels-kops-channels_content")
+  key                    = "clusters.example.com/bastionuserdata.example.com/manifests/channels/kops-channels.yaml"
   provider               = aws.files
   server_side_encryption = "AES256"
 }

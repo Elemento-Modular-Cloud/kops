@@ -22,11 +22,11 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/google/go-containerregistry/pkg/authn"
-	"github.com/google/go-containerregistry/pkg/crane"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
@@ -38,13 +38,33 @@ import (
 	"k8s.io/kops/util/pkg/vfs"
 )
 
+// ImageDigestResolver looks up the manifest digest for an image, returning it in the form
+// "sha256:...".
+type ImageDigestResolver func(image string) (string, error)
+
+// imageDigestResolver is set (during startup) only by binaries that should resolve image digests
+// by querying container registries, i.e. the kops CLI. Runtime binaries (kops-controller, nodeup)
+// leave it unset, both because digest resolution is a cluster-configuration concern and so that
+// they do not link the registry client libraries it requires.
+var imageDigestResolver ImageDigestResolver
+
+// SetImageDigestResolver installs the function RemapImage uses to resolve image digests. When no
+// resolver is set, images are not pinned by digest.
+func SetImageDigestResolver(resolver ImageDigestResolver) {
+	imageDigestResolver = resolver
+}
+
 // AssetBuilder discovers and remaps assets.
 type AssetBuilder struct {
+	mu          sync.RWMutex
+	imageAssets []*ImageAsset
+	fileAssets  []*FileAsset
+
+	// The following fields are immutable after construction via NewAssetBuilder
+	// and are safe to read without holding mu.
 	vfsContext     *vfs.VFSContext
-	ImageAssets    []*ImageAsset
-	FileAssets     []*FileAsset
-	AssetsLocation *kops.AssetsSpec
-	GetAssets      bool
+	assetsLocation *kops.AssetsSpec
+	getAssets      bool
 
 	// KubeletSupportedVersion is the max version of kubelet that we are currently allowed to run on worker nodes.
 	// This is used to avoid violating the kubelet supported version skew policy,
@@ -53,11 +73,11 @@ type AssetBuilder struct {
 
 	// StaticManifests records manifests used by nodeup:
 	// * e.g. sidecar manifests for static pods run by kubelet
-	StaticManifests []*StaticManifest
+	staticManifests []*StaticManifest
 
 	// StaticFiles records static files:
 	// * Configuration files supporting static pods
-	StaticFiles []*StaticFile
+	staticFiles []*StaticFile
 }
 
 type StaticFile struct {
@@ -117,11 +137,97 @@ type FileAsset struct {
 func NewAssetBuilder(vfsContext *vfs.VFSContext, assets *kops.AssetsSpec, getAssets bool) *AssetBuilder {
 	a := &AssetBuilder{
 		vfsContext:     vfsContext,
-		AssetsLocation: assets,
-		GetAssets:      getAssets,
+		assetsLocation: assets,
+		getAssets:      getAssets,
 	}
 
 	return a
+}
+
+func (a *AssetBuilder) addImageAsset(asset *ImageAsset) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.imageAssets = append(a.imageAssets, asset)
+}
+
+func (a *AssetBuilder) addFileAsset(asset *FileAsset) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.fileAssets = append(a.fileAssets, asset)
+}
+
+// AddStaticManifest records a nodeup static manifest.
+func (a *AssetBuilder) AddStaticManifest(manifest *StaticManifest) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.staticManifests = append(a.staticManifests, manifest)
+}
+
+// AddStaticFile records a nodeup static file.
+func (a *AssetBuilder) AddStaticFile(file *StaticFile) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.staticFiles = append(a.staticFiles, file)
+}
+
+// ImageAssets returns a sorted copy of the collected image assets.
+func (a *AssetBuilder) ImageAssets() []*ImageAsset {
+	a.mu.RLock()
+	snapshot := append([]*ImageAsset(nil), a.imageAssets...)
+	a.mu.RUnlock()
+
+	// CanonicalLocation identifies the source image, so use it to make snapshots deterministic.
+	sort.Slice(snapshot, func(i, j int) bool {
+		return snapshot[i].CanonicalLocation < snapshot[j].CanonicalLocation
+	})
+
+	return snapshot
+}
+
+// FileAssets returns a sorted copy of the collected file assets.
+func (a *AssetBuilder) FileAssets() []*FileAsset {
+	a.mu.RLock()
+	snapshot := append([]*FileAsset(nil), a.fileAssets...)
+	a.mu.RUnlock()
+
+	// CanonicalURL identifies the source file, so use it to make snapshots deterministic.
+	sort.Slice(snapshot, func(i, j int) bool {
+		return snapshot[i].CanonicalURL.String() < snapshot[j].CanonicalURL.String()
+	})
+
+	return snapshot
+}
+
+// StaticManifests returns a sorted copy of the collected static manifests.
+func (a *AssetBuilder) StaticManifests() []*StaticManifest {
+	a.mu.RLock()
+	snapshot := append([]*StaticManifest(nil), a.staticManifests...)
+	a.mu.RUnlock()
+
+	// Key already identifies the static manifest, so use it to make snapshots deterministic.
+	sort.Slice(snapshot, func(i, j int) bool {
+		return snapshot[i].Key < snapshot[j].Key
+	})
+
+	return snapshot
+}
+
+// StaticFiles returns a sorted copy of the collected static files.
+func (a *AssetBuilder) StaticFiles() []*StaticFile {
+	a.mu.RLock()
+	snapshot := append([]*StaticFile(nil), a.staticFiles...)
+	a.mu.RUnlock()
+
+	// Path already identifies the static file on disk, so use it to make snapshots deterministic.
+	sort.Slice(snapshot, func(i, j int) bool {
+		return snapshot[i].Path < snapshot[j].Path
+	})
+
+	return snapshot
 }
 
 // RemapManifest transforms a kubernetes manifest.
@@ -144,7 +250,7 @@ func (a *AssetBuilder) RemapManifest(data []byte) ([]byte, error) {
 }
 
 // RemapImage normalizes a containers location if a user sets the AssetsLocation ContainerRegistry location.
-func (a *AssetBuilder) RemapImage(image string) (string, error) {
+func (a *AssetBuilder) RemapImage(image string) string {
 	asset := &ImageAsset{
 		DownloadLocation:  image,
 		CanonicalLocation: image,
@@ -179,66 +285,27 @@ func (a *AssetBuilder) RemapImage(image string) (string, error) {
 		}
 	}
 
-	if a.AssetsLocation != nil && a.AssetsLocation.ContainerProxy != nil {
-		containerProxy := strings.TrimSuffix(*a.AssetsLocation.ContainerProxy, "/")
-		normalized := image
+	normalized := NormalizeImage(a, image)
+	image = normalized
+	asset.DownloadLocation = normalized
 
-		// If the image name contains only a single / we need to determine if the image is located on docker-hub or if it's using a convenient URL,
-		// like registry.k8s.io/<image-name> or registry.k8s.io/<image-name>
-		// In case of a hub image it should be sufficient to just prepend the proxy url, producing eg docker-proxy.example.com/weaveworks/weave-kube
-		if strings.Count(normalized, "/") <= 1 && !strings.ContainsAny(strings.Split(normalized, "/")[0], ".:") {
-			normalized = containerProxy + "/" + normalized
-		} else {
-			re := regexp.MustCompile(`^[^/]+`)
-			normalized = re.ReplaceAllString(normalized, containerProxy)
-		}
+	a.addImageAsset(asset)
 
-		asset.DownloadLocation = normalized
-
-		// Run the new image
-		image = asset.DownloadLocation
-	}
-
-	if a.AssetsLocation != nil && a.AssetsLocation.ContainerRegistry != nil {
-		registryMirror := *a.AssetsLocation.ContainerRegistry
-		normalized := image
-
-		// Remove the 'standard' kubernetes image prefixes, just for sanity
-		normalized = strings.TrimPrefix(normalized, "registry.k8s.io/")
-
-		// When assembling the cluster spec, kops may call the option more then once until the config converges
-		// This means that this function may me called more than once on the same image
-		// It this is pass is the second one, the image will already have been normalized with the containerRegistry settings
-		// If this is the case, passing though the process again will re-prepend the container registry again
-		// and again, causing the spec to never converge and the config build to fail.
-		if !strings.HasPrefix(normalized, registryMirror+"/") {
-			// We can't nest arbitrarily
-			// Some risk of collisions, but also -- and __ in the names appear to be blocked by docker hub
-			normalized = strings.Replace(normalized, "/", "-", -1)
-			asset.DownloadLocation = registryMirror + "/" + normalized
-		}
-
-		// Run the new image
-		image = asset.DownloadLocation
-	}
-
-	a.ImageAssets = append(a.ImageAssets, asset)
-
-	if !featureflag.ImageDigest.Enabled() || os.Getenv("KOPS_BASE_URL") != "" {
-		return image, nil
+	if imageDigestResolver == nil || !featureflag.ImageDigest.Enabled() || os.Getenv("KOPS_BASE_URL") != "" {
+		return image
 	}
 
 	if strings.Contains(image, "@") {
-		return image, nil
+		return image
 	}
 
-	digest, err := crane.Digest(image, crane.WithAuthFromKeychain(authn.DefaultKeychain))
+	digest, err := imageDigestResolver(image)
 	if err != nil {
 		klog.Warningf("failed to digest image %q: %s", image, err)
-		return image, nil
+		return image
 	}
 
-	return image + "@" + digest, nil
+	return image + "@" + digest
 }
 
 // RemapFile returns a remapped URL for the file, if AssetsLocation is defined.
@@ -255,7 +322,7 @@ func (a *AssetBuilder) RemapFile(canonicalURL *url.URL, knownHash *hashing.Hash)
 		CanonicalURL: canonicalURL,
 	}
 
-	if a.AssetsLocation != nil && a.AssetsLocation.FileRepository != nil {
+	if a.assetsLocation != nil && a.assetsLocation.FileRepository != nil {
 		normalizedFile, err := a.remapURL(canonicalURL)
 		if err != nil {
 			return nil, err
@@ -278,7 +345,7 @@ func (a *AssetBuilder) RemapFile(canonicalURL *url.URL, knownHash *hashing.Hash)
 	fileAsset.SHAValue = knownHash
 
 	klog.V(8).Infof("adding file: %+v", fileAsset)
-	a.FileAssets = append(a.FileAssets, fileAsset)
+	a.addFileAsset(fileAsset)
 
 	return fileAsset, nil
 }
@@ -298,7 +365,7 @@ func (a *AssetBuilder) findHash(file *FileAsset) (*hashing.Hash, error) {
 	// rest of the time. If not we get a chicken and the egg problem where we are reading the sha file
 	// before it exists.
 	u := file.DownloadURL
-	if a.GetAssets {
+	if a.getAssets {
 		u = file.CanonicalURL
 	}
 
@@ -354,7 +421,7 @@ func (a *AssetBuilder) findHash(file *FileAsset) (*hashing.Hash, error) {
 		}
 	}
 
-	if a.AssetsLocation != nil && a.AssetsLocation.FileRepository != nil {
+	if a.assetsLocation != nil && a.assetsLocation.FileRepository != nil {
 		return nil, fmt.Errorf("you might have not staged your files correctly, please execute 'kops get assets --copy'")
 	}
 	return nil, fmt.Errorf("cannot determine hash for %q (have you specified a valid file location?)", u)
@@ -362,8 +429,8 @@ func (a *AssetBuilder) findHash(file *FileAsset) (*hashing.Hash, error) {
 
 func (a *AssetBuilder) remapURL(canonicalURL *url.URL) (*url.URL, error) {
 	f := ""
-	if a.AssetsLocation != nil {
-		f = values.StringValue(a.AssetsLocation.FileRepository)
+	if a.assetsLocation != nil {
+		f = values.StringValue(a.assetsLocation.FileRepository)
 	}
 	if f == "" {
 		return nil, fmt.Errorf("assetsLocation.fileRepository must be set to remap asset %v", canonicalURL)
@@ -377,4 +444,47 @@ func (a *AssetBuilder) remapURL(canonicalURL *url.URL) (*url.URL, error) {
 	fileRepo.Path = path.Join(fileRepo.Path, canonicalURL.Path)
 
 	return fileRepo, nil
+}
+
+func NormalizeImage(a *AssetBuilder, image string) string {
+	if a.assetsLocation != nil && a.assetsLocation.ContainerProxy != nil {
+		containerProxy := strings.TrimSuffix(*a.assetsLocation.ContainerProxy, "/")
+		normalized := image
+
+		// If the image name contains only a single / we need to determine if the image is located on docker-hub or if it's using a convenient URL,
+		// like registry.k8s.io/<image-name> or registry.k8s.io/<image-name>
+		// In case of a hub image it should be sufficient to just prepend the proxy url, producing eg docker-proxy.example.com/weaveworks/weave-kube
+		if strings.Count(normalized, "/") <= 1 && !strings.ContainsAny(strings.Split(normalized, "/")[0], ".:") {
+			normalized = containerProxy + "/" + normalized
+		} else {
+			re := regexp.MustCompile(`^[^/]+`)
+			normalized = re.ReplaceAllString(normalized, containerProxy)
+		}
+
+		// Run the new image
+		image = normalized
+	}
+
+	if a.assetsLocation != nil && a.assetsLocation.ContainerRegistry != nil {
+		registryMirror := *a.assetsLocation.ContainerRegistry
+		normalized := image
+
+		// Remove the 'standard' kubernetes image prefixes, just for sanity
+		normalized = strings.TrimPrefix(normalized, "registry.k8s.io/")
+
+		// When assembling the cluster spec, kops may call the option more then once until the config converges
+		// This means that this function may me called more than once on the same image
+		// It this is pass is the second one, the image will already have been normalized with the containerRegistry settings
+		// If this is the case, passing though the process again will re-prepend the container registry again
+		// and again, causing the spec to never converge and the config build to fail.
+		if !strings.HasPrefix(normalized, registryMirror+"/") {
+			// We can't nest arbitrarily
+			// Some risk of collisions, but also -- and __ in the names appear to be blocked by docker hub
+			normalized = strings.ReplaceAll(normalized, "/", "-")
+			normalized = registryMirror + "/" + normalized
+		}
+		image = normalized
+	}
+	// Run the new image
+	return image
 }

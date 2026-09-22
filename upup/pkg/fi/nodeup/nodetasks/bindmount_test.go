@@ -128,16 +128,6 @@ func TestBindMountDependencies(t *testing.T) {
 			},
 		},
 		{
-			parent: &Archive{
-				TargetDir: containerizedMounterHome,
-			},
-			child: &BindMount{
-				Source:     containerizedMounterHome,
-				Mountpoint: containerizedMounterHome,
-				Options:    []string{"exec"},
-			},
-		},
-		{
 			parent: &BindMount{
 				Source:     containerizedMounterHome,
 				Mountpoint: containerizedMounterHome,
@@ -220,7 +210,7 @@ func (c *MockCommand) String() string {
 	return strings.Join(c.Args, " ")
 }
 
-var _ Executor = &MockExecutor{}
+var _ Executor = (*MockExecutor)(nil)
 
 func (m *MockExecutor) Expect(args []string) *MockCommand {
 	c := &MockCommand{

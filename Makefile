@@ -1,4 +1,4 @@
-# Copyright 2019 The Kubernetes Authors.
+# Copyright The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -40,9 +40,9 @@ GOBIN := $(shell go env GOPATH)/bin
 endif
 
 # CODEGEN_VERSION is the version of k8s.io/code-generator to use
-CODEGEN_VERSION=v0.29.0
+CODEGEN_VERSION=v0.34.1
 
-KO=go run github.com/google/ko@v0.14.1
+KO=go run github.com/google/ko@v0.18.0
 
 UPLOAD_CMD=$(KOPS_ROOT)/hack/upload ${UPLOAD_ARGS}
 
@@ -50,72 +50,66 @@ UPLOAD_CMD=$(KOPS_ROOT)/hack/upload ${UPLOAD_ARGS}
 unexport AWS_ACCESS_KEY_ID AWS_REGION AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN CNI_VERSION_URL DNS_IGNORE_NS_CHECK DNSCONTROLLER_IMAGE DO_ACCESS_TOKEN GOOGLE_APPLICATION_CREDENTIALS
 unexport KOPS_BASE_URL KOPS_CLUSTER_NAME KOPS_RUN_OBSOLETE_VERSION KOPS_STATE_STORE KOPS_STATE_S3_ACL KUBE_API_VERSIONS NODEUP_URL OPENSTACK_CREDENTIAL_FILE SKIP_PACKAGE_UPDATE
 unexport SKIP_REGION_CHECK S3_ACCESS_KEY_ID S3_ENDPOINT S3_REGION S3_SECRET_ACCESS_KEY HCLOUD_TOKEN SCW_ACCESS_KEY SCW_SECRET_KEY SCW_DEFAULT_PROJECT_ID SCW_PROFILE
-unexport AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_STORAGE_ACCOUNT AZURE_SUBSCRIPTION_ID AZURE_TENANT_ID
+unexport AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_SUBSCRIPTION_ID AZURE_TENANT_ID
 
 
 VERSION=$(shell tools/get_version.sh | grep VERSION | awk '{print $$2}')
+export VERSION
 
-KOPS_RELEASE_VERSION:=$(shell grep 'KOPS_RELEASE_VERSION\s*=' kops-version.go | awk '{print $$3}' | sed -e 's_"__g')
+IMAGE_TAG=$(shell tools/get_version.sh | grep IMAGE_TAG | awk '{print $$2}')
+
 KOPS_CI_VERSION:=$(shell grep 'KOPS_CI_VERSION\s*=' kops-version.go | awk '{print $$3}' | sed -e 's_"__g')
 
 # kops local location
 KOPS=${DIST}/$(shell go env GOOS)/$(shell go env GOARCH)/kops
 
 GITSHA := $(shell cd ${KOPS_ROOT}; git describe --always)
+export GITSHA
 
 # We lock the versions of our controllers also
 # We need to keep in sync with:
 #   pkg/model/components/etcdmanager/model.go
-KOPS_UTILS_CP_TAG=1.32.0-beta.1
-KOPS_UTILS_CP_PUSH_TAG=$(shell tools/get_workspace_status.sh | grep STABLE_KOPS_UTILS_CP_TAG | awk '{print $$2}')
+KOPS_UTILS_CP_TAG=$(IMAGE_TAG)
 #   upup/models/cloudup/resources/addons/dns-controller/
-DNS_CONTROLLER_TAG=1.32.0-beta.1
-DNS_CONTROLLER_PUSH_TAG=$(shell tools/get_workspace_status.sh | grep STABLE_DNS_CONTROLLER_TAG | awk '{print $$2}')
+DNS_CONTROLLER_TAG=$(IMAGE_TAG)
 #   upup/models/cloudup/resources/addons/kops-controller.addons.k8s.io/
-KOPS_CONTROLLER_TAG=1.32.0-beta.1
-KOPS_CONTROLLER_PUSH_TAG=$(shell tools/get_workspace_status.sh | grep STABLE_KOPS_CONTROLLER_TAG | awk '{print $$2}')
+KOPS_CONTROLLER_TAG=$(IMAGE_TAG)
 #   pkg/model/components/kubeapiserver/model.go
-KUBE_APISERVER_HEALTHCHECK_TAG=1.32.0-beta.1
-KUBE_APISERVER_HEALTHCHECK_PUSH_TAG=$(shell tools/get_workspace_status.sh | grep STABLE_KUBE_APISERVER_HEALTHCHECK_TAG | awk '{print $$2}')
+KUBE_APISERVER_HEALTHCHECK_TAG=$(IMAGE_TAG)
+#   discovery/cmd/discovery-server/
+DISCOVERY_SERVER_TAG=$(IMAGE_TAG)
+#   nodeup/pkg/model/channels.go
+KOPS_CHANNELS_TAG=$(IMAGE_TAG)
 
 CGO_ENABLED=0
 export CGO_ENABLED
-BUILDFLAGS="-trimpath"
+BUILDFLAGS=-trimpath -buildvcs=false
 
 
 # Go exports:
 LDFLAGS := -ldflags=all=
-
-ifdef STATIC_BUILD
-  CGO_ENABLED=0
-  export CGO_ENABLED
-  EXTRA_BUILDFLAGS=-installsuffix cgo
-  EXTRA_LDFLAGS=-s -w
-endif
+EXTRA_LDFLAGS?=-s -w
 
 
 # Set compiler flags to allow binary debugging
 ifdef DEBUGGABLE
   GCFLAGS=-gcflags "all=-N -l"
+  EXTRA_LDFLAGS=
 endif
 
 .PHONY: kops-install # Install kops to local $GOPATH/bin
 kops-install: kops
 	cp ${DIST}/$(shell go env GOOS)/$(shell go env GOARCH)/kops* ${GOBIN}
 
-.phony: channels-install # install channels to local $gopath/bin
-channels-install: channels
-	cp ${DIST}/${OSARCH}/channels ${GOPATH_1ST}/bin
-
-.phony: nodeup-install # install channels to local $gopath/bin
+.PHONY: nodeup-install # install nodeup to local $gopath/bin
 nodeup-install: nodeup
-	cp ${DIST}/${OSARCH}/channels ${GOPATH_1ST}/bin
+	cp ${DIST}/${OSARCH}/nodeup ${GOPATH_1ST}/bin
 
 .PHONY: all-install # Install all kops project binaries
-all-install: all kops-install channels-install nodeup-install
+all-install: all kops-install nodeup-install
 
 .PHONY: all
-all: kops protokube nodeup channels ko-kops-controller-export ko-dns-controller-export ko-kops-utils-cp-export ko-kube-apiserver-healthcheck-export
+all: kops protokube nodeup ko-kops-controller-export ko-kops-channels-export ko-dns-controller-export ko-kops-utils-cp-export ko-kube-apiserver-healthcheck-export ko-discovery-server-export
 
 include tests/e2e/e2e.mk
 
@@ -155,23 +149,26 @@ clean:
 codegen:
 	go build -o ${KOPS_ROOT}/_output/bin/ k8s.io/kops/upup/tools/generators/...
 	${KOPS_ROOT}/_output/bin/fitask \
-		--input-dirs k8s.io/kops/upup/pkg/fi/... \
 		--go-header-file hack/boilerplate/boilerplate.generatego.txt \
-		--output-base ${KOPS_ROOT}
+		--output-base ${KOPS_ROOT} \
+		k8s.io/kops/upup/pkg/fi/...
 
 .PHONY: verify-codegen
 verify-codegen:
 	go build -o ${KOPS_ROOT}/_output/bin/ k8s.io/kops/upup/tools/generators/...
 	${KOPS_ROOT}/_output/bin/fitask --verify-only \
-		--input-dirs k8s.io/kops/upup/pkg/fi/... \
 		--go-header-file hack/boilerplate/boilerplate.generatego.txt \
-		--output-base ${KOPS_ROOT}
+		--output-base ${KOPS_ROOT} \
+		k8s.io/kops/upup/pkg/fi/...
 
 .PHONY: protobuf
 protobuf:
 	protoc --go_out=. --go_opt=paths=source_relative pkg/otel/otlptracefile/pb/file.proto
 	go run golang.org/x/tools/cmd/goimports@latest -w pkg/otel/otlptracefile/pb/file.pb.go
-	cd ${GOPATH_1ST}/src; protoc --gogo_out=. k8s.io/kops/protokube/pkg/gossip/mesh/mesh.proto
+	protoc --go_out=. --go_opt=paths=source_relative protokube/pkg/gossip/mesh/mesh.proto
+	go run golang.org/x/tools/cmd/goimports@latest -w protokube/pkg/gossip/mesh/mesh.pb.go
+	protoc --go_out=. --go_opt=paths=source_relative third_party/forked/memberlistmesh/clusterpb/cluster.proto
+	go run golang.org/x/tools/cmd/goimports@latest -w third_party/forked/memberlistmesh/clusterpb/cluster.pb.go
 
 .PHONY: hooks
 hooks: # Install Git hooks
@@ -233,16 +230,10 @@ protokube: protokube-amd64
 .PHONY: crossbuild-protokube
 crossbuild-protokube: protokube-amd64 protokube-arm64
 
-.PHONY: channels-amd64 channels-arm64
-channels-amd64 channels-arm64: channels-%:
-	mkdir -p ${DIST}/linux/$*
-	GOOS=linux GOARCH=$* go build ${GCFLAGS} ${BUILDFLAGS} ${EXTRA_BUILDFLAGS} -o ${DIST}/linux/$*/channels ${LDFLAGS}"${EXTRA_LDFLAGS} -X k8s.io/kops.Version=${VERSION} -X k8s.io/kops.GitVersion=${GITSHA}" k8s.io/kops/channels/cmd/channels
-
 .PHONY: channels
-channels: channels-amd64
-
-.PHONY: crossbuild-channels
-crossbuild-channels: channels-amd64 channels-arm64
+channels:
+	mkdir -p ${DIST}/linux/amd64
+	GOOS=linux GOARCH=amd64 go build ${GCFLAGS} ${BUILDFLAGS} ${EXTRA_BUILDFLAGS} -o ${DIST}/linux/amd64/channels ${LDFLAGS}"${EXTRA_LDFLAGS} -X k8s.io/kops.Version=${VERSION} -X k8s.io/kops.GitVersion=${GITSHA}" k8s.io/kops/channels/cmd/channels
 
 .PHONY: upload
 upload: version-dist # Upload kops to S3
@@ -261,9 +252,7 @@ gcs-upload-and-tag: gsutil gcs-upload
 	gsutil -h "Cache-Control:private, max-age=0, no-transform" cp ${UPLOAD}/latest.txt ${GCS_LOCATION}${LATEST_FILE}
 
 # gcs-publish-ci is the entry point for CI testing
-# In CI testing, always upload the CI version.
 .PHONY: gcs-publish-ci
-gcs-publish-ci: VERSION := ${KOPS_CI_VERSION}+${GITSHA}
 gcs-publish-ci: gsutil version-dist-ci
 	@echo "== Uploading kops =="
 	gsutil -h "Cache-Control:private, max-age=0, no-transform" -m cp -n -r ${UPLOAD}/kops/* ${GCS_LOCATION}
@@ -301,21 +290,21 @@ push-aws-run-amd64 push-aws-run-arm64: push-aws-run-%: push-%
 
 .PHONY: ${NODEUP}
 ${NODEUP}:
-	go build ${GCFLAGS} ${EXTRA_BUILDFLAGS} ${LDFLAGS}"${EXTRA_LDFLAGS} -X k8s.io/kops.Version=${VERSION} -X k8s.io/kops.GitVersion=${GITSHA}" -o $@ k8s.io/kops/cmd/nodeup
+	go build ${GCFLAGS} ${BUILDFLAGS} ${EXTRA_BUILDFLAGS} ${LDFLAGS}"${EXTRA_LDFLAGS} -X k8s.io/kops.Version=${VERSION} -X k8s.io/kops.GitVersion=${GITSHA}" -o $@ k8s.io/kops/cmd/nodeup
 
 .PHONY: dns-controller-push
 dns-controller-push: ko-dns-controller-push
 
 .PHONY: ko-dns-controller-push
 ko-dns-controller-push:
-	KO_DOCKER_REPO="${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}dns-controller" GOFLAGS="-tags=peer_name_alternative,peer_name_hash" ${KO} build --tags ${DNS_CONTROLLER_PUSH_TAG} --platform=linux/amd64,linux/arm64 --bare ./dns-controller/cmd/dns-controller/
+	KO_DOCKER_REPO="${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}dns-controller" GOFLAGS="-tags=peer_name_alternative,peer_name_hash" ${KO} build --tags ${DNS_CONTROLLER_TAG} --platform=linux/amd64,linux/arm64 --bare ./dns-controller/cmd/dns-controller/
 
 .PHONY: kops-utils-cp-push
 kops-utils-cp-push: ko-kops-utils-cp-push
 
 .PHONY: ko-kops-utils-cp-push
 ko-kops-utils-cp-push:
-	KO_DOCKER_REPO="${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}kops-utils-cp" ${KO} build --tags ${KOPS_UTILS_CP_PUSH_TAG} --platform=linux/amd64,linux/arm64 --bare ./cmd/kops-utils-cp/
+	KO_DOCKER_REPO="${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}kops-utils-cp" ${KO} build --tags ${KOPS_UTILS_CP_TAG} --platform=linux/amd64,linux/arm64 --bare ./cmd/kops-utils-cp/
 
 # --------------------------------------------------
 # development targets
@@ -324,9 +313,10 @@ ko-kops-utils-cp-push:
 gomod:
 	go mod tidy
 	go mod vendor
-	cd hack; go mod tidy
-	cd tests/e2e; go mod tidy
-	cd tools/otel/traceserver; go mod tidy
+	for dir in $$(find . -name go.mod -not -path './go.mod' -not -path './vendor/*' -not -path '*/.*' | xargs -n1 dirname | sort); do \
+		echo "go mod tidy: $$dir"; \
+		( cd "$$dir" && go mod tidy ); \
+	done
 
 .PHONY: gofmt
 gofmt:
@@ -349,7 +339,7 @@ govet:
 
 # verify is ran by the pull-kops-verify prow job
 .PHONY: verify
-verify: quick-ci verify-gofmt
+verify: quick-ci verify-gofmt verify-ig-role-comparisons
 
 .PHONY: verify-boilerplate
 verify-boilerplate:
@@ -396,10 +386,14 @@ verify-terraform:
 verify-hashes:
 	hack/verify-hashes.sh
 
+.PHONY: verify-ig-role-comparisons
+verify-ig-role-comparisons:
+	hack/verify-ig-role-comparisons.sh
+
 # ci target is for developers, it aims to cover all the CI jobs
 # verify-gendocs will call kops target
 .PHONY: ci
-ci: govet verify-gofmt verify-crds verify-gomod verify-goimports verify-boilerplate verify-versions verify-misspelling verify-shellcheck verify-golangci-lint verify-terraform nodeup examples test | verify-gendocs verify-apimachinery verify-codegen
+ci: govet verify-gofmt verify-ig-role-comparisons verify-crds verify-gomod verify-goimports verify-boilerplate verify-versions verify-misspelling verify-shellcheck verify-golangci-lint verify-terraform nodeup examples test | verify-gendocs verify-apimachinery verify-codegen
 	echo "Done!"
 
 # we skip tasks that are covered by other jobs
@@ -410,13 +404,15 @@ quick-ci: verify-crds verify-goimports govet verify-boilerplate verify-versions 
 # --------------------------------------------------
 # release tasks
 
+KOPS_RELEASE_VERSION:=$(shell grep 'KOPS_RELEASE_VERSION\s*=' kops-version.go | awk '{print $$3}' | sed -e 's_"__g')
+
 .PHONY: release-tag
 release-tag:
 	git tag v${KOPS_RELEASE_VERSION}
 
 .PHONY: release-github
 release-github:
-	shipbot -tag v${KOPS_RELEASE_VERSION} -config .shipbot.yaml -src .build/dist/
+	hack/promote-to-github.sh ${KOPS_RELEASE_VERSION}
 
 # --------------------------------------------------
 # API / embedding examples
@@ -435,54 +431,58 @@ apimachinery: apimachinery-codegen goimports
 apimachinery-codegen: apimachinery-codegen-conversion apimachinery-codegen-deepcopy apimachinery-codegen-defaulter apimachinery-codegen-client
 
 .PHONY: apimachinery-codegen-conversion
-apimachinery-codegen-conversion: export GOPATH=
 apimachinery-codegen-conversion:
-	go run k8s.io/code-generator/cmd/conversion-gen@${CODEGEN_VERSION} --skip-unsafe=true --v=0 --input-dirs ./pkg/apis/kops/v1alpha2 \
-		 --output-base=./ --output-file-base=zz_generated.conversion \
-		 --go-header-file "hack/boilerplate/boilerplate.generatego.txt"
+	go run k8s.io/code-generator/cmd/conversion-gen@${CODEGEN_VERSION} --skip-unsafe=true --v=0 \
+		 --output-file=zz_generated.conversion.go \
+		 --go-header-file "hack/boilerplate/boilerplate.generatego.txt" \
+		 ./pkg/apis/kops/v1alpha2
 	grep 'requires manual conversion' ${KOPS_ROOT}/pkg/apis/kops/v1alpha2/zz_generated.conversion.go ; [ $$? -eq 1 ]
-	go run k8s.io/code-generator/cmd/conversion-gen@${CODEGEN_VERSION} --skip-unsafe=true --v=0 --input-dirs ./pkg/apis/kops/v1alpha3 \
-		 --output-base=./ --output-file-base=zz_generated.conversion \
-		 --go-header-file "hack/boilerplate/boilerplate.generatego.txt"
+	go run k8s.io/code-generator/cmd/conversion-gen@${CODEGEN_VERSION} --skip-unsafe=true --v=0 \
+		 --output-file=zz_generated.conversion.go \
+		 --go-header-file "hack/boilerplate/boilerplate.generatego.txt" \
+		 ./pkg/apis/kops/v1alpha3
 	grep 'requires manual conversion' ${KOPS_ROOT}/pkg/apis/kops/v1alpha3/zz_generated.conversion.go ; [ $$? -eq 1 ]
 
 .PHONY: apimachinery-codegen-deepcopy
-apimachinery-codegen-deepcopy: export GOPATH=
 apimachinery-codegen-deepcopy:
-	go run k8s.io/code-generator/cmd/deepcopy-gen@${CODEGEN_VERSION} --v=0 --input-dirs ./pkg/apis/kops \
-		 --output-base=./ --output-file-base=zz_generated.deepcopy \
-		 --go-header-file "hack/boilerplate/boilerplate.generatego.txt"
-	go run k8s.io/code-generator/cmd/deepcopy-gen@${CODEGEN_VERSION} --v=0 --input-dirs ./pkg/apis/kops/v1alpha2 \
-		 --output-base=./ --output-file-base=zz_generated.deepcopy \
-		 --go-header-file "hack/boilerplate/boilerplate.generatego.txt"
-	go run k8s.io/code-generator/cmd/deepcopy-gen@${CODEGEN_VERSION} --v=0 --input-dirs ./pkg/apis/kops/v1alpha3 \
-		 --output-base=./ --output-file-base=zz_generated.deepcopy \
-		 --go-header-file "hack/boilerplate/boilerplate.generatego.txt"
+	go run k8s.io/code-generator/cmd/deepcopy-gen@${CODEGEN_VERSION} --v=0 \
+		 --output-file=zz_generated.deepcopy.go \
+		 --go-header-file "hack/boilerplate/boilerplate.generatego.txt" \
+		 ./pkg/apis/kops
+	go run k8s.io/code-generator/cmd/deepcopy-gen@${CODEGEN_VERSION} --v=0 \
+		 --output-file=zz_generated.deepcopy.go \
+		 --go-header-file "hack/boilerplate/boilerplate.generatego.txt" \
+		 ./pkg/apis/kops/v1alpha2
+	go run k8s.io/code-generator/cmd/deepcopy-gen@${CODEGEN_VERSION} --v=0 \
+		 --output-file=zz_generated.deepcopy.go \
+		 --go-header-file "hack/boilerplate/boilerplate.generatego.txt" \
+		 ./pkg/apis/kops/v1alpha3
 
 .PHONY: apimachinery-codegen-defaulter
-apimachinery-codegen-defaulter: export GOPATH=
 apimachinery-codegen-defaulter:
-	go run k8s.io/code-generator/cmd/defaulter-gen@${CODEGEN_VERSION} --v=0 --input-dirs ./pkg/apis/kops/v1alpha2 \
-		 --output-base=./ --output-file-base=zz_generated.defaults \
-		 --go-header-file "hack/boilerplate/boilerplate.generatego.txt"
-	go run k8s.io/code-generator/cmd/defaulter-gen@${CODEGEN_VERSION} --v=0 --input-dirs ./pkg/apis/kops/v1alpha3 \
-		 --output-base=./ --output-file-base=zz_generated.defaults \
-		 --go-header-file "hack/boilerplate/boilerplate.generatego.txt"
+	go run k8s.io/code-generator/cmd/defaulter-gen@${CODEGEN_VERSION} --v=0 \
+		 --output-file=zz_generated.defaults.go \
+		 --go-header-file "hack/boilerplate/boilerplate.generatego.txt" \
+		 ./pkg/apis/kops/v1alpha2
+	go run k8s.io/code-generator/cmd/defaulter-gen@${CODEGEN_VERSION} --v=0 \
+		 --output-file=zz_generated.defaults.go \
+		 --go-header-file "hack/boilerplate/boilerplate.generatego.txt" \
+		 ./pkg/apis/kops/v1alpha3
 
 .PHONY: apimachinery-codegen-client
-apimachinery-codegen-client: export GOPATH=
-apimachinery-codegen-client: TMPDIR := $(shell mktemp -d)
 apimachinery-codegen-client:
 	go run k8s.io/code-generator/cmd/client-gen@${CODEGEN_VERSION} --v=0 \
-		 --input-base=k8s.io/kops/pkg/apis --input-dirs=. --input="kops/,kops/v1alpha2,kops/v1alpha3" \
-		 --output-package=k8s.io/kops/pkg/client/clientset_generated/ --output-base=$(TMPDIR) \
-		 --go-header-file "hack/boilerplate/boilerplate.generatego.txt"
+		 --input-base=k8s.io/kops/pkg/apis --input="kops/,kops/v1alpha2,kops/v1alpha3" \
+		 --output-dir=pkg/client/clientset_generated/ \
+		 --output-pkg=k8s.io/kops/pkg/client/clientset_generated/ \
+		 --go-header-file "hack/boilerplate/boilerplate.generatego.txt" \
+		 .
 	go run k8s.io/code-generator/cmd/client-gen@${CODEGEN_VERSION} --v=0 --clientset-name="clientset" \
-		 --input-base=k8s.io/kops/pkg/apis --input-dirs=. --input="kops/,kops/v1alpha2,kops/v1alpha3" \
-		 --output-package=k8s.io/kops/pkg/client/clientset_generated/ --output-base=$(TMPDIR) \
-		 --go-header-file "hack/boilerplate/boilerplate.generatego.txt"
-	cp -r $(TMPDIR)/k8s.io/kops/pkg .
-	rm -rf $(TMPDIR)
+		 --input-base=k8s.io/kops/pkg/apis --input="kops/,kops/v1alpha2,kops/v1alpha3" \
+		 --output-dir=pkg/client/clientset_generated/ \
+		 --output-pkg=k8s.io/kops/pkg/client/clientset_generated/ \
+		 --go-header-file "hack/boilerplate/boilerplate.generatego.txt" \
+		 .
 
 .PHONY: verify-apimachinery
 verify-apimachinery:
@@ -525,6 +525,17 @@ ko-kops-controller-export-linux-amd64 ko-kops-controller-export-linux-arm64: ko-
 ko-kops-controller-export: ko-kops-controller-export-linux-amd64 ko-kops-controller-export-linux-arm64
 	echo "Done exporting kops-controller images"
 
+.PHONY: ko-kops-channels-export-linux-amd64 ko-kops-channels-export-linux-arm64
+ko-kops-channels-export-linux-amd64 ko-kops-channels-export-linux-arm64: ko-kops-channels-export-linux-%:
+	mkdir -p ${IMAGES}
+	KO_DOCKER_REPO="registry.k8s.io/kops" ${KO} build --tags ${KOPS_CHANNELS_TAG} --platform=linux/$* -B --push=false --tarball=${IMAGES}/kops-channels-$*.tar ./channels/cmd/channels/
+	gzip -f ${IMAGES}/kops-channels-$*.tar
+	tools/sha256 ${IMAGES}/kops-channels-$*.tar.gz ${IMAGES}/kops-channels-$*.tar.gz.sha256
+
+.PHONY: ko-kops-channels-export
+ko-kops-channels-export: ko-kops-channels-export-linux-amd64 ko-kops-channels-export-linux-arm64
+	echo "Done exporting kops-channels images"
+
 .PHONY: ko-kube-apiserver-healthcheck-export-linux-amd64 ko-kube-apiserver-healthcheck-export-linux-arm64
 ko-kube-apiserver-healthcheck-export-linux-amd64 ko-kube-apiserver-healthcheck-export-linux-arm64: ko-kube-apiserver-healthcheck-export-linux-%:
 	mkdir -p ${IMAGES}
@@ -557,6 +568,17 @@ ko-kops-utils-cp-export-linux-amd64 ko-kops-utils-cp-export-linux-arm64: ko-kops
 .PHONY: ko-kops-utils-cp-export
 ko-kops-utils-cp-export: ko-kops-utils-cp-export-linux-amd64 ko-kops-utils-cp-export-linux-arm64
 	echo "Done exporting kops-utils-cp images"
+
+.PHONY: ko-discovery-server-export-linux-amd64 ko-discovery-server-export-linux-arm64
+ko-discovery-server-export-linux-amd64 ko-discovery-server-export-linux-arm64: ko-discovery-server-export-linux-%:
+	mkdir -p ${IMAGES}
+	KO_DOCKER_REPO="registry.k8s.io/kops" ${KO} build --tags ${DISCOVERY_SERVER_TAG} --platform=linux/$* -B --push=false --tarball=${IMAGES}/discovery-server-$*.tar ./discovery/cmd/discovery-server/
+	gzip -f ${IMAGES}/discovery-server-$*.tar
+	tools/sha256 ${IMAGES}/discovery-server-$*.tar.gz ${IMAGES}/discovery-server-$*.tar.gz.sha256
+
+.PHONY: ko-discovery-server-export
+ko-discovery-server-export: ko-discovery-server-export-linux-amd64 ko-discovery-server-export-linux-arm64
+	echo "Done exporting discovery-server images"
 
 .PHONY: version-dist
 version-dist: dev-version-dist-amd64 dev-version-dist-arm64 crossbuild
@@ -606,7 +628,7 @@ build-docs:
 .PHONY: build-docs-netlify
 build-docs-netlify:
 	pip install -r ${KOPS_ROOT}/images/mkdocs/requirements.txt
-	mkdocs build
+	python -m mkdocs build
 
 #-----------------------------------------------------------
 # development targets
@@ -645,23 +667,6 @@ dev-upload-protokube: version-dist-protokube
 dev-upload-protokube-amd64 dev-upload-protokube-arm64: dev-upload-protokube-%: version-dist-protokube-%
 	${UPLOAD_CMD} ${UPLOAD}/ ${UPLOAD_DEST}
 
-# dev-upload-channels uploads channels
-.PHONY: version-dist-channels version-dist-channels-amd64 version-dist-channels-arm64
-version-dist-channels: version-dist-channels-amd64 version-dist-channels-arm64
-
-version-dist-channels-amd64 version-dist-channels-arm64: version-dist-channels-%: channels-%
-	mkdir -p ${UPLOAD}/kops/${VERSION}/linux/$*/
-	cp -fp ${DIST}/linux/$*/channels ${UPLOAD}/kops/${VERSION}/linux/$*/channels
-	tools/sha256 ${UPLOAD}/kops/${VERSION}/linux/$*/channels ${UPLOAD}/kops/${VERSION}/linux/$*/channels.sha256
-
-.PHONY: dev-upload-channels
-dev-upload-channels: version-dist-channels
-	${UPLOAD_CMD} ${PLOAD}/ ${UPLOAD_DEST}
-
-.PHONY: dev-upload-channels-amd64 dev-upload-channels-arm64
-dev-upload-channels-amd64 dev-upload-channels-arm64: dev-upload-channels-%: version-dist-channels-%
-	${UPLOAD_CMD} ${UPLOAD}/ ${UPLOAD_DEST}
-
 # dev-upload-kops-controller uploads kops-controller
 .PHONY: version-dist-kops-controller version-dist-kops-controller-amd64 version-dist-kops-controller-arm64
 version-dist-kops-controller: version-dist-kops-controller-amd64 version-dist-kops-controller-arm64
@@ -677,6 +682,23 @@ dev-upload-kops-controller: version-dist-kops-controller
 
 .PHONY: dev-upload-kops-controller-amd64 dev-upload-kops-controller-arm64
 dev-upload-kops-controller-amd64 dev-upload-kops-controller-arm64: dev-upload-kops-controller-%: version-dist-kops-controller-%
+	${UPLOAD_CMD} ${UPLOAD}/ ${UPLOAD_DEST}
+
+# dev-upload-kops-channels uploads kops-channels
+.PHONY: version-dist-kops-channels version-dist-kops-channels-amd64 version-dist-kops-channels-arm64
+version-dist-kops-channels: version-dist-kops-channels-amd64 version-dist-kops-channels-arm64
+
+version-dist-kops-channels-amd64 version-dist-kops-channels-arm64: version-dist-kops-channels-%: ko-kops-channels-export-linux-%
+	mkdir -p ${UPLOAD}/kops/${VERSION}/images/
+	cp -fp ${IMAGES}/kops-channels-$*.tar.gz ${UPLOAD}/kops/${VERSION}/images/kops-channels-$*.tar.gz
+	cp -fp ${IMAGES}/kops-channels-$*.tar.gz.sha256 ${UPLOAD}/kops/${VERSION}/images/kops-channels-$*.tar.gz.sha256
+
+.PHONY: dev-upload-kops-channels
+dev-upload-kops-channels: version-dist-kops-channels
+	${UPLOAD_CMD} ${UPLOAD}/ ${UPLOAD_DEST}
+
+.PHONY: dev-upload-kops-channels-amd64 dev-upload-kops-channels-arm64
+dev-upload-kops-channels-amd64 dev-upload-kops-channels-arm64: dev-upload-kops-channels-%: version-dist-kops-channels-%
 	${UPLOAD_CMD} ${UPLOAD}/ ${UPLOAD_DEST}
 
 # dev-upload-kube-apiserver-healthcheck uploads kube-apiserver-healthcheck
@@ -730,11 +752,28 @@ dev-upload-kops-utils-cp: version-dist-kops-utils-cp
 dev-upload-kops-utils-cp-amd64 dev-upload-kops-utils-cp-arm64: dev-upload-kops-utils-cp-%: version-dist-kops-utils-cp-%
 	${UPLOAD_CMD} ${UPLOAD}/ ${UPLOAD_DEST}
 
+# dev-upload-discovery-server uploads discovery-server
+.PHONY: version-dist-discovery-server version-dist-discovery-server-amd64 version-dist-discovery-server-arm64
+version-dist-discovery-server: version-dist-discovery-server-amd64 version-dist-discovery-server-arm64
+
+version-dist-discovery-server-amd64 version-dist-discovery-server-arm64: version-dist-discovery-server-%: ko-discovery-server-export-linux-%
+	mkdir -p ${UPLOAD}/kops/${VERSION}/images/
+	cp -fp ${IMAGES}/discovery-server-$*.tar.gz ${UPLOAD}/kops/${VERSION}/images/discovery-server-$*.tar.gz
+	cp -fp ${IMAGES}/discovery-server-$*.tar.gz.sha256 ${UPLOAD}/kops/${VERSION}/images/discovery-server-$*.tar.gz.sha256
+
+.PHONY: dev-upload-discovery-server
+dev-upload-discovery-server: version-dist-discovery-server
+	${UPLOAD_CMD} ${UPLOAD}/ ${UPLOAD_DEST}
+
+.PHONY: dev-upload-discovery-server-amd64 dev-upload-discovery-server-arm64
+dev-upload-discovery-server-amd64 dev-upload-discovery-server-arm64: dev-upload-discovery-server-%: version-dist-discovery-server-%
+	${UPLOAD_CMD} ${UPLOAD}/ ${UPLOAD_DEST}
+
 # dev-upload-linux-amd64 does a faster build and uploads to GCS / S3
 .PHONY: dev-version-dist dev-version-dist-amd64 dev-version-dist-arm64
 dev-version-dist: dev-version-dist-amd64 dev-version-dist-arm64
 
-dev-version-dist-amd64 dev-version-dist-arm64: dev-version-dist-%: version-dist-nodeup-% version-dist-channels-% version-dist-protokube-% version-dist-kops-controller-% version-dist-kube-apiserver-healthcheck-% version-dist-dns-controller-% version-dist-kops-utils-cp-%
+dev-version-dist-amd64 dev-version-dist-arm64: dev-version-dist-%: version-dist-nodeup-% version-dist-protokube-% version-dist-kops-controller-% version-dist-kops-channels-% version-dist-kube-apiserver-healthcheck-% version-dist-dns-controller-% version-dist-kops-utils-cp-% version-dist-discovery-server-%
 
 .PHONY: dev-upload-linux-amd64 dev-upload-linux-arm64
 dev-upload-linux-amd64 dev-upload-linux-arm64: dev-upload-linux-%: dev-version-dist-%
@@ -758,7 +797,17 @@ kops-controller-push: ko-kops-controller-push
 
 .PHONY: ko-kops-controller-push
 ko-kops-controller-push:
-	KO_DOCKER_REPO="${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}kops-controller" ${KO} build --tags ${KOPS_CONTROLLER_PUSH_TAG} --platform=linux/amd64,linux/arm64 --bare ./cmd/kops-controller/
+	KO_DOCKER_REPO="${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}kops-controller" ${KO} build --tags ${KOPS_CONTROLLER_TAG} --platform=linux/amd64,linux/arm64 --bare ./cmd/kops-controller/
+
+#------------------------------------------------------
+# kops-channels
+
+.PHONY: kops-channels-push
+kops-channels-push: ko-kops-channels-push
+
+.PHONY: ko-kops-channels-push
+ko-kops-channels-push:
+	KO_DOCKER_REPO="${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}channels" ${KO} build --tags ${KOPS_CHANNELS_TAG} --platform=linux/amd64,linux/arm64 --bare ./channels/cmd/channels/
 
 #------------------------------------------------------
 # kube-apiserver-healthcheck
@@ -768,7 +817,17 @@ kube-apiserver-healthcheck-push: ko-kube-apiserver-healthcheck-push
 
 .PHONY: ko-kube-apiserver-healthcheck-push
 ko-kube-apiserver-healthcheck-push:
-	KO_DOCKER_REPO="${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}kube-apiserver-healthcheck" ${KO} build --tags ${KUBE_APISERVER_HEALTHCHECK_PUSH_TAG} --platform=linux/amd64,linux/arm64 --bare ./cmd/kube-apiserver-healthcheck/
+	KO_DOCKER_REPO="${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}kube-apiserver-healthcheck" ${KO} build --tags ${KUBE_APISERVER_HEALTHCHECK_TAG} --platform=linux/amd64,linux/arm64 --bare ./cmd/kube-apiserver-healthcheck/
+
+#------------------------------------------------------
+# discovery-server
+
+.PHONY: discovery-server-push
+discovery-server-push: ko-discovery-server-push
+
+.PHONY: ko-discovery-server-push
+ko-discovery-server-push:
+	KO_DOCKER_REPO="${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}discovery-server" ${KO} build --tags ${DISCOVERY_SERVER_TAG} --platform=linux/amd64,linux/arm64 --bare ./discovery/cmd/discovery-server/
 
 #------------------------------------------------------
 # CloudBuild artifacts

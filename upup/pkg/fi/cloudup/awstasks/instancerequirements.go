@@ -23,14 +23,15 @@ import (
 )
 
 type InstanceRequirements struct {
-	Architecture *string
-	CPUMin       *int32
-	CPUMax       *int32
-	MemoryMin    *int32
-	MemoryMax    *int32
+	Architecture          *string
+	CPUMin                *int32
+	CPUMax                *int32
+	MemoryMin             *int32
+	MemoryMax             *int32
+	ExcludedInstanceTypes []string
 }
 
-var _ fi.CloudupHasDependencies = &InstanceRequirements{}
+var _ fi.CloudupHasDependencies = (*InstanceRequirements)(nil)
 
 func (e *InstanceRequirements) GetDependencies(tasks map[string]fi.CloudupTask) []fi.CloudupTask {
 	return nil
@@ -47,7 +48,10 @@ func findInstanceRequirements(asg *autoscalingtypes.AutoScalingGroup) (*Instance
 				}
 				if override.InstanceRequirements.MemoryMiB != nil {
 					actual.MemoryMax = override.InstanceRequirements.MemoryMiB.Max
-					actual.MemoryMax = override.InstanceRequirements.MemoryMiB.Min
+					actual.MemoryMin = override.InstanceRequirements.MemoryMiB.Min
+				}
+				if len(override.InstanceRequirements.ExcludedInstanceTypes) > 0 {
+					actual.ExcludedInstanceTypes = override.InstanceRequirements.ExcludedInstanceTypes
 				}
 				return actual, nil
 			}
@@ -57,17 +61,21 @@ func findInstanceRequirements(asg *autoscalingtypes.AutoScalingGroup) (*Instance
 }
 
 func overridesFromInstanceRequirements(ir *InstanceRequirements) autoscalingtypes.LaunchTemplateOverrides {
-	return autoscalingtypes.LaunchTemplateOverrides{
-		InstanceRequirements: &autoscalingtypes.InstanceRequirements{
-			VCpuCount: &autoscalingtypes.VCpuCountRequest{
-				Max: ir.CPUMax,
-				Min: ir.CPUMin,
-			},
-			MemoryMiB: &autoscalingtypes.MemoryMiBRequest{
-				Max: ir.MemoryMax,
-				Min: ir.MemoryMin,
-			},
-			BurstablePerformance: autoscalingtypes.BurstablePerformanceIncluded,
+	req := &autoscalingtypes.InstanceRequirements{
+		VCpuCount: &autoscalingtypes.VCpuCountRequest{
+			Max: ir.CPUMax,
+			Min: ir.CPUMin,
 		},
+		MemoryMiB: &autoscalingtypes.MemoryMiBRequest{
+			Max: ir.MemoryMax,
+			Min: ir.MemoryMin,
+		},
+		BurstablePerformance: autoscalingtypes.BurstablePerformanceIncluded,
+	}
+	if len(ir.ExcludedInstanceTypes) > 0 {
+		req.ExcludedInstanceTypes = ir.ExcludedInstanceTypes
+	}
+	return autoscalingtypes.LaunchTemplateOverrides{
+		InstanceRequirements: req,
 	}
 }

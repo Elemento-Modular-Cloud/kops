@@ -12,7 +12,9 @@ spec:
   cloudConfig:
     gceServiceAccount: default
     gcpPDCSIDriver:
-      enabled: true
+      defaultStorageClassName: balanced-csi
+      enabled: false
+      version: v1.22.1
     manageStorageClasses: true
     multizone: true
     nodeTags: minimal-gce-example-com-k8s-io-role-node
@@ -23,7 +25,7 @@ spec:
     clusterName: minimal-gce-example-com
     controllers:
     - '*'
-    image: gcr.io/k8s-staging-cloud-provider-gcp/cloud-controller-manager:master
+    image: registry.k8s.io/cloud-provider-gcp/cloud-controller-manager:v35.0.0
     leaderElection:
       leaderElect: true
   cloudProvider: gce
@@ -32,8 +34,9 @@ spec:
   containerd:
     logLevel: info
     runc:
-      version: 1.2.4
-    version: 1.7.25
+      version: 1.3.5
+    sandboxImage: registry.k8s.io/pause:3.10.1
+    version: 2.2.4
   dnsZone: "1"
   etcdClusters:
   - backups:
@@ -46,7 +49,7 @@ spec:
       backupRetentionDays: 90
     memoryRequest: 100Mi
     name: main
-    version: 3.5.17
+    version: 3.5.31
   - backups:
       backupStore: memfs://tests/minimal-gce.example.com/backups/etcd/events
     cpuRequest: 100m
@@ -57,7 +60,7 @@ spec:
       backupRetentionDays: 90
     memoryRequest: 100Mi
     name: events
-    version: 3.5.17
+    version: 3.5.31
   externalDns:
     provider: dns-controller
   iam:
@@ -73,15 +76,17 @@ spec:
     bindAddress: 0.0.0.0
     cloudProvider: external
     enableAdmissionPlugins:
-    - NamespaceLifecycle
-    - LimitRanger
-    - ServiceAccount
     - DefaultStorageClass
     - DefaultTolerationSeconds
+    - LimitRanger
     - MutatingAdmissionWebhook
-    - ValidatingAdmissionWebhook
+    - NamespaceLifecycle
     - NodeRestriction
     - ResourceQuota
+    - RuntimeClass
+    - ServiceAccount
+    - ValidatingAdmissionPolicy
+    - ValidatingAdmissionWebhook
     etcdServers:
     - https://127.0.0.1:4001
     etcdServersOverrides:
@@ -127,7 +132,7 @@ spec:
     nodeLocalDNS:
       cpuRequest: 25m
       enabled: false
-      image: registry.k8s.io/dns/k8s-dns-node-cache:1.23.0
+      image: registry.k8s.io/dns/k8s-dns-node-cache:1.26.0
       memoryRequest: 5Mi
     provider: CoreDNS
     serverIP: 100.64.0.10
@@ -153,7 +158,6 @@ spec:
     hairpinMode: promiscuous-bridge
     kubeconfigPath: /var/lib/kubelet/kubeconfig
     logLevel: 2
-    podInfraContainerImage: registry.k8s.io/pause:3.9
     podManifestPath: /etc/kubernetes/manifests
     protectKernelDefaults: true
     registerSchedulable: true
@@ -175,7 +179,6 @@ spec:
     hairpinMode: promiscuous-bridge
     kubeconfigPath: /var/lib/kubelet/kubeconfig
     logLevel: 2
-    podInfraContainerImage: registry.k8s.io/pause:3.9
     podManifestPath: /etc/kubernetes/manifests
     protectKernelDefaults: true
     registerSchedulable: true

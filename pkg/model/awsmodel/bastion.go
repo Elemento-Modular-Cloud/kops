@@ -46,7 +46,7 @@ var _ fi.CloudupModelBuilder = &BastionModelBuilder{}
 func (b *BastionModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	var bastionInstanceGroups []*kops.InstanceGroup
 	for _, ig := range b.InstanceGroups {
-		if ig.Spec.Role == kops.InstanceGroupRoleBastion {
+		if ig.Spec.Role.HasBastion() {
 			bastionInstanceGroups = append(bastionInstanceGroups, ig)
 		}
 	}
@@ -377,21 +377,36 @@ func (b *BastionModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		}
 
 		tg := &awstasks.TargetGroup{
-			Name:               fi.PtrTo(sshGroupName),
-			Lifecycle:          b.Lifecycle,
-			VPC:                b.LinkToVPC(),
-			Tags:               sshGroupTags,
-			Protocol:           elbv2types.ProtocolEnumTcp,
-			Port:               fi.PtrTo(int32(22)),
-			Attributes:         groupAttrs,
-			Interval:           fi.PtrTo(int32(10)),
-			HealthyThreshold:   fi.PtrTo(int32(2)),
-			UnhealthyThreshold: fi.PtrTo(int32(2)),
-			Shared:             fi.PtrTo(false),
+			Name:                fi.PtrTo(sshGroupName),
+			Lifecycle:           b.Lifecycle,
+			VPC:                 b.LinkToVPC(),
+			Tags:                sshGroupTags,
+			Protocol:            elbv2types.ProtocolEnumTcp,
+			Port:                fi.PtrTo(int32(22)),
+			Attributes:          groupAttrs,
+			Interval:            fi.PtrTo(int32(10)),
+			HealthyThreshold:    fi.PtrTo(int32(2)),
+			UnhealthyThreshold:  fi.PtrTo(int32(2)),
+			HealthCheckProtocol: elbv2types.ProtocolEnumTcp,
+			Shared:              fi.PtrTo(false),
 		}
 		tg.CreateNewRevisionsWith(nlb)
 
 		c.AddTask(tg)
+
+		// Add additional security groups to the NLB
+		if b.Cluster.Spec.Networking.Topology != nil && b.Cluster.Spec.Networking.Topology.Bastion != nil && b.Cluster.Spec.Networking.Topology.Bastion.LoadBalancer != nil && b.Cluster.Spec.Networking.Topology.Bastion.LoadBalancer.AdditionalSecurityGroups != nil {
+			for _, id := range b.Cluster.Spec.Networking.Topology.Bastion.LoadBalancer.AdditionalSecurityGroups {
+				t := &awstasks.SecurityGroup{
+					Name:      fi.PtrTo(id),
+					Lifecycle: b.SecurityLifecycle,
+					ID:        fi.PtrTo(id),
+					Shared:    fi.PtrTo(true),
+				}
+				c.EnsureTask(t)
+				nlb.SecurityGroups = append(nlb.SecurityGroups, t)
+			}
+		}
 
 		c.AddTask(nlb)
 	}

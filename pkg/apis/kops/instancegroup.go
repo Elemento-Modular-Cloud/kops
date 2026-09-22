@@ -63,6 +63,14 @@ const (
 	InstanceGroupRoleBastion InstanceGroupRole = "Bastion"
 	// InstanceGroupRoleAPIServer is an API server role.
 	InstanceGroupRoleAPIServer InstanceGroupRole = "APIServer"
+	// InstanceGroupRoleEtcd is an Etcd role.
+	InstanceGroupRoleEtcd InstanceGroupRole = "Etcd"
+	// InstanceGroupRoleScheduler is a Scheduler role.
+	InstanceGroupRoleScheduler InstanceGroupRole = "Scheduler"
+	// InstanceGroupRoleCloudControllerManager is a CloudControllerManager role.
+	InstanceGroupRoleCloudControllerManager InstanceGroupRole = "CloudControllerManager"
+	// InstanceGroupRoleKubControllerManager is a KubControllerManager role.
+	InstanceGroupRoleKubControllerManager InstanceGroupRole = "KubControllerManager"
 )
 
 // AllInstanceGroupRoles is a slice of all valid InstanceGroupRole values
@@ -71,6 +79,42 @@ var AllInstanceGroupRoles = []InstanceGroupRole{
 	InstanceGroupRoleAPIServer,
 	InstanceGroupRoleNode,
 	InstanceGroupRoleBastion,
+}
+
+func (r InstanceGroupRole) HasControlPlane() bool {
+	return r == InstanceGroupRoleControlPlane
+}
+
+func (r InstanceGroupRole) HasNode() bool {
+	return r == InstanceGroupRoleNode
+}
+
+func (r InstanceGroupRole) HasBastion() bool {
+	return r == InstanceGroupRoleBastion
+}
+
+func (r InstanceGroupRole) HasAPIServer() bool {
+	return r == InstanceGroupRoleAPIServer
+}
+
+func (r InstanceGroupRole) HasEtcd() bool {
+	return r == InstanceGroupRoleEtcd
+}
+
+func (r InstanceGroupRole) HasScheduler() bool {
+	return r == InstanceGroupRoleScheduler
+}
+
+func (r InstanceGroupRole) HasCloudControllerManager() bool {
+	return r == InstanceGroupRoleCloudControllerManager
+}
+
+func (r InstanceGroupRole) HasKubControllerManager() bool {
+	return r == InstanceGroupRoleKubControllerManager
+}
+
+func (r InstanceGroupRole) IsControlPlaneType() bool {
+	return r.HasControlPlane() || r.HasAPIServer()
 }
 
 const (
@@ -281,6 +325,10 @@ type MixedInstancesPolicySpec struct {
 type InstanceRequirementsSpec struct {
 	CPU    *MinMaxSpec `json:"cpu,omitempty"`
 	Memory *MinMaxSpec `json:"memory,omitempty"`
+	// ExcludedInstanceTypes is a list of instance types which will not be used by the instance group.
+	// You can use strings with one or more wild cards, represented by an asterisk (*), to exclude an
+	// instance type, size, or generation.
+	ExcludedInstanceTypes []string `json:"excludedInstanceTypes,omitempty"`
 }
 
 type MinMaxSpec struct {
@@ -343,8 +391,8 @@ type IAMProfileSpec struct {
 
 // IsControlPlane checks if instanceGroup is a control-plane node.
 func (g *InstanceGroup) IsControlPlane() bool {
-	switch g.Spec.Role {
-	case InstanceGroupRoleControlPlane:
+	switch {
+	case g.Spec.Role.HasControlPlane():
 		return true
 	default:
 		return false
@@ -353,8 +401,8 @@ func (g *InstanceGroup) IsControlPlane() bool {
 
 // IsAPIServerOnly checks if instanceGroup runs only the API Server
 func (g *InstanceGroup) IsAPIServerOnly() bool {
-	switch g.Spec.Role {
-	case InstanceGroupRoleAPIServer:
+	switch {
+	case g.Spec.Role.HasAPIServer():
 		return true
 	default:
 		return false
@@ -366,14 +414,29 @@ func (g *InstanceGroup) HasAPIServer() bool {
 	return g.IsControlPlane() || g.IsAPIServerOnly()
 }
 
+// HasGVisor checks if instanceGroup is a worker that has the gVisor (runsc) runtime enabled.
+// gVisor is only valid on workers; ValidateInstanceGroup rejects it on other roles.
+func (g *InstanceGroup) HasGVisor() bool {
+	return g.Spec.Role.HasNode() &&
+		g.Spec.Containerd != nil &&
+		g.Spec.Containerd.GVisor != nil &&
+		g.Spec.Containerd.GVisor.Enabled != nil &&
+		*g.Spec.Containerd.GVisor.Enabled
+}
+
 // IsBastion checks if instanceGroup is a bastion
 func (g *InstanceGroup) IsBastion() bool {
-	switch g.Spec.Role {
-	case InstanceGroupRoleBastion:
+	switch {
+	case g.Spec.Role.HasBastion():
 		return true
 	default:
 		return false
 	}
+}
+
+// IsKarpenterManaged checks if instanceGroup is a worker node group managed by Karpenter.
+func (g *InstanceGroup) IsKarpenterManaged() bool {
+	return g.Spec.Manager == InstanceManagerKarpenter && g.Spec.Role == InstanceGroupRoleNode
 }
 
 func (g *InstanceGroup) AddInstanceGroupNodeLabel() {
@@ -384,8 +447,8 @@ func (g *InstanceGroup) AddInstanceGroupNodeLabel() {
 }
 
 func (r InstanceGroupRole) ToLowerString() string {
-	switch r {
-	case InstanceGroupRoleControlPlane:
+	switch {
+	case r.HasControlPlane():
 		return "control-plane"
 	default:
 		return strings.ToLower(string(r))

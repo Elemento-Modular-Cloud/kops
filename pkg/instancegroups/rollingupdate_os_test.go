@@ -41,11 +41,11 @@ import (
 func getTestSetupOS(t *testing.T, ctx context.Context) (*RollingUpdateCluster, *openstack.MockCloud) {
 	vfs.Context.ResetMemfsContext(true)
 
-	k8sClient := fake.NewSimpleClientset()
+	k8sClient := fake.NewClientset()
 
 	mockcloud := testutils.SetupMockOpenstack()
 
-	inCluster := testutils.BuildMinimalCluster("test.k8s.local")
+	inCluster := testutils.BuildMinimalClusterAWS("test.k8s.local")
 
 	inCluster.Spec.CloudProvider.Openstack = &kopsapi.OpenstackSpec{}
 	inCluster.Name = "test.k8s.local"
@@ -133,7 +133,7 @@ func makeGroupOS(t *testing.T, groups map[string]*cloudinstances.CloudInstanceGr
 	}
 
 	newIg.Spec.MachineType = "n1-standard-2"
-	newIg.Spec.Image = "Ubuntu-20.04"
+	newIg.Spec.Image = "Ubuntu-26.04"
 
 	igList.Items = append(igList.Items, newIg)
 
@@ -168,7 +168,7 @@ func makeGroupOS(t *testing.T, groups map[string]*cloudinstances.CloudInstanceGr
 		}
 		id := server.ID
 		var node *v1.Node
-		if role != kopsapi.InstanceGroupRoleBastion {
+		if !role.HasBastion() {
 			node = &v1.Node{
 				ObjectMeta: v1meta.ObjectMeta{Name: id + ".local"},
 			}

@@ -65,6 +65,10 @@ func (asg *ApplicationSecurityGroup) Find(c *fi.CloudupContext) (*ApplicationSec
 	if found == nil {
 		return nil, nil
 	}
+	if found.Properties != nil && found.Properties.ProvisioningState != nil && *found.Properties.ProvisioningState == network.ProvisioningStateFailed {
+		klog.Warningf("found application security group %q in failed provisioning state", *asg.Name)
+		return nil, nil
+	}
 
 	asg.ID = found.ID
 

@@ -45,6 +45,10 @@ type DryRunTarget[T SubContext] struct {
 
 	// assetBuilder records all assets used
 	assetBuilder *assets.AssetBuilder
+
+	// defaultCheckExisting will control whether we look for existing objects in our dry-run.
+	// This is normally true except for special-case dry-runs, like `kops get assets`
+	defaultCheckExisting bool
 }
 
 type NodeupDryRunTarget = DryRunTarget[NodeupSubContext]
@@ -75,25 +79,28 @@ func (a DeletionByTaskName[T]) Less(i, j int) bool {
 	return a[i].TaskName() < a[j].TaskName()
 }
 
-var _ Target[CloudupSubContext] = &DryRunTarget[CloudupSubContext]{}
+var _ Target[CloudupSubContext] = (*DryRunTarget[CloudupSubContext])(nil)
 
-func newDryRunTarget[T SubContext](assetBuilder *assets.AssetBuilder, out io.Writer) *DryRunTarget[T] {
+func newDryRunTarget[T SubContext](assetBuilder *assets.AssetBuilder, defaultCheckExisting bool, out io.Writer) *DryRunTarget[T] {
 	t := &DryRunTarget[T]{}
 	t.out = out
 	t.assetBuilder = assetBuilder
+	t.defaultCheckExisting = defaultCheckExisting
 	return t
 }
 
-func NewCloudupDryRunTarget(assetBuilder *assets.AssetBuilder, out io.Writer) *CloudupDryRunTarget {
-	return newDryRunTarget[CloudupSubContext](assetBuilder, out)
+// NewCloudupDryRunTarget builds a dry-run target.
+// checkExisting should normally be true, but can be false for special-case dry-run, such as in `kops get assets`
+func NewCloudupDryRunTarget(assetBuilder *assets.AssetBuilder, checkExisting bool, out io.Writer) *CloudupDryRunTarget {
+	return newDryRunTarget[CloudupSubContext](assetBuilder, checkExisting, out)
 }
 
 func NewNodeupDryRunTarget(assetBuilder *assets.AssetBuilder, out io.Writer) *NodeupDryRunTarget {
-	return newDryRunTarget[NodeupSubContext](assetBuilder, out)
+	return newDryRunTarget[NodeupSubContext](assetBuilder, true, out)
 }
 
 func (t *DryRunTarget[T]) DefaultCheckExisting() bool {
-	return true
+	return t.defaultCheckExisting
 }
 
 func (t *DryRunTarget[T]) Render(a, e, changes Task[T]) error {
@@ -283,16 +290,18 @@ func (t *DryRunTarget[T]) PrintReport(taskMap map[string]Task[T], out io.Writer)
 		}
 	}
 
-	if len(t.assetBuilder.ImageAssets) != 0 {
+	imageAssets := t.assetBuilder.ImageAssets()
+	if len(imageAssets) != 0 {
 		klog.V(4).Infof("ImageAssets:")
-		for _, a := range t.assetBuilder.ImageAssets {
+		for _, a := range imageAssets {
 			klog.V(4).Infof("  %s %s", a.DownloadLocation, a.CanonicalLocation)
 		}
 	}
 
-	if len(t.assetBuilder.FileAssets) != 0 {
+	fileAssets := t.assetBuilder.FileAssets()
+	if len(fileAssets) != 0 {
 		klog.V(4).Infof("FileAssets:")
-		for _, a := range t.assetBuilder.FileAssets {
+		for _, a := range fileAssets {
 			if a.DownloadURL != nil {
 				klog.V(4).Infof("  %s %s", a.DownloadURL.String(), a.CanonicalURL.String())
 			}
@@ -345,9 +354,19 @@ func buildChangeList[T SubContext](a, e, changes Task[T]) ([]change, error) {
 			case reflect.String:
 				changed = fieldValC.Convert(reflect.TypeOf("")).Interface() != ""
 
-			case reflect.Int:
+			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 				changed = fieldValA.Int() != fieldValE.Int()
+
+			case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+				changed = fieldValA.Uint() != fieldValE.Uint()
+
+			case reflect.Bool:
+				changed = fieldValA.Bool() != fieldValE.Bool()
+
+			default:
+				klog.Warningf("unhandled type in diff construction: %v", fieldValC.Kind())
 			}
+
 			if !changed {
 				continue
 			}

@@ -44,14 +44,33 @@ import (
 
 var MagicTimestamp = metav1.Time{Time: time.Date(2017, 1, 1, 0, 0, 0, 0, time.UTC)}
 
+// TestCreateClusterGossipAWS creates a minimal AWS gossip cluster
+func TestCreateClusterGossipAWS(t *testing.T) {
+	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/gossip-aws", "v1alpha2")
+}
+
+// TestCreateClusterGossipAzure creates a minimal Azure gossip cluster
+func TestCreateClusterGossipAzure(t *testing.T) {
+	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/gossip-azure", "v1alpha2")
+}
+
+// TestCreateClusterGossipGCE creates a cminimal GCE gossip cluster
+func TestCreateClusterGossipGCE(t *testing.T) {
+	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/gossip-gce", "v1alpha2")
+}
+
+// TestCreateClusterGossipHetzner creates a minimal Hetzner gossip cluster
+func TestCreateClusterGossipHetzner(t *testing.T) {
+	t.Setenv("HCLOUD_TOKEN", "REDACTED")
+	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/gossip-hetzner", "v1alpha2")
+}
+
 // TestCreateClusterMinimal runs kops create cluster minimal.example.com --zones us-test-1a
 func TestCreateClusterMinimal(t *testing.T) {
-	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-1.27", "v1alpha2")
-	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-1.28", "v1alpha2")
-	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-1.29", "v1alpha2")
-	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-1.30", "v1alpha2")
 	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-1.31", "v1alpha2")
 	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-1.32", "v1alpha2")
+	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-1.35", "v1alpha2")
+	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-1.36", "v1alpha2")
 	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-arm64", "v1alpha2")
 	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-irsa", "v1alpha2")
 }
@@ -79,8 +98,20 @@ func TestCreateClusterOpenStackNoDNS(t *testing.T) {
 }
 
 // TestCreateClusterCilium runs kops with the cilium networking flags
+// TestCreateClusterCalicoBPF verifies that --set cluster.spec.networking.calico.bpfEnabled=true
+// causes kops to default spec.kubeProxy.enabled=false, because Calico's BPF mode replaces
+// kube-proxy and from v3.31 binds the kube-proxy healthz port.
+func TestCreateClusterCalicoBPF(t *testing.T) {
+	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/calico_bpf", "v1alpha2")
+}
+
 func TestCreateClusterCilium(t *testing.T) {
 	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/cilium-eni", "v1alpha2")
+}
+
+// TestCreateClusterVolumeType tests the control plane volume type flag
+func TestCreateClusterVolumeType(t *testing.T) {
+	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/volume_type", "v1alpha2")
 }
 
 // TestCreateClusterOverride tests the override flag

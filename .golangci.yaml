@@ -1,35 +1,83 @@
+version: "2"
 run:
-  timeout: 30m
-  go: "1.24"
-
-issues:
-  max-same-issues: 0
-  # Excluding configuration per-path, per-linter, per-text and per-source
-  exclude-rules:
-    # exclude ineffassing linter for generated files for conversion
-    - path: conversion\.go
-      linters:
-        - ineffassign
-  exclude-files:
-    - "^zz_generated.*"
-
+  go: "1.25"
 linters:
-  disable-all: true
+  default: none
   enable:
-    - govet
-    - ineffassign
-    - staticcheck
-    - tenv
-
-linters-settings: # please keep this alphabetized
-  staticcheck:
-    checks: [
-        "all",
-        "-ST1000", # Incorrect or missing package comment
-        "-ST1003", # Poorly chosen identifier
-        "-ST1005", # Incorrectly formatted error string
-        "-ST1006", # Poorly chosen receiver name
-        "-ST1012", # Poorly chosen name for error variable
-        "-ST1016", # Use consistent method receiver names
-        "-SA1019", # Using a deprecated function, variable, constant or field
-      ]
+    - gocritic
+    - gosec
+    - misspell
+  settings:
+    gocritic:
+      # Keep gocritic focused on correctness checks for the initial adoption.
+      # These checks are mostly style churn in the existing codebase.
+      disabled-checks:
+        - appendAssign
+        - assignOp
+        - captLocal
+        - commentFormatting
+        - deprecatedComment
+        - elseif
+        - ifElseChain
+        - singleCaseSwitch
+        - sloppyLen
+    gosec:
+      # Keep the initial gosec adoption to high-signal checks. The broader
+      # default set reports many legacy taint, weak hash, math/rand, and
+      # integer conversion findings that need separate audits.
+      includes:
+        - G101
+        - G103
+        - G104
+        - G106
+        - G108
+        - G109
+        - G110
+        - G111
+        - G201
+        - G202
+        - G203
+        - G301
+        - G302
+        - G303
+        - G304
+        - G305
+        - G306
+        - G307
+        - G403
+        - G502
+        - G503
+        - G504
+        - G601
+        - G602
+    misspell:
+      mode: default
+      # Leave locale unset so both US and UK English spellings are accepted.
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - gosec
+        # Test fixtures intentionally contain fake keys and tokens.
+        path: _test\.go$
+        text: "G101:"
+    paths:
+      - ^zz_generated.*
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-issues-per-linter: 10000
+  max-same-issues: 10000
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

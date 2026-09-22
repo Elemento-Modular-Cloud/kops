@@ -16,7 +16,88 @@ limitations under the License.
 
 package vfs
 
-import "testing"
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+)
+
+func TestBucketLocationViaHead(t *testing.T) {
+	cases := []struct {
+		name         string
+		status       int
+		bucketRegion string
+		wantRegion   string
+		wantErr      bool
+	}{
+		{
+			name:         "200 reads BucketRegion header",
+			status:       http.StatusOK,
+			bucketRegion: "us-west-2",
+			wantRegion:   "us-west-2",
+		},
+		{
+			name:         "301 recovers region from response header",
+			status:       http.StatusMovedPermanently,
+			bucketRegion: "eu-central-1",
+			wantRegion:   "eu-central-1",
+		},
+		{
+			name:         "403 recovers region from response header",
+			status:       http.StatusForbidden,
+			bucketRegion: "ap-southeast-1",
+			wantRegion:   "ap-southeast-1",
+		},
+		{
+			name:    "404 without region header is an error",
+			status:  http.StatusNotFound,
+			wantErr: true,
+		},
+		{
+			name:    "200 without region header is an error",
+			status:  http.StatusOK,
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.bucketRegion != "" {
+					w.Header().Set("x-amz-bucket-region", tc.bucketRegion)
+				}
+				w.WriteHeader(tc.status)
+			}))
+			defer srv.Close()
+
+			client := s3.New(s3.Options{
+				BaseEndpoint: aws.String(srv.URL),
+				Region:       "us-east-1",
+				Credentials:  credentials.NewStaticCredentialsProvider("AKID", "SECRET", ""),
+				UsePathStyle: true,
+			})
+
+			region, err := bucketLocationViaHead(context.Background(), client, "my-bucket")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got region %q", region)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if region != tc.wantRegion {
+				t.Errorf("got region %q, want %q", region, tc.wantRegion)
+			}
+		})
+	}
+}
 
 func Test_VFSPath(t *testing.T) {
 	grid := []struct {

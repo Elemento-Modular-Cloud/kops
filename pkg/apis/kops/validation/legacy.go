@@ -171,6 +171,8 @@ func ValidateCluster(c *kops.Cluster, strict bool, vfsContext *vfs.VFSContext) f
 			k8sCloudProvider = "azure"
 		case kops.CloudProviderScaleway:
 			k8sCloudProvider = "external"
+		case kops.CloudProviderLinode:
+      k8sCloudProvider = "linode"
 		case kops.CloudProviderElemento:
 			k8sCloudProvider = "external"
 		default:
@@ -190,7 +192,7 @@ func ValidateCluster(c *kops.Cluster, strict bool, vfsContext *vfs.VFSContext) f
 				}
 			}
 			if c.Spec.KubeAPIServer != nil && (strict || c.Spec.KubeAPIServer.CloudProvider != "") {
-				if k8sVersion != nil && k8sVersion.LT(semver.MustParse("1.33.0")) {
+				if k8sVersion != nil && k8sVersion.LT(semver.MustParse("1.33.0-alpha.3")) {
 					if c.Spec.KubeAPIServer.CloudProvider != "external" && k8sCloudProvider != c.Spec.KubeAPIServer.CloudProvider {
 						allErrs = append(allErrs, field.Forbidden(fieldSpec.Child("kubeAPIServer", "cloudProvider"), "Did not match cluster cloudProvider"))
 					}
@@ -217,18 +219,25 @@ func validateServiceAccountIssuerDiscovery(c *kops.Cluster, said *kops.ServiceAc
 		return nil
 	}
 	allErrs := field.ErrorList{}
-	saidStore := said.DiscoveryStore
-	if saidStore != "" {
+	discoveryStore := said.DiscoveryStore
+	discoveryService := said.DiscoveryService
+
+	if discoveryStore != "" && discoveryService != nil {
+		bothField := fieldSpec.Child("discoveryStore")
+		allErrs = append(allErrs, field.Forbidden(bothField, "Only one of discoveryStore or discoveryService may be specified"))
+	}
+
+	if discoveryStore != "" {
 		saidStoreField := fieldSpec.Child("serviceAccountIssuerDiscovery", "discoveryStore")
-		base, err := vfsContext.BuildVfsPath(saidStore)
+		base, err := vfsContext.BuildVfsPath(discoveryStore)
 		if err != nil {
-			allErrs = append(allErrs, field.Invalid(saidStoreField, saidStore, "not a valid VFS path"))
+			allErrs = append(allErrs, field.Invalid(saidStoreField, discoveryStore, "not a valid VFS path"))
 		} else {
 			switch base := base.(type) {
 			case *vfs.S3Path:
 				// S3 bucket should not contain dots because of the wildcard certificate
 				if strings.Contains(base.Bucket(), ".") {
-					allErrs = append(allErrs, field.Invalid(saidStoreField, saidStore, "Bucket name cannot contain dots"))
+					allErrs = append(allErrs, field.Invalid(saidStoreField, discoveryStore, "Bucket name cannot contain dots"))
 				}
 			case *vfs.GSPath:
 				// No known restrictions currently. Added here to avoid falling into the default catch all below.
@@ -236,17 +245,25 @@ func validateServiceAccountIssuerDiscovery(c *kops.Cluster, said *kops.ServiceAc
 				// memfs is ok for tests; not OK otherwise
 				if !base.IsClusterReadable() {
 					// (If this _is_ a test, we should call MarkClusterReadable)
-					allErrs = append(allErrs, field.Invalid(saidStoreField, saidStore, "S3 is the only supported VFS for discoveryStore"))
+					allErrs = append(allErrs, field.Invalid(saidStoreField, discoveryStore, "S3 is the only supported VFS for discoveryStore"))
 				}
 			default:
-				allErrs = append(allErrs, field.Invalid(saidStoreField, saidStore, "S3 is the only supported VFS for discoveryStore"))
+				allErrs = append(allErrs, field.Invalid(saidStoreField, discoveryStore, "S3 is the only supported VFS for discoveryStore"))
 			}
 		}
 	}
+
+	if discoveryService != nil {
+		saidServiceField := fieldSpec.Child("serviceAccountIssuerDiscovery", "discoveryService", "url")
+		if discoveryService.URL == "" {
+			allErrs = append(allErrs, field.Required(saidServiceField, "discoveryService URL must be specified"))
+		}
+	}
+
 	if said.EnableAWSOIDCProvider {
 		enableOIDCField := fieldSpec.Child("serviceAccountIssuerDiscovery", "enableAWSOIDCProvider")
-		if saidStore == "" {
-			allErrs = append(allErrs, field.Forbidden(enableOIDCField, "AWS OIDC Provider requires a discovery store"))
+		if discoveryStore == "" && discoveryService == nil {
+			allErrs = append(allErrs, field.Forbidden(enableOIDCField, "AWS OIDC Provider requires a discoveryStore or discoveryService to be set"))
 		}
 	}
 

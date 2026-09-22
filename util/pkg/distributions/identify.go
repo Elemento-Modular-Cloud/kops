@@ -48,24 +48,30 @@ func FindDistribution(rootfs string) (Distribution, error) {
 
 	// Most distros have a fixed VERSION_ID
 	switch distro {
-	case "amzn-2":
-		return DistributionAmazonLinux2, nil
 	case "amzn-2023":
 		return DistributionAmazonLinux2023, nil
-	case "debian-10":
-		return DistributionDebian10, nil
 	case "debian-11":
 		return DistributionDebian11, nil
 	case "debian-12":
 		return DistributionDebian12, nil
+	case "debian-13":
+		return DistributionDebian13, nil
 	case "fedora-41":
 		return DistributionFedora41, nil
-	case "ubuntu-20.04":
-		return DistributionUbuntu2004, nil
+	case "fedora-42":
+		return DistributionFedora42, nil
+	case "fedora-43":
+		return DistributionFedora43, nil
+	case "fedora-44":
+		return DistributionFedora44, nil
 	case "ubuntu-22.04":
 		return DistributionUbuntu2204, nil
 	case "ubuntu-24.04":
 		return DistributionUbuntu2404, nil
+	case "ubuntu-25.10":
+		return DistributionUbuntu2510, nil
+	case "ubuntu-26.04":
+		return DistributionUbuntu2604, nil
 	}
 
 	// Some distros have a more verbose VERSION_ID
@@ -75,11 +81,20 @@ func FindDistribution(rootfs string) (Distribution, error) {
 	if strings.HasPrefix(distro, "flatcar-") {
 		return DistributionFlatcar, nil
 	}
+	if strings.HasPrefix(distro, "centos-9.") {
+		return DistributionCentOS9, nil
+	}
+	if strings.HasPrefix(distro, "centos-10.") {
+		return DistributionCentOS10, nil
+	}
 	if strings.HasPrefix(distro, "rhel-8.") {
 		return DistributionRhel8, nil
 	}
 	if strings.HasPrefix(distro, "rhel-9.") {
 		return DistributionRhel9, nil
+	}
+	if strings.HasPrefix(distro, "rhel-10.") {
+		return DistributionRhel10, nil
 	}
 	if strings.HasPrefix(distro, "rocky-8.") {
 		return DistributionRocky8, nil
@@ -87,7 +102,9 @@ func FindDistribution(rootfs string) (Distribution, error) {
 	if strings.HasPrefix(distro, "rocky-9.") {
 		return DistributionRocky9, nil
 	}
-
+	if strings.HasPrefix(distro, "rocky-10.") {
+		return DistributionRocky10, nil
+	}
 	// Some distros are not supported
 	klog.V(2).Infof("Contents of /etc/os-release:\n%s", osReleaseBytes)
 	return Distribution{}, fmt.Errorf("unsupported distro %q", distro)

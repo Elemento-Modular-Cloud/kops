@@ -51,9 +51,22 @@ func (d *deployer) initialize() error {
 		}
 	}
 
+	var err error
+	d.zones, err = d.getZones()
+	if err != nil {
+		return err
+	}
 	switch d.CloudProvider {
 	case "aws":
-		client, err := aws.NewClient(context.Background())
+		if d.region == "" {
+			// Default to us-east-2, but use the region implied by the first zone if possible
+			if len(d.zones) == 0 {
+				d.region = "us-east-2"
+			} else {
+				d.region = d.zones[0][:len(d.zones[0])-1]
+			}
+		}
+		client, err := aws.NewClient(context.Background(), d.region)
 		if err != nil {
 			return fmt.Errorf("init failed to build AWS client: %w", err)
 		}
@@ -73,6 +86,14 @@ func (d *deployer) initialize() error {
 			d.SSHPublicKeyPath = publicKeyPath
 			d.SSHPrivateKeyPath = privateKeyPath
 		}
+	case "azure":
+		publicKeyPath, privateKeyPath, err := util.CreateSSHKeyPair(d.ClusterName)
+		if err != nil {
+			return err
+		}
+		d.SSHPublicKeyPath = publicKeyPath
+		d.SSHPrivateKeyPath = privateKeyPath
+		d.SSHUser = "kops"
 	case "digitalocean":
 		if d.SSHPrivateKeyPath == "" {
 			d.SSHPrivateKeyPath = os.Getenv("DO_SSH_PRIVATE_KEY_FILE")
@@ -82,6 +103,10 @@ func (d *deployer) initialize() error {
 		}
 		d.SSHUser = "root"
 	case "gce":
+		d.region, err = gce.ZoneToRegion(d.zones[0])
+		if err != nil {
+			return err
+		}
 		if d.GCPProject == "" {
 			klog.V(1).Info("No GCP project provided, acquiring from Boskos")
 
@@ -119,13 +144,30 @@ func (d *deployer) initialize() error {
 				d.SSHPublicKeyPath = publicKey
 			}
 
-			d.createBucket = true
 		} else if d.SSHPrivateKeyPath == "" && os.Getenv("KUBE_SSH_KEY_PATH") != "" {
 			d.SSHPrivateKeyPath = os.Getenv("KUBE_SSH_KEY_PATH")
 		}
 	}
 
 	klog.V(1).Infof("Using SSH keypair: [%s,%s]", d.SSHPrivateKeyPath, d.SSHPublicKeyPath)
+
+	// Determine whether ephemeral buckets need to be created. Each store
+	// method generates a dynamic bucket name when its corresponding env var
+	// is unset; those buckets must be created before cluster provisioning
+	// and deleted during teardown.
+	switch d.CloudProvider {
+	case "aws":
+		if os.Getenv("KOPS_STATE_STORE") == "" {
+			d.createStateStore = true
+		}
+		if _, found := os.LookupEnv("KOPS_DISCOVERY_STORE"); !found {
+			d.createDiscoveryStore = true
+		}
+	case "gce":
+		if d.boskos != nil || os.Getenv("KOPS_STATE_STORE") == "" || os.Getenv("KOPS_STAGING_BUCKET") == "" {
+			d.createStateStore = true
+		}
+	}
 
 	if d.commonOptions.ShouldBuild() {
 		if err := d.verifyBuildFlags(); err != nil {
@@ -162,7 +204,7 @@ func (d *deployer) initialize() error {
 // verifyKopsFlags ensures common fields are set for kops commands
 func (d *deployer) verifyKopsFlags() error {
 	if d.ClusterName == "" {
-		name, err := defaultClusterName(d.CloudProvider)
+		name, err := d.defaultClusterName()
 		if err != nil {
 			return err
 		}
@@ -170,8 +212,14 @@ func (d *deployer) verifyKopsFlags() error {
 		klog.Infof("Using cluster name: %v", d.ClusterName)
 	}
 
-	if d.KopsBinaryPath == "" && d.KopsVersionMarker == "" {
-		return errors.New("missing required --kops-binary-path when --kops-version-marker is not used")
+	if d.KopsBinaryPath == "" && d.KopsVersionMarker == "" && d.KopsVersion == "" {
+		return errors.New("atleast one of  --kops-binary-path, --kops-version-marker, --kops-version must be set")
+	}
+	if d.KopsVersionMarker != "" && d.KopsVersion != "" {
+		return errors.New("you can't set kops-version-marker and kops-version at the same time")
+	}
+	if d.KopsBinaryPath != "" && (d.KopsVersion != "" || d.KopsVersionMarker != "") {
+		return errors.New("you can't set kops-binary-path with kops-version-marker or kops-version at the same time")
 	}
 
 	if d.ControlPlaneCount == 0 {
@@ -180,6 +228,7 @@ func (d *deployer) verifyKopsFlags() error {
 
 	switch d.CloudProvider {
 	case "aws":
+	case "azure":
 	case "gce":
 	case "digitalocean":
 	default:
@@ -211,7 +260,8 @@ func (d *deployer) env() []string {
 		}
 	}
 
-	if d.CloudProvider == "aws" {
+	switch d.CloudProvider {
+	case "aws":
 		// Pass through some env vars if set
 		for _, k := range []string{"AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", "AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_PROFILE", "AWS_SHARED_CREDENTIALS_FILE"} {
 			v := os.Getenv(k)
@@ -222,21 +272,43 @@ func (d *deployer) env() []string {
 		// Recognized by the e2e framework
 		// https://github.com/kubernetes/kubernetes/blob/a750d8054a6cb3167f495829ce3e77ab0ccca48e/test/e2e/framework/ssh/ssh.go#L59-L62
 		vars = append(vars, fmt.Sprintf("KUBE_SSH_KEY_PATH=%v", d.SSHPrivateKeyPath))
-	} else if d.CloudProvider == "digitalocean" {
+	case "azure":
+		// Pass through some env vars if set
+		for _, k := range []string{"AZURE_TENANT_ID", "AZURE_SUBSCRIPTION_ID", "AZURE_CLIENT_ID", "AZURE_FEDERATED_TOKEN_FILE"} {
+			v := os.Getenv(k)
+			if v != "" {
+				vars = append(vars, k+"="+v)
+			} else {
+				klog.Warningf("Azure env var %q not found or empty", k)
+			}
+		}
+	case "digitalocean":
 		// Pass through some env vars if set
 		for _, k := range []string{"DIGITALOCEAN_ACCESS_TOKEN", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"} {
 			v := os.Getenv(k)
 			if v != "" {
 				vars = append(vars, k+"="+v)
 			} else {
-				klog.Warningf("DO env var %s is empty..", k)
+				klog.Warningf("DO env var %q not found or empty", k)
 			}
 		}
+	case "gce":
+		if d.GCPProject != "" {
+			vars = append(vars, fmt.Sprintf("GCP_PROJECT=%v", d.GCPProject))
+			// ClusterLoader2's managed Prometheus client reads the GCP project
+			// from the PROJECT env var, so also expose it under that name.
+			vars = append(vars, fmt.Sprintf("PROJECT=%v", d.GCPProject))
+		}
 	}
+
 	if d.KopsBaseURL != "" {
 		vars = append(vars, fmt.Sprintf("KOPS_BASE_URL=%v", d.KopsBaseURL))
 	} else if baseURL := os.Getenv("KOPS_BASE_URL"); baseURL != "" {
 		vars = append(vars, fmt.Sprintf("KOPS_BASE_URL=%v", os.Getenv("KOPS_BASE_URL")))
+	}
+
+	if kopsBin := d.resolvedKopsBinaryPath(); kopsBin != "" {
+		vars = append(vars, fmt.Sprintf("KOPS=%v", kopsBin))
 	}
 
 	// Pass through OpenTelemetry flags
@@ -266,11 +338,26 @@ func (d *deployer) env() []string {
 
 // featureFlags returns the kops feature flags to set
 func (d *deployer) featureFlags() string {
+	// The sflags library splits comma-separated values into separate slice
+	// elements, so --env=KOPS_FEATURE_FLAGS=A,B,C becomes ["KOPS_FEATURE_FLAGS=A", "B", "C"].
+	// We need to reassemble the original value by collecting all entries from the
+	// KOPS_FEATURE_FLAGS entry until we hit another NAME=VALUE pattern.
+	var parts []string
+	collecting := false
 	for _, env := range d.Env {
-		e := strings.Split(env, "=")
-		if e[0] == "KOPS_FEATURE_FLAGS" && len(e) > 1 {
-			return e[1]
+		if value, ok := strings.CutPrefix(env, "KOPS_FEATURE_FLAGS="); ok {
+			parts = append(parts, value)
+			collecting = true
+		} else if collecting {
+			if strings.Contains(env, "=") {
+				// Hit another env var, stop collecting
+				break
+			}
+			parts = append(parts, env)
 		}
+	}
+	if len(parts) > 0 {
+		return strings.Join(parts, ",")
 	}
 	// if not set by the env flag, but set in the environment, use that.
 	if e := os.Getenv("KOPS_FEATURE_FLAGS"); e != "" {
@@ -280,14 +367,14 @@ func (d *deployer) featureFlags() string {
 }
 
 // defaultClusterName returns a kops cluster name to use when ClusterName is not set
-func defaultClusterName(cloudProvider string) (string, error) {
+func (d *deployer) defaultClusterName() (string, error) {
 	dnsDomain := os.Getenv("KOPS_DNS_DOMAIN")
 	jobName := os.Getenv("JOB_NAME")
 	jobType := os.Getenv("JOB_TYPE")
 	buildID := os.Getenv("BUILD_ID")
 	pullNumber := os.Getenv("PULL_NUMBER")
 	if dnsDomain == "" {
-		dnsDomain = "test-cncf-aws.k8s.io"
+		dnsDomain = "tests-kops-aws.k8s.io"
 	}
 	if jobName == "" || buildID == "" {
 		return "", errors.New("JOB_NAME, and BUILD_ID env vars are required when --cluster-name is not set")
@@ -296,29 +383,53 @@ func defaultClusterName(cloudProvider string) (string, error) {
 		return "", errors.New("PULL_NUMBER must be set when JOB_TYPE=presubmit and --cluster-name is not set")
 	}
 
+	// TODO(hakman): revisit how dnsDomain is used, ignoring it is unexpected.
 	var suffix string
-	switch cloudProvider {
+	switch d.CloudProvider {
 	case "aws":
-		suffix = dnsDomain
+		if strings.Contains(d.CreateArgs, "--dns=none") {
+			suffix = "k8s.local"
+		} else {
+			suffix = dnsDomain
+		}
+	case "azure":
+		if dnsDomain == "k8s.local" || strings.HasSuffix(dnsDomain, ".k8s.local") {
+			// Opt into gossip via a k8s.local KOPS_DNS_DOMAIN.
+			suffix = dnsDomain
+		} else {
+			// With --dns=none and the domain is not needed.
+			suffix = ""
+		}
 	default:
 		suffix = "k8s.local"
 	}
 
-	if len(jobName) > 79 { // SNS has char limit of 80
+	// Most pull request jobs have the "pull-" prefix.
+	jobName = strings.TrimPrefix(jobName, "pull-")
+
+	// SNS has char limit of 80
+	if len(jobName) > 79 {
 		jobName = jobName[:79]
 	}
+
 	if jobType == "presubmit" {
-		jobName = fmt.Sprintf("e2e-pr%s.%s", pullNumber, jobName)
+		jobName = fmt.Sprintf("pr%s-%s", pullNumber, jobName)
 	} else {
 		jobName = fmt.Sprintf("e2e-%s", jobName)
 	}
 
 	// GCP has char limit of 64
 	gcpLimit := 63 - (len(suffix) + 1) // 1 for the dot
-	if len(jobName) > gcpLimit && cloudProvider == "gce" {
+	if len(jobName) > gcpLimit && d.CloudProvider == "gce" {
 		jobName = jobName[:gcpLimit]
+		jobName = strings.TrimRight(jobName, "-")
 	}
-	return fmt.Sprintf("%v.%v", jobName, suffix), nil
+
+	if suffix != "" {
+		jobName = jobName + "." + suffix
+	}
+
+	return jobName, nil
 }
 
 // stateStore returns the kops state store to use
@@ -332,15 +443,16 @@ func (d *deployer) stateStore() string {
 		switch d.CloudProvider {
 		case "aws":
 			ctx := context.Background()
-			bucketName, err := d.aws.BucketName(ctx)
+			bucketName, err := d.aws.BucketName(ctx, aws.BucketTypeStateStore)
 			if err != nil {
 				klog.Fatalf("Failed to generate bucket name: %v", err)
 				return ""
 			}
-			d.createBucket = true
 			ss = "s3://" + bucketName
+		case "azure":
+			// TODO: Use dynamic container name
+			ss = "azureblob://stkopsstatestore/cluster-state"
 		case "gce":
-			d.createBucket = true
 			ss = "gs://" + gce.GCSBucketName(d.GCPProject, "state")
 		case "digitalocean":
 			ss = "do://e2e-kops-space"
@@ -356,11 +468,17 @@ func (d *deployer) discoveryStore() string {
 	if d.discoveryStoreName != "" {
 		return d.discoveryStoreName
 	}
-	discovery := os.Getenv("KOPS_DISCOVERY_STORE")
-	if discovery == "" {
+	discovery, found := os.LookupEnv("KOPS_DISCOVERY_STORE")
+	if !found {
 		switch d.CloudProvider {
 		case "aws":
-			discovery = "s3://k8s-kops-ci-prow"
+			ctx := context.Background()
+			bucketName, err := d.aws.BucketName(ctx, aws.BucketTypeDiscoveryStore)
+			if err != nil {
+				klog.Fatalf("Failed to generate bucket name: %v", err)
+				return ""
+			}
+			discovery = "s3://" + bucketName
 		}
 	}
 	d.discoveryStoreName = discovery
@@ -375,12 +493,26 @@ func (d *deployer) stagingStore() string {
 	if sb == "" {
 		switch d.CloudProvider {
 		case "gce":
-			d.createBucket = true
 			sb = "gs://" + gce.GCSBucketName(d.GCPProject, "staging")
 		}
 	}
 	d.stagingStoreName = sb
 	return sb
+}
+
+// resolvedKopsBinaryPath returns the path where the kops binary either is or will be placed.
+// When --kops-binary-path is provided it returns that value directly.
+// When --kops-version-marker or --kops-version is used, Up() downloads the binary to a
+// deterministic location under RunDir; this method returns that same path so callers
+// (including env()) can reference it before Up() has run.
+func (d *deployer) resolvedKopsBinaryPath() string {
+	if d.KopsBinaryPath != "" {
+		return d.KopsBinaryPath
+	}
+	if d.KopsVersionMarker != "" || d.KopsVersion != "" {
+		return filepath.Join(d.commonOptions.RunDir(), "kops")
+	}
+	return ""
 }
 
 // the default is $ARTIFACTS if set, otherwise ./_artifacts

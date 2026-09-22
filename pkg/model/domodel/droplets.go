@@ -95,6 +95,8 @@ func (d *DropletBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			droplet.Tags = append(droplet.Tags, do.TagKubernetesInstanceGroup+":"+ig.Name)
 		}
 
+		droplet.Tags = append(droplet.Tags, do.TagKubernetesInstanceRole+":"+string(ig.Spec.Role))
+
 		if d.Cluster.Spec.Networking.NetworkID != "" {
 			droplet.VPCUUID = fi.PtrTo(d.Cluster.Spec.Networking.NetworkID)
 		} else if d.Cluster.Spec.Networking.NetworkCIDR != "" {

@@ -58,6 +58,14 @@ resource "aws_s3_object" "kops-version-txt" {
   server_side_encryption = "AES256"
 }
 
+resource "aws_s3_object" "manifests-channels-kops-channels" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_object_manifests-channels-kops-channels_content")
+  key                    = "tests/minimal-gce-with-a-very-very-very-very-very-long-name.example.com/manifests/channels/kops-channels.yaml"
+  provider               = aws.files
+  server_side_encryption = "AES256"
+}
+
 resource "aws_s3_object" "manifests-etcdmanager-events-master-us-test1-a" {
   bucket                 = "testingBucket"
   content                = file("${path.module}/data/aws_s3_object_manifests-etcdmanager-events-master-us-test1-a_content")
@@ -397,10 +405,17 @@ resource "google_compute_firewall" "ssh-external-to-node-minimal-gce-with-a-very
 }
 
 resource "google_compute_instance_group_manager" "a-master-us-test1-a-minimal-gce-with-a-very-very-very-ve-j0fh8f" {
-  base_instance_name             = "master-us-test1-a"
+  base_instance_name = "master-us-test1-a"
+  lifecycle {
+    ignore_changes = [target_size]
+  }
   list_managed_instances_results = "PAGINATED"
   name                           = "a-master-us-test1-a-minimal-gce-with-a-very-very-very-ve-j0fh8f"
   target_size                    = 1
+  update_policy {
+    minimal_action = "REPLACE"
+    type           = "OPPORTUNISTIC"
+  }
   version {
     instance_template = google_compute_instance_template.master-us-test1-a-minimal-gce-with-a-very-very-very-very-very-long-name-example-com.self_link
   }
@@ -408,36 +423,63 @@ resource "google_compute_instance_group_manager" "a-master-us-test1-a-minimal-gc
 }
 
 resource "google_compute_instance_group_manager" "a-nodes-minimal-gce-with-a-very-very-very-very-very-long-qk78uj" {
-  base_instance_name             = "nodes"
+  base_instance_name = "nodes"
+  lifecycle {
+    ignore_changes = [target_size]
+  }
   list_managed_instances_results = "PAGINATED"
   name                           = "a-nodes-minimal-gce-with-a-very-very-very-very-very-long-qk78uj"
-  target_size                    = 2
+  target_size                    = 1
+  update_policy {
+    minimal_action = "REPLACE"
+    type           = "OPPORTUNISTIC"
+  }
   version {
     instance_template = google_compute_instance_template.nodes-minimal-gce-with-a-very-very-very-very-very-long-name-example-com.self_link
   }
   zone = "us-test1-a"
 }
 
+resource "google_compute_instance_group_manager" "b-nodes-minimal-gce-with-a-very-very-very-very-very-long-h6o2lg" {
+  base_instance_name = "nodes"
+  lifecycle {
+    ignore_changes = [target_size]
+  }
+  list_managed_instances_results = "PAGINATED"
+  name                           = "b-nodes-minimal-gce-with-a-very-very-very-very-very-long-h6o2lg"
+  target_size                    = 1
+  update_policy {
+    minimal_action = "REPLACE"
+    type           = "OPPORTUNISTIC"
+  }
+  version {
+    instance_template = google_compute_instance_template.nodes-minimal-gce-with-a-very-very-very-very-very-long-name-example-com.self_link
+  }
+  zone = "us-test1-b"
+}
+
 resource "google_compute_instance_template" "master-us-test1-a-minimal-gce-with-a-very-very-very-very-very-long-name-example-com" {
   can_ip_forward = true
   disk {
-    auto_delete  = true
-    boot         = true
-    device_name  = "persistent-disks-0"
-    disk_name    = ""
-    disk_size_gb = 64
-    disk_type    = "pd-standard"
-    interface    = ""
-    mode         = "READ_WRITE"
-    source       = ""
-    source_image = "https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/ubuntu-2004-focal-v20221018"
-    type         = "PERSISTENT"
+    auto_delete            = true
+    boot                   = true
+    device_name            = "persistent-disks-0"
+    disk_name              = ""
+    disk_size_gb           = 64
+    disk_type              = "pd-standard"
+    interface              = ""
+    mode                   = "READ_WRITE"
+    provisioned_iops       = 0
+    provisioned_throughput = 0
+    source                 = ""
+    source_image           = "https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/ubuntu-2604-resolute-amd64-v20221018"
+    type                   = "PERSISTENT"
   }
   labels = {
     "k8s-io-cluster-name"       = "minimal-gce-with-a-very-very-very-very-very-long-name-example-com"
     "k8s-io-instance-group"     = "master-us-test1-a"
-    "k8s-io-role-control-plane" = ""
-    "k8s-io-role-master"        = ""
+    "k8s-io-role-control-plane" = "control-plane"
+    "k8s-io-role-master"        = "master"
   }
   lifecycle {
     create_before_destroy = true
@@ -473,22 +515,24 @@ resource "google_compute_instance_template" "master-us-test1-a-minimal-gce-with-
 resource "google_compute_instance_template" "nodes-minimal-gce-with-a-very-very-very-very-very-long-name-example-com" {
   can_ip_forward = true
   disk {
-    auto_delete  = true
-    boot         = true
-    device_name  = "persistent-disks-0"
-    disk_name    = ""
-    disk_size_gb = 128
-    disk_type    = "pd-standard"
-    interface    = ""
-    mode         = "READ_WRITE"
-    source       = ""
-    source_image = "https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/ubuntu-2004-focal-v20221018"
-    type         = "PERSISTENT"
+    auto_delete            = true
+    boot                   = true
+    device_name            = "persistent-disks-0"
+    disk_name              = ""
+    disk_size_gb           = 128
+    disk_type              = "pd-standard"
+    interface              = ""
+    mode                   = "READ_WRITE"
+    provisioned_iops       = 0
+    provisioned_throughput = 0
+    source                 = ""
+    source_image           = "https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/ubuntu-2604-resolute-amd64-v20221018"
+    type                   = "PERSISTENT"
   }
   labels = {
     "k8s-io-cluster-name"   = "minimal-gce-with-a-very-very-very-very-very-long-name-example-com"
     "k8s-io-instance-group" = "nodes"
-    "k8s-io-role-node"      = ""
+    "k8s-io-role-node"      = "node"
   }
   lifecycle {
     create_before_destroy = true

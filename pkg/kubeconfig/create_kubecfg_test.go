@@ -115,7 +115,7 @@ func (f fakeKeyStore) MirrorTo(ctx context.Context, basedir vfs.Path) error {
 
 // build a generic minimal cluster
 func buildMinimalCluster(clusterName string, masterPublicName string, lbCert bool, nlb bool) *kops.Cluster {
-	cluster := testutils.BuildMinimalCluster(clusterName)
+	cluster := testutils.BuildMinimalClusterAWS(clusterName)
 	cluster.Spec.API.PublicName = masterPublicName
 	cluster.Spec.KubernetesVersion = "1.30.0"
 	if lbCert || nlb {
@@ -404,6 +404,26 @@ func TestBuildKubecfg(t *testing.T) {
 				User:          "testcluster",
 			},
 			wantClientCert: false,
+		},
+		{
+			name: "Test Kube Config Data with APIEndpoint set",
+			args: args{
+				cluster: publicCluster,
+				status:  fakeStatus,
+				CreateKubecfgOptions: CreateKubecfgOptions{
+					Admin:             DefaultKubecfgAdminLifetime,
+					Internal:          true,
+					OverrideAPIServer: "https://api.testcluster.example.com",
+				},
+			},
+			want: &KubeconfigBuilder{
+				Context:       "testcluster",
+				Server:        "https://api.testcluster.example.com",
+				TLSServerName: "api.internal.testcluster",
+				CACerts:       []byte(nextCertificate + certData),
+				User:          "testcluster",
+			},
+			wantClientCert: true,
 		},
 	}
 	for _, tt := range tests {

@@ -20,6 +20,15 @@ const (
 	// KubeAPIServer is the port where kube-apiserver listens.
 	KubeAPIServer = 443
 
+	// BGP is the port used by the BGP routing protocol (Calico node-to-node mesh).
+	BGP = 179
+
+	// EtcdMetricsPort is used to serve etcd metrics
+	EtcdMetricsPort = 2382
+
+	// KopsChannelsHealthCheck is the loopback port the kops-channels static pod serves /readyz on.
+	KopsChannelsHealthCheck = 3986
+
 	// NodeupChallenge is the port where nodeup listens for challenges.
 	NodeupChallenge = 3987
 
@@ -44,11 +53,17 @@ const (
 	// EtcdEventsQuarantinedClientPort is the port used by etcd when quarantined, for the events etcd
 	EtcdEventsQuarantinedClientPort = 3995
 
+	// EtcdLeasesQuarantinedClientPort is the port used by etcd when quarantined, for the leases etcd
+	EtcdLeasesQuarantinedClientPort = 4005
+
 	// EtcdMainGRPC is the GRPC port used by etcd-manager, for the main etcd
 	EtcdMainGRPC = 3996
 
 	// EtcdEventsGRPC is the GRPC port used by etcd-manager, for the events etcd
 	EtcdEventsGRPC = 3997
+
+	// EtcdLeasesGRPC is the GRPC port used by etcd-manager, for the leases etcd
+	EtcdLeasesGRPC = 4006
 
 	// DNSControllerGossipWeaveMesh is the port where dns-controller listens for the weave-mesh backend gossip
 	DNSControllerGossipWeaveMesh = 3998
@@ -59,10 +74,23 @@ const (
 	// ProtokubeGossipMemberlist is the port where protokube listens for the memberlist-backed gossip
 	ProtokubeGossipMemberlist = 4000
 
-	// 4001 is etcd main, 4002 is etcd events
-
+	// EtcdMainClientPort is the client port for the main etcd cluster
+	EtcdMainClientPort = 4001
+	// EtcdEventsClientPort is the client port for the events etcd cluster
+	EtcdEventsClientPort = 4002
 	// EtcdCiliumClientPort is the port were the Cilium etcd cluster listens
 	EtcdCiliumClientPort = 4003
+	// EtcdLeasesClientPort is the client port for the leases etcd cluster
+	EtcdLeasesClientPort = 4004
+
+	// EtcdMainPeerPort is the peer port for the main etcd cluster
+	EtcdMainPeerPort = 2380
+	// EtcdEventsPeerPort is the peer port for the events etcd cluster
+	EtcdEventsPeerPort = 2381
+	// EtcdCiliumPeerPort is the peer port for the cilium etcd cluster
+	EtcdCiliumPeerPort = 2382
+	// EtcdLeasesPeerPort is the peer port for the leases etcd cluster
+	EtcdLeasesPeerPort = 2383
 
 	// CiliumOperatorPrometheusPort is the port the Cilium Operator exposes metrics
 	CiliumPrometheusOperatorPort = 6942
@@ -81,6 +109,15 @@ const (
 
 	// KubeletAPI is the port where kubelet listens
 	KubeletAPI = 10250
+
+	// KubeProxyMetricsPort is used by kube-proxy to expose metrics
+	KubeProxyMetricsPort = 10249
+
+	// KubeSchedulerMetricsPort is used by kube-scheduler to expose metrics
+	KubeSchedulerMetricsPort = 10259
+
+	// KubeControllerManagerMetricsPort is used by kube-controller-manager to expose metrics
+	KubeControllerManagerMetricsPort = 10257
 )
 
 type PortRange struct {
@@ -99,5 +136,6 @@ func DNSGossipPortRanges() []PortRange {
 func ETCDPortRanges() []PortRange {
 	return []PortRange{
 		{Min: 3994, Max: 3997},
+		{Min: 4005, Max: 4006},
 	}
 }

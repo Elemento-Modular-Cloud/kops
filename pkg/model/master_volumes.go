@@ -264,21 +264,13 @@ func (b *MasterVolumeBuilder) addGCEVolume(c *fi.CloudupModelBuilderContext, pre
 		volumeType = DefaultGCEEtcdVolumeType
 	}
 
-	// TODO: Should no longer be needed because we trim prefixes
-	//// On GCE we are close to the length limits.  So,we remove the dashes from the keys
-	//// The name is normally something like "us-east1-a", and the dashes are particularly expensive
-	//// because of the escaping needed (3 characters for each dash)
-	//switch tf.cluster.Spec.CloudProvider {
-	//case string(kops.CloudProviderGCE):
-	//	// TODO: If we're still struggling for size, we don't need to put ourselves in the allmembers list
-	//	for i := range allMembers {
-	//		allMembers[i] = strings.Replace(allMembers[i], "-", "", -1)
-	//	}
-	//	meName = strings.Replace(meName, "-", "", -1)
-	//}
-
-	// This is the configuration of the etcd cluster
-	clusterSpec := m.Name + "/" + strings.Join(allMembers, ",")
+	// GCE labels are capped at 63 chars and EncodeGCELabel inflates non-alnum
+	// characters 3x, so a full member list overflows for clusters with many
+	// control planes (#17630). The historical "<name>/<allnames>" shape was
+	// only consumed by legacy protokube etcd bootstrap (removed in 2021); both
+	// kops's status reader and etcd-manager only read tokens[0]. Keep the "/"
+	// separator with a self-only allnames so older parsers still validate.
+	clusterSpec := m.Name + "/" + m.Name
 
 	clusterLabel := gce.LabelForCluster(b.ClusterName())
 
@@ -289,11 +281,14 @@ func (b *MasterVolumeBuilder) addGCEVolume(c *fi.CloudupModelBuilderContext, pre
 	tags[gce.GceLabelNameEtcdClusterPrefix+etcd.Name] = gce.EncodeGCELabel(clusterSpec)
 
 	// GCE disk names must match the following regular expression: '[a-z](?:[-a-z0-9]{0,61}[a-z0-9])?'
-	prefix = strings.Replace(prefix, ".", "-", -1)
+	prefix = strings.ReplaceAll(prefix, ".", "-")
 	if strings.IndexByte("0123456789-", prefix[0]) != -1 {
 		prefix = "d" + prefix
 	}
 	name := gce.ClusterSuffixedName(prefix, b.Cluster.ObjectMeta.Name, 63)
+
+	volumeIops := fi.ValueOf(m.VolumeIOPS)
+	volumeThroughput := fi.ValueOf(m.VolumeThroughput)
 
 	t := &gcetasks.Disk{
 		Name:      fi.PtrTo(name),
@@ -303,6 +298,13 @@ func (b *MasterVolumeBuilder) addGCEVolume(c *fi.CloudupModelBuilderContext, pre
 		SizeGB:     fi.PtrTo(int64(volumeSize)),
 		VolumeType: fi.PtrTo(volumeType),
 		Labels:     tags,
+	}
+
+	if volumeIops > 0 {
+		t.VolumeIops = fi.PtrTo(int64(volumeIops))
+	}
+	if volumeThroughput > 0 {
+		t.VolumeThroughput = fi.PtrTo(int64(volumeThroughput))
 	}
 
 	c.AddTask(t)
@@ -322,8 +324,6 @@ func (b *MasterVolumeBuilder) addHetznerVolume(c *fi.CloudupModelBuilderContext,
 		Labels:    tags,
 	}
 	c.AddTask(t)
-
-	return
 }
 
 func (b *MasterVolumeBuilder) addOpenstackVolume(c *fi.CloudupModelBuilderContext, name string, volumeSize int32, zone string, etcd kops.EtcdClusterSpec, m kops.EtcdMemberSpec, allMembers []string) error {
@@ -432,6 +432,4 @@ func (b *MasterVolumeBuilder) addScalewayVolume(c *fi.CloudupModelBuilderContext
 		Type:      fi.PtrTo(string(instance.VolumeVolumeTypeBSSD)),
 	}
 	c.AddTask(t)
-
-	return
 }

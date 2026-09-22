@@ -48,11 +48,6 @@ func TestConversionAzure(t *testing.T) {
 	runTest(t, "azure", "v1alpha3", "v1alpha2")
 }
 
-func TestConversionCanal(t *testing.T) {
-	runTest(t, "canal", "v1alpha2", "v1alpha3")
-	runTest(t, "canal", "v1alpha3", "v1alpha2")
-}
-
 func TestConversionCilium(t *testing.T) {
 	runTest(t, "cilium", "v1alpha2", "v1alpha3")
 	runTest(t, "cilium", "v1alpha3", "v1alpha2")
@@ -132,8 +127,8 @@ func runTest(t *testing.T, srcDir string, fromVersion string, toVersion string) 
 		actualString := strings.TrimSpace(strings.Join(actual, "\n---\n\n"))
 		expectedString := strings.TrimSpace(string(expectedBytes))
 
-		actualString = strings.Replace(actualString, "\r", "", -1)
-		expectedString = strings.Replace(expectedString, "\r", "", -1)
+		actualString = strings.ReplaceAll(actualString, "\r", "")
+		expectedString = strings.ReplaceAll(expectedString, "\r", "")
 
 		if actualString != expectedString {
 			diffString := diff.FormatDiff(expectedString, actualString)

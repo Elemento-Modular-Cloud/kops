@@ -107,6 +107,16 @@ func (b *KubeProxyBuilder) buildPod() (*v1.Pod, error) {
 		return nil, fmt.Errorf("KubeProxy not configured")
 	}
 
+	// On distributions where iptables is not functional (e.g., RHEL10+),
+	// we must use nftables proxy mode instead.
+	// In particular when we forced nftables on rhel10, we should also pass the --proxy-mode=nftables flag.
+	if b.Distribution.ForceNftables() {
+		if c.ProxyMode == "" || c.ProxyMode == "iptables" {
+			klog.Infof("Distribution %v requires nftables; overriding kube-proxy mode from %q to nftables", b.Distribution, c.ProxyMode)
+			c.ProxyMode = "nftables"
+		}
+	}
+
 	if c.Master == "" {
 		if b.IsMaster {
 			// As a special case, if this is the master, we point kube-proxy to the local IP
@@ -193,7 +203,7 @@ func (b *KubeProxyBuilder) buildPod() (*v1.Pod, error) {
 		container.Args = append(container.Args, sortedStrings(flags)...)
 	}
 	{
-		kubemanifest.AddHostPathMapping(pod, container, "kubeconfig", "/var/lib/kube-proxy/kubeconfig")
+		kubemanifest.AddHostPathMapping(pod, container, "kubeconfig", "/var/lib/kube-proxy")
 		// @note: mapping the host modules directory to fix the missing ipvs kernel module
 		kubemanifest.AddHostPathMapping(pod, container, "modules", "/lib/modules")
 
