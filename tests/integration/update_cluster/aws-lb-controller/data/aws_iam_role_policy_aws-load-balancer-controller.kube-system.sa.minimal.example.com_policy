@@ -47,6 +47,9 @@
         "ec2:DescribeSubnets",
         "ec2:DescribeVpcPeeringConnections",
         "ec2:DescribeVpcs",
+        "ec2:GetSecurityGroupsForVpc",
+        "elasticloadbalancing:DescribeCapacityReservation",
+        "elasticloadbalancing:DescribeListenerAttributes",
         "elasticloadbalancing:DescribeListenerCertificates",
         "elasticloadbalancing:DescribeListeners",
         "elasticloadbalancing:DescribeLoadBalancerAttributes",
@@ -55,7 +58,9 @@
         "elasticloadbalancing:DescribeTags",
         "elasticloadbalancing:DescribeTargetGroupAttributes",
         "elasticloadbalancing:DescribeTargetGroups",
-        "elasticloadbalancing:DescribeTargetHealth"
+        "elasticloadbalancing:DescribeTargetHealth",
+        "elasticloadbalancing:DescribeTrustStores",
+        "elasticloadbalancing:SetRulePriorities"
       ],
       "Effect": "Allow",
       "Resource": "*"
@@ -72,7 +77,9 @@
         "elasticloadbalancing:DeleteRule",
         "elasticloadbalancing:DeleteTargetGroup",
         "elasticloadbalancing:DeregisterTargets",
+        "elasticloadbalancing:ModifyCapacityReservation",
         "elasticloadbalancing:ModifyListener",
+        "elasticloadbalancing:ModifyListenerAttributes",
         "elasticloadbalancing:ModifyLoadBalancerAttributes",
         "elasticloadbalancing:ModifyRule",
         "elasticloadbalancing:ModifyTargetGroup",

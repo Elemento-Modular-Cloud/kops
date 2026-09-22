@@ -2,7 +2,6 @@ contents: |
   apiVersion: v1
   kind: Pod
   metadata:
-    creationTimestamp: null
     labels:
       k8s-app: kube-controller-manager
     name: kube-controller-manager
@@ -17,14 +16,12 @@ contents: |
       - --attach-detach-reconcile-sync-period=1m0s
       - --authentication-kubeconfig=/var/lib/kube-controller-manager/kubeconfig
       - --authorization-kubeconfig=/var/lib/kube-controller-manager/kubeconfig
-      - --cloud-config=/etc/kubernetes/in-tree-cloud.config
       - --cloud-provider=external
       - --cluster-cidr=100.96.0.0/11
       - --cluster-name=minimal.example.com
       - --cluster-signing-cert-file=/srv/kubernetes/kube-controller-manager/ca.crt
       - --cluster-signing-key-file=/srv/kubernetes/kube-controller-manager/ca.key
       - --configure-cloud-routes=true
-      - --feature-gates=InTreePluginAWSUnregister=true
       - --flex-volume-plugin-dir=/usr/libexec/kubernetes/kubelet-plugins/volume/exec/
       - --kubeconfig=/var/lib/kube-controller-manager/kubeconfig
       - --leader-elect=true
@@ -36,7 +33,7 @@ contents: |
       - --v=2
       command:
       - /go-runner
-      image: registry.k8s.io/kube-controller-manager-amd64:v1.27.0
+      image: registry.k8s.io/kube-controller-manager-amd64:v1.35.0
       livenessProbe:
         httpGet:
           host: 127.0.0.1
@@ -78,9 +75,6 @@ contents: |
         readOnly: true
       - mountPath: /etc/openssl
         name: etcopenssl
-        readOnly: true
-      - mountPath: /etc/kubernetes/in-tree-cloud.config
-        name: cloudconfig
         readOnly: true
       - mountPath: /srv/kubernetes/ca.crt
         name: cabundle
@@ -129,9 +123,6 @@ contents: |
     - hostPath:
         path: /etc/openssl
       name: etcopenssl
-    - hostPath:
-        path: /etc/kubernetes/in-tree-cloud.config
-      name: cloudconfig
     - hostPath:
         path: /srv/kubernetes/ca.crt
       name: cabundle

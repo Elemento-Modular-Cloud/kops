@@ -102,14 +102,21 @@ const TagNameKopsRole = "kubernetes.io/kops/role"
 // TagNameClusterOwnershipPrefix is the AWS tag used for ownership
 const TagNameClusterOwnershipPrefix = "kubernetes.io/cluster/"
 
+// TagNameSubnetInternalELB is the well-known subnet tag that designates a subnet for internal load balancers.
+const TagNameSubnetInternalELB = "kubernetes.io/role/internal-elb"
+
+// TagNameSubnetPublicELB is the well-known subnet tag that designates a subnet for public load balancers.
+const TagNameSubnetPublicELB = "kubernetes.io/role/elb"
+
 const tagNameDetachedInstance = "kops.k8s.io/detached-from-asg"
 
 const (
-	WellKnownAccountAmazonLinux2 = "137112412989"
-	WellKnownAccountDebian       = "136693071363"
-	WellKnownAccountFlatcar      = "075585003325"
-	WellKnownAccountRedhat       = "309956199498"
-	WellKnownAccountUbuntu       = "099720109477"
+	WellKnownAccountAmazonLinux2023 = "137112412989"
+	WellKnownAccountDebian          = "136693071363"
+	WellKnownAccountFlatcar         = "075585003325"
+	WellKnownAccountRedhat          = "309956199498"
+	WellKnownAccountUbuntu          = "099720109477"
+	WellKnownAccountRockyLinux      = "792107900819"
 )
 
 const instanceInServiceState = "InService"
@@ -226,7 +233,7 @@ type instanceTypes struct {
 	typeMap map[string]*ec2types.InstanceTypeInfo
 }
 
-var _ fi.Cloud = &awsCloudImplementation{}
+var _ fi.Cloud = (*awsCloudImplementation)(nil)
 
 func (c *awsCloudImplementation) ProviderID() kops.CloudProviderID {
 	return kops.CloudProviderAWS
@@ -757,32 +764,7 @@ func getKarpenterGroups(c AWSCloud, cluster *kops.Cluster, instancegroups []*kop
 func buildKarpenterGroup(c AWSCloud, cluster *kops.Cluster, ig *kops.InstanceGroup, nodes []v1.Node) (*cloudinstances.CloudInstanceGroup, error) {
 	ctx := context.TODO()
 	nodeMap := cloudinstances.GetNodeMap(nodes, cluster)
-	instances := make(map[string]*ec2types.Instance)
-	updatedInstances := make(map[string]*ec2types.Instance)
 	clusterName := c.Tags()[TagClusterName]
-	var version string
-
-	{
-		input := &ec2.DescribeLaunchTemplatesInput{
-			Filters: []ec2types.Filter{
-				NewEC2Filter("tag:"+identity_aws.CloudTagInstanceGroupName, ig.ObjectMeta.Name),
-				NewEC2Filter("tag:"+TagClusterName, clusterName),
-			},
-		}
-		var list []ec2types.LaunchTemplate
-		paginator := ec2.NewDescribeLaunchTemplatesPaginator(c.EC2(), input)
-		for paginator.HasMorePages() {
-			page, err := paginator.NextPage(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("error listing launch templates: %v", err)
-			}
-			list = append(list, page.LaunchTemplates...)
-		}
-		lt := list[0]
-		versionNumber := *lt.LatestVersionNumber
-		version = strconv.Itoa(int(versionNumber))
-
-	}
 
 	karpenterGroup := &cloudinstances.CloudInstanceGroup{
 		InstanceGroup: ig,
@@ -805,51 +787,12 @@ func buildKarpenterGroup(c AWSCloud, cluster *kops.Cluster, ig *kops.InstanceGro
 		for _, r := range result.Reservations {
 			for _, i := range r.Instances {
 				id := aws.ToString(i.InstanceId)
-				instances[id] = &i
+				cloudInstance, _ := karpenterGroup.NewCloudInstance(aws.ToString(i.InstanceId), cloudinstances.CloudInstanceStatusUpToDate, nodeMap[id])
+				addCloudInstanceData(cloudInstance, &i)
 			}
 		}
 	}
 
-	klog.V(2).Infof("found %d karpenter instances", len(instances))
-
-	{
-		req := &ec2.DescribeInstancesInput{
-			Filters: []ec2types.Filter{
-				NewEC2Filter("tag:"+identity_aws.CloudTagInstanceGroupName, ig.ObjectMeta.Name),
-				NewEC2Filter("tag:"+TagClusterName, clusterName),
-				NewEC2Filter("instance-state-name", "pending", "running", "stopping", "stopped"),
-				NewEC2Filter("tag:aws:ec2launchtemplate:version", version),
-			},
-		}
-
-		result, err := c.EC2().DescribeInstances(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-
-		for _, r := range result.Reservations {
-			for _, i := range r.Instances {
-				id := aws.ToString(i.InstanceId)
-				updatedInstances[id] = &i
-			}
-		}
-	}
-	klog.V(2).Infof("found %d updated instances", len(updatedInstances))
-
-	{
-		for _, instance := range instances {
-			id := *instance.InstanceId
-			_, ready := updatedInstances[id]
-			var status string
-			if ready {
-				status = cloudinstances.CloudInstanceStatusUpToDate
-			} else {
-				status = cloudinstances.CloudInstanceStatusNeedsUpdate
-			}
-			cloudInstance, _ := karpenterGroup.NewCloudInstance(id, status, nodeMap[id])
-			addCloudInstanceData(cloudInstance, instance)
-		}
-	}
 	return karpenterGroup, nil
 }
 
@@ -1766,7 +1709,7 @@ func FindLatestELBV2ByNameTag(loadBalancers []*LoadBalancerInfo, findNameTag str
 		} else {
 			n, err := strconv.Atoi(revisionTag)
 			if err != nil {
-				klog.Warningf("ignoring load balancer %q with revision %q", aws.ToString(lb.LoadBalancer.LoadBalancerArn), revision)
+				klog.Warningf("ignoring load balancer %q with revision %d", aws.ToString(lb.LoadBalancer.LoadBalancerArn), revision)
 				continue
 			}
 			revision = n
@@ -1966,23 +1909,7 @@ func resolveImage(ctx context.Context, ssmClient awsinterfaces.SSMAPI, ec2Client
 			request.Owners = []string{"self"}
 			request.Filters = append(request.Filters, NewEC2Filter("name", name))
 		} else if len(tokens) == 2 {
-			owner := tokens[0]
-
-			// Check for well known owner aliases
-			switch owner {
-			case "amazon", "amazon.com":
-				owner = WellKnownAccountAmazonLinux2
-			case "debian10":
-				owner = WellKnownAccountDebian
-			case "debian11":
-				owner = WellKnownAccountDebian
-			case "flatcar":
-				owner = WellKnownAccountFlatcar
-			case "redhat", "redhat.com":
-				owner = WellKnownAccountRedhat
-			case "ubuntu":
-				owner = WellKnownAccountUbuntu
-			}
+			owner := ResolveImageOwnerAlias(tokens[0])
 
 			request.Owners = []string{owner}
 			request.Filters = append(request.Filters, NewEC2Filter("name", tokens[1]))
@@ -2017,6 +1944,26 @@ func resolveImage(ctx context.Context, ssmClient awsinterfaces.SSMAPI, ec2Client
 
 	klog.V(4).Infof("Resolved image %q", aws.ToString(image.ImageId))
 	return image, nil
+}
+
+// ResolveImageOwnerAlias maps a well-known image owner alias (e.g. "ubuntu") to its
+// AWS account ID. Unrecognized owners are returned unchanged.
+func ResolveImageOwnerAlias(owner string) string {
+	switch owner {
+	case "amazon", "amazon.com":
+		return WellKnownAccountAmazonLinux2023
+	case "debian", "debian11":
+		return WellKnownAccountDebian
+	case "flatcar":
+		return WellKnownAccountFlatcar
+	case "redhat", "redhat.com":
+		return WellKnownAccountRedhat
+	case "ubuntu":
+		return WellKnownAccountUbuntu
+	case "rocky", "rockylinux":
+		return WellKnownAccountRockyLinux
+	}
+	return owner
 }
 
 func (c *awsCloudImplementation) DescribeAvailabilityZones() ([]ec2types.AvailabilityZone, error) {
@@ -2184,13 +2131,14 @@ func findDNSName(cloud AWSCloud, cluster *kops.Cluster) (string, error) {
 	if cluster.Spec.API.LoadBalancer == nil {
 		return "", nil
 	}
-	if cluster.Spec.API.LoadBalancer.Class == kops.LoadBalancerClassClassic {
+	switch cluster.Spec.API.LoadBalancer.Class {
+	case kops.LoadBalancerClassClassic:
 		if lb, err := cloud.FindELBByNameTag(name); err != nil {
 			return "", fmt.Errorf("error looking for AWS ELB: %v", err)
 		} else if lb != nil {
 			return aws.ToString(lb.DNSName), nil
 		}
-	} else if cluster.Spec.API.LoadBalancer.Class == kops.LoadBalancerClassNetwork {
+	case kops.LoadBalancerClassNetwork:
 		allLoadBalancers, err := ListELBV2LoadBalancers(ctx, cloud)
 		if err != nil {
 			return "", fmt.Errorf("looking for AWS NLB: %w", err)
@@ -2208,8 +2156,8 @@ func findDNSName(cloud AWSCloud, cluster *kops.Cluster) (string, error) {
 func (c *awsCloudImplementation) DefaultInstanceType(cluster *kops.Cluster, ig *kops.InstanceGroup) (string, error) {
 	var candidates []ec2types.InstanceType
 
-	switch ig.Spec.Role {
-	case kops.InstanceGroupRoleControlPlane, kops.InstanceGroupRoleNode, kops.InstanceGroupRoleAPIServer:
+	switch {
+	case ig.Spec.Role.HasNode() || ig.Spec.Role.IsControlPlaneType():
 		// t3.medium is the cheapest instance with 4GB of mem, unlimited by default, fast and has decent network
 		// c5.large and c4.large are a good second option in case t3.medium is not available in the AZ
 		candidates = []ec2types.InstanceType{
@@ -2219,7 +2167,7 @@ func (c *awsCloudImplementation) DefaultInstanceType(cluster *kops.Cluster, ig *
 			ec2types.InstanceTypeT4gMedium,
 		}
 
-	case kops.InstanceGroupRoleBastion:
+	case ig.Spec.Role.HasBastion():
 		candidates = []ec2types.InstanceType{
 			ec2types.InstanceTypeT3Micro,
 			ec2types.InstanceTypeT2Micro,
@@ -2406,7 +2354,7 @@ func GetInstanceCertificateNames(instances *ec2.DescribeInstancesOutput) (addrs 
 		if iface.PrivateIpAddress != nil {
 			addrs = append(addrs, *iface.PrivateIpAddress)
 		}
-		if iface.Ipv6Addresses != nil && len(iface.Ipv6Addresses) > 0 {
+		if len(iface.Ipv6Addresses) > 0 {
 			addrs = append(addrs, *iface.Ipv6Addresses[0].Ipv6Address)
 		}
 		if iface.Association != nil && iface.Association.PublicIp != nil {

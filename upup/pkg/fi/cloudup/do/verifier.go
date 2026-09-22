@@ -39,7 +39,7 @@ type digitalOceanVerifier struct {
 	doClient *godo.Client
 }
 
-var _ bootstrap.Verifier = &digitalOceanVerifier{}
+var _ bootstrap.Verifier = (*digitalOceanVerifier)(nil)
 
 func NewVerifier(ctx context.Context, opt *DigitalOceanVerifierOptions) (bootstrap.Verifier, error) {
 	accessToken := os.Getenv("DIGITALOCEAN_ACCESS_TOKEN")
@@ -47,12 +47,8 @@ func NewVerifier(ctx context.Context, opt *DigitalOceanVerifierOptions) (bootstr
 		return nil, errors.New("DIGITALOCEAN_ACCESS_TOKEN is required")
 	}
 
-	tokenSource := &TokenSource{
-		AccessToken: accessToken,
-	}
-
-	oauthClient := oauth2.NewClient(ctx, tokenSource)
-	doClient := godo.NewClient(oauthClient)
+	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: accessToken})
+	doClient := godo.NewClient(oauth2.NewClient(ctx, tokenSource))
 
 	return &digitalOceanVerifier{
 		doClient: doClient,
@@ -107,7 +103,7 @@ func (o digitalOceanVerifier) VerifyToken(ctx context.Context, rawRequest *http.
 	}
 
 	if len(challengeEndpoints) == 0 {
-		return nil, fmt.Errorf("cannot determine challenge endpoint for server %q", serverID)
+		return nil, fmt.Errorf("cannot determine challenge endpoint for server %d", serverID)
 	}
 
 	result := &bootstrap.VerifyResult{

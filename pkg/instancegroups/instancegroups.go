@@ -67,6 +67,28 @@ func (v *ValidationTimeoutError) Is(err error) bool {
 	return ok
 }
 
+// DeregisterError represents a failure to deregister an instance from
+// the cloud's load balancers. The rolling update treats this as fatal
+// because continuing would leave traffic routed to nodes that are about
+// to be terminated.
+type DeregisterError struct {
+	err error
+}
+
+func (d *DeregisterError) Error() string {
+	return d.err.Error()
+}
+
+func (d *DeregisterError) Unwrap() error {
+	return d.err
+}
+
+// Is checks that a given error is a DeregisterError.
+func (d *DeregisterError) Is(err error) bool {
+	_, ok := err.(*DeregisterError)
+	return ok
+}
+
 // promptInteractive asks the user to continue, mostly copied from vendor/google.golang.org/api/examples/gmail.go.
 func promptInteractive(upgradedHostID, upgradedHostName string) (stopPrompting bool, err error) {
 	stopPrompting = false
@@ -160,7 +182,7 @@ func (c *RollingUpdateCluster) rollingUpdateInstanceGroup(ctx context.Context, g
 		maxSurge = 0
 	}
 
-	if group.InstanceGroup.Spec.Role == api.InstanceGroupRoleControlPlane && maxSurge != 0 {
+	if group.InstanceGroup.Spec.Role.HasControlPlane() && maxSurge != 0 {
 		// Control plane nodes are incapable of surging because they rely on registering themselves through
 		// the local apiserver. That apiserver depends on the local etcd, which relies on being
 		// joined to the etcd cluster.
@@ -432,7 +454,7 @@ func (c *RollingUpdateCluster) drainTerminateAndWait(ctx context.Context, u *clo
 
 			if err := c.drainNode(ctx, u); err != nil {
 				if c.FailOnDrainError {
-					return fmt.Errorf("failed to drain node %q: %v", nodeName, err)
+					return fmt.Errorf("failed to drain node %q: %w", nodeName, err)
 				}
 				klog.Infof("Ignoring error draining node %q: %v", nodeName, err)
 			}
@@ -700,7 +722,9 @@ func (c *RollingUpdateCluster) drainNode(ctx context.Context, u *cloudinstances.
 
 	if shouldDeregister {
 		if err := c.Cloud.DeregisterInstance(u); err != nil {
-			return fmt.Errorf("error deregistering instance %q, node %q: %w", u.ID, u.Node.Name, err)
+			return &DeregisterError{
+				err: fmt.Errorf("error deregistering instance %q, node %q: %w", u.ID, u.Node.Name, err),
+			}
 		}
 	}
 

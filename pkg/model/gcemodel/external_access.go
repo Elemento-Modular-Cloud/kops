@@ -64,7 +64,7 @@ func (b *ExternalAccessModelBuilder) Build(c *fi.CloudupModelBuilderContext) err
 		})
 		b.AddFirewallRulesTasks(c, "bastion-to-master-ssh", &gcetasks.FirewallRule{
 			Lifecycle:  b.Lifecycle,
-			TargetTags: []string{b.GCETagForRole(kops.InstanceGroupRoleControlPlane), b.GCETagForRole("Master")},
+			TargetTags: append(b.GCETagsForAPIServerTargets(), b.GCETagForRole("Master")),
 			Allowed:    []string{"tcp:22"},
 			SourceTags: []string{b.GCETagForRole(kops.InstanceGroupRoleBastion)},
 			Network:    network,
@@ -83,7 +83,7 @@ func (b *ExternalAccessModelBuilder) Build(c *fi.CloudupModelBuilderContext) err
 		}
 		b.AddFirewallRulesTasks(c, "ssh-external-to-master", &gcetasks.FirewallRule{
 			Lifecycle:    b.Lifecycle,
-			TargetTags:   []string{b.GCETagForRole(kops.InstanceGroupRoleControlPlane), b.GCETagForRole("Master")},
+			TargetTags:   append(b.GCETagsForAPIServerTargets(), b.GCETagForRole("Master")),
 			Allowed:      []string{"tcp:22"},
 			SourceRanges: b.Cluster.Spec.SSHAccess,
 			Network:      network,
@@ -135,7 +135,7 @@ func (b *ExternalAccessModelBuilder) Build(c *fi.CloudupModelBuilderContext) err
 		}
 		b.AddFirewallRulesTasks(c, "kubernetes-master-https", &gcetasks.FirewallRule{
 			Lifecycle:    b.Lifecycle,
-			TargetTags:   []string{b.GCETagForRole(kops.InstanceGroupRoleControlPlane), b.GCETagForRole("Master")},
+			TargetTags:   append(b.GCETagsForAPIServerTargets(), b.GCETagForRole("Master")),
 			Allowed:      []string{"tcp:443"},
 			SourceRanges: b.Cluster.Spec.API.Access,
 			Network:      network,
@@ -148,7 +148,7 @@ func (b *ExternalAccessModelBuilder) Build(c *fi.CloudupModelBuilderContext) err
 				Network:      network,
 				Family:       gcetasks.AddressFamilyIPv4, // ip alias is always ipv4
 				SourceRanges: []string{b.Cluster.Spec.Networking.PodCIDR},
-				TargetTags:   []string{b.GCETagForRole(kops.InstanceGroupRoleControlPlane)},
+				TargetTags:   b.GCETagsForAPIServerTargets(),
 				Allowed:      []string{"tcp:" + strconv.Itoa(wellknownports.KubeAPIServer)},
 			})
 		}

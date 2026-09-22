@@ -38,8 +38,8 @@ type SSHKey struct {
 	KeyFingerprint *string
 }
 
-var _ fi.CompareWithID = &SSHKey{}
-var _ fi.CloudupTaskNormalize = &SSHKey{}
+var _ fi.CompareWithID = (*SSHKey)(nil)
+var _ fi.CloudupTaskNormalize = (*SSHKey)(nil)
 
 func (e *SSHKey) CompareWithID() *string {
 	return e.Name
@@ -108,8 +108,8 @@ func (s *SSHKey) CheckChanges(a, e, changes *SSHKey) error {
 }
 
 func openstackKeyPairName(org string) string {
-	name := strings.Replace(org, ".", "-", -1)
-	name = strings.Replace(name, ":", "_", -1)
+	name := strings.ReplaceAll(org, ".", "-")
+	name = strings.ReplaceAll(name, ":", "_")
 	return name
 }
 

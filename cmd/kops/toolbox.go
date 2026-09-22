@@ -21,6 +21,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"k8s.io/kops/pkg/commands/commandutils"
+	"k8s.io/kops/pkg/commands/toolbox"
 	"k8s.io/kubectl/pkg/util/i18n"
 )
 
@@ -37,6 +38,8 @@ func NewCmdToolbox(f commandutils.Factory, out io.Writer) *cobra.Command {
 	cmd.AddCommand(NewCmdToolboxTemplate(f, out))
 	cmd.AddCommand(NewCmdToolboxInstanceSelector(f, out))
 	cmd.AddCommand(NewCmdToolboxAddons(out))
+
+	cmd.AddCommand(toolbox.BuildClusterAPICommand(f, out))
 
 	return cmd
 }

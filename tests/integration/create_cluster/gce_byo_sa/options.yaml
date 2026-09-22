@@ -5,6 +5,6 @@ ControlPlaneZones:
 - us-test1-a
 CloudProvider: gce
 Networking: cni
-KubernetesVersion: v1.21.0
+KubernetesVersion: v1.35.0
 Project: testproject
 GCEServiceAccount: test-account@testproject.iam.gserviceaccount.com

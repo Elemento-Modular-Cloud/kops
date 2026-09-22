@@ -17,12 +17,9 @@ limitations under the License.
 package model
 
 import (
-	"encoding/json"
 	"io"
-	"reflect"
 	"testing"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/apis/nodeup"
 	"k8s.io/kops/pkg/diff"
@@ -31,44 +28,12 @@ import (
 )
 
 func TestBuildAzure(t *testing.T) {
-	const (
-		subscriptionID    = "subID"
-		tenantID          = "tenantID"
-		resourceGroupName = "test-resource-group"
-		routeTableName    = "test-route-table"
-		vnetName          = "test-vnet"
-	)
-	cluster := &kops.Cluster{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "testcluster.test.com",
-		},
-		Spec: kops.ClusterSpec{
-			CloudProvider: kops.CloudProviderSpec{
-				Azure: &kops.AzureSpec{
-					SubscriptionID:    subscriptionID,
-					TenantID:          tenantID,
-					ResourceGroupName: resourceGroupName,
-					RouteTableName:    routeTableName,
-				},
-			},
-			Networking: kops.NetworkingSpec{
-				NetworkID: vnetName,
-				Subnets: []kops.ClusterSubnetSpec{
-					{
-						Name:   "test-subnet",
-						Region: "eastus",
-					},
-				},
-			},
-			KubeAPIServer: &kops.KubeAPIServerConfig{},
-		},
-	}
-
-	nodeupConfig, bootConfig := nodeup.NewConfig(cluster, &kops.InstanceGroup{})
 	b := &CloudConfigBuilder{
 		NodeupModelContext: &NodeupModelContext{
-			BootConfig:   bootConfig,
-			NodeupConfig: nodeupConfig,
+			BootConfig: &nodeup.BootConfig{
+				CloudProvider: kops.CloudProviderAzure,
+			},
+			NodeupConfig: &nodeup.Config{},
 			HasAPIServer: true,
 		},
 	}
@@ -78,43 +43,12 @@ func TestBuildAzure(t *testing.T) {
 	if err := b.Build(ctx); err != nil {
 		t.Fatalf("unexpected error from Build(): %v", err)
 	}
-	var task *nodetasks.File
+	// Azure reads its cloud config from the azure-cloud-provider Secret, so
+	// nodeup must not write a cloud config file.
 	for _, v := range ctx.Tasks {
 		if f, ok := v.(*nodetasks.File); ok {
-			task = f
-			break
+			t.Errorf("unexpected File task for Azure: %q", f.Path)
 		}
-	}
-	if task == nil {
-		t.Fatalf("no File task found")
-	}
-	r, err := task.Contents.Open()
-	if err != nil {
-		t.Fatalf("unexpected error from task.Contents.Open(): %v", err)
-	}
-	data, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("unexpected error from io.ReadAll(): %v", err)
-	}
-	var actual azureCloudConfig
-	if err := json.Unmarshal(data, &actual); err != nil {
-		t.Fatalf("unexpected error from json.Unmarshal(%q): %v", string(data), err)
-	}
-	expected := azureCloudConfig{
-		CloudConfigType:             "file",
-		SubscriptionID:              subscriptionID,
-		TenantID:                    tenantID,
-		Location:                    "eastus",
-		VMType:                      "vmss",
-		ResourceGroup:               resourceGroupName,
-		RouteTableName:              routeTableName,
-		VnetName:                    vnetName,
-		UseInstanceMetadata:         true,
-		UseManagedIdentityExtension: true,
-		DisableAvailabilitySetNodes: true,
-	}
-	if !reflect.DeepEqual(actual, expected) {
-		t.Errorf("expected %+v, but got %+v", expected, actual)
 	}
 }
 
@@ -157,6 +91,52 @@ func TestBuildAWSCustomNodeIPFamilies(t *testing.T) {
 
 	actual := string(awsCloudConfig)
 	expected := "[global]\nNodeIPFamilies = ipv6\n"
+	if actual != expected {
+		diffString := diff.FormatDiff(expected, actual)
+		t.Errorf("actual did not match expected:\n%s\n", diffString)
+	}
+}
+
+func TestBuildAWSNLBSecurityGroupMode(t *testing.T) {
+	nlbSecurityGroupMode := "Managed"
+	b := &CloudConfigBuilder{
+		NodeupModelContext: &NodeupModelContext{
+			BootConfig: &nodeup.BootConfig{
+				CloudProvider: kops.CloudProviderAWS,
+			},
+			NodeupConfig: &nodeup.Config{
+				NLBSecurityGroupMode: &nlbSecurityGroupMode,
+			},
+			HasAPIServer: true,
+		},
+	}
+	ctx := &fi.NodeupModelBuilderContext{
+		Tasks: map[string]fi.NodeupTask{},
+	}
+	if err := b.Build(ctx); err != nil {
+		t.Fatalf("unexpected error from Build(): %v", err)
+	}
+	var task *nodetasks.File
+	for _, v := range ctx.Tasks {
+		if f, ok := v.(*nodetasks.File); ok && f.Path == CloudConfigFilePath {
+			task = f
+			break
+		}
+	}
+	if task == nil {
+		t.Fatalf("no File task found")
+	}
+	r, err := task.Contents.Open()
+	if err != nil {
+		t.Fatalf("unexpected error from task.Contents.Open(): %v", err)
+	}
+	awsCloudConfig, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("unexpected error from ReadAll(): %v", err)
+	}
+
+	actual := string(awsCloudConfig)
+	expected := "[global]\nNLBSecurityGroupMode = Managed\n"
 	if actual != expected {
 		diffString := diff.FormatDiff(expected, actual)
 		t.Errorf("actual did not match expected:\n%s\n", diffString)

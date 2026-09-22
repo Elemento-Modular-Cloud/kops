@@ -110,8 +110,8 @@
         "StringEquals": {
           "aws:RequestTag/KubernetesCluster": "privateciliumadvanced.example.com",
           "ec2:CreateAction": [
-            "CreateVolume",
-            "CreateSnapshot"
+            "CopyVolumes",
+            "CreateVolume"
           ]
         }
       },
@@ -175,6 +175,24 @@
     },
     {
       "Action": [
+        "kms:Decrypt",
+        "kms:Encrypt",
+        "kms:GenerateDataKey*",
+        "kms:ReEncrypt*"
+      ],
+      "Condition": {
+        "StringLike": {
+          "kms:ViaService": [
+            "ec2.us-test-1.amazonaws.com",
+            "s3.*.amazonaws.com"
+          ]
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "*"
+    },
+    {
+      "Action": [
         "autoscaling:DescribeAutoScalingGroups",
         "autoscaling:DescribeAutoScalingInstances",
         "autoscaling:DescribeLaunchConfigurations",
@@ -185,9 +203,9 @@
         "ec2:CreateNetworkInterface",
         "ec2:CreateTags",
         "ec2:DeleteNetworkInterface",
-        "ec2:DescribeAccountAttributes",
         "ec2:DescribeAvailabilityZones",
         "ec2:DescribeImages",
+        "ec2:DescribeInstanceTopology",
         "ec2:DescribeInstanceTypes",
         "ec2:DescribeInstances",
         "ec2:DescribeLaunchTemplateVersions",
@@ -197,11 +215,10 @@
         "ec2:DescribeSecurityGroups",
         "ec2:DescribeSubnets",
         "ec2:DescribeTags",
+        "ec2:DescribeVolumeStatus",
         "ec2:DescribeVolumes",
         "ec2:DescribeVolumesModifications",
-        "ec2:DescribeVpcPeeringConnections",
         "ec2:DescribeVpcs",
-        "ec2:DetachNetworkInterface",
         "ec2:GetInstanceTypesFromInstanceRequirements",
         "ec2:ModifyNetworkInterfaceAttribute",
         "ec2:UnassignPrivateIpAddresses",
@@ -209,18 +226,12 @@
         "elasticloadbalancing:DescribeLoadBalancerAttributes",
         "elasticloadbalancing:DescribeLoadBalancerPolicies",
         "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeTargetGroupAttributes",
         "elasticloadbalancing:DescribeTargetGroups",
         "elasticloadbalancing:DescribeTargetHealth",
         "iam:CreateServiceLinkedRole",
-        "iam:GetServerCertificate",
-        "iam:ListServerCertificates",
         "kms:CreateGrant",
-        "kms:Decrypt",
         "kms:DescribeKey",
-        "kms:Encrypt",
-        "kms:GenerateDataKey*",
-        "kms:GenerateRandom",
-        "kms:ReEncrypt*",
         "sqs:DeleteMessage",
         "sqs:ReceiveMessage"
       ],
@@ -256,6 +267,7 @@
         "elasticloadbalancing:ModifyListener",
         "elasticloadbalancing:ModifyLoadBalancerAttributes",
         "elasticloadbalancing:ModifyTargetGroup",
+        "elasticloadbalancing:ModifyTargetGroupAttributes",
         "elasticloadbalancing:RegisterInstancesWithLoadBalancer",
         "elasticloadbalancing:RegisterTargets",
         "elasticloadbalancing:SetLoadBalancerPoliciesForBackendServer",
@@ -271,8 +283,8 @@
     },
     {
       "Action": [
+        "ec2:CopyVolumes",
         "ec2:CreateSecurityGroup",
-        "ec2:CreateSnapshot",
         "ec2:CreateVolume",
         "elasticloadbalancing:CreateListener",
         "elasticloadbalancing:CreateLoadBalancer",

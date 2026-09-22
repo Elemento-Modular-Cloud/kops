@@ -133,7 +133,7 @@ func (o *Ocean) find(svc spotinst.InstanceGroupService) (*aws.Cluster, error) {
 	return out, nil
 }
 
-var _ fi.CloudupHasCheckExisting = &Ocean{}
+var _ fi.CloudupHasCheckExisting = (*Ocean)(nil)
 
 func (o *Ocean) Find(c *fi.CloudupContext) (*Ocean, error) {
 	cloud := awsup.GetCloud(c)
@@ -230,7 +230,7 @@ func (o *Ocean) Find(c *fi.CloudupContext) (*Ocean, error) {
 
 		// Tags.
 		{
-			if lc.Tags != nil && len(lc.Tags) > 0 {
+			if len(lc.Tags) > 0 {
 				actual.Tags = make(map[string]string)
 				for _, tag := range lc.Tags {
 					actual.Tags[fi.ValueOf(tag.Key)] = fi.ValueOf(tag.Value)
@@ -721,7 +721,7 @@ func (_ *Ocean) update(cloud awsup.AWSCloud, a, e, changes *Ocean) error {
 			changed = true
 		}
 
-		//Spread nodes by.
+		// Spread nodes by.
 		if changes.SpreadNodesBy != nil {
 			if ocean.Strategy == nil {
 				ocean.Strategy = new(aws.Strategy)

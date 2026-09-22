@@ -27,6 +27,66 @@ import (
 	"k8s.io/kops/util/pkg/hashing"
 )
 
+func TestBaseURL_OverridesVersionFromKopsBaseURL(t *testing.T) {
+	origVersion := kops.Version
+	t.Cleanup(func() {
+		kops.Version = origVersion
+		kopsBaseURL = nil
+	})
+
+	tests := []struct {
+		name            string
+		kopsBaseURL     string
+		expectedVersion string
+	}{
+		{
+			name:            "postsubmit URL",
+			kopsBaseURL:     "https://storage.googleapis.com/k8s-staging-kops/kops/releases/1.35.0-beta.2+v1.36.0-beta.1-384-gf369c3ab16",
+			expectedVersion: "1.35.0-beta.2+v1.36.0-beta.1-384-gf369c3ab16",
+		},
+		{
+			name:            "postsubmit URL with trailing slash",
+			kopsBaseURL:     "https://storage.googleapis.com/k8s-staging-kops/kops/releases/1.35.0-beta.2+v1.36.0-beta.1-384-gf369c3ab16/",
+			expectedVersion: "1.35.0-beta.2+v1.36.0-beta.1-384-gf369c3ab16",
+		},
+		{
+			name:            "CI URL",
+			kopsBaseURL:     "https://storage.googleapis.com/k8s-staging-kops/kops/ci/1.35.0-beta.2+abc123",
+			expectedVersion: "1.35.0-beta.2+abc123",
+		},
+		{
+			name:            "CI URL with trailing slash",
+			kopsBaseURL:     "https://storage.googleapis.com/k8s-staging-kops/kops/ci/1.35.0-beta.2+abc123/",
+			expectedVersion: "1.35.0-beta.2+abc123",
+		},
+		{
+			name:            "release URL",
+			kopsBaseURL:     "https://artifacts.k8s.io/binaries/kops/1.35.0",
+			expectedVersion: "1.35.0",
+		},
+		{
+			name:            "same version as binary does not override",
+			kopsBaseURL:     fmt.Sprintf("https://example.com/kops/%s", origVersion),
+			expectedVersion: origVersion,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			kops.Version = origVersion
+			kopsBaseURL = nil
+			t.Setenv("KOPS_BASE_URL", tc.kopsBaseURL)
+
+			_, err := BaseURL()
+			if err != nil {
+				t.Fatalf("BaseURL() error: %v", err)
+			}
+			if kops.Version != tc.expectedVersion {
+				t.Errorf("kops.Version = %q, want %q", kops.Version, tc.expectedVersion)
+			}
+		})
+	}
+}
+
 func Test_BuildMirroredAsset(t *testing.T) {
 	tests := []struct {
 		url      string
@@ -36,15 +96,15 @@ func Test_BuildMirroredAsset(t *testing.T) {
 		{
 			url: "https://artifacts.k8s.io/binaries/kops/%s/linux/amd64/nodeup",
 			expected: []string{
-				"https://artifacts.k8s.io/binaries/kops/1.32.0-beta.1/linux/amd64/nodeup",
-				"https://github.com/kubernetes/kops/releases/download/v1.32.0-beta.1/nodeup-linux-amd64",
+				"https://artifacts.k8s.io/binaries/kops/" + kops.Version + "/linux/amd64/nodeup",
+				"https://github.com/kubernetes/kops/releases/download/v" + kops.Version + "/nodeup-linux-amd64",
 			},
 		},
 		{
 			url: "https://artifacts.k8s.io/binaries/kops/%s/linux/arm64/nodeup",
 			expected: []string{
-				"https://artifacts.k8s.io/binaries/kops/1.32.0-beta.1/linux/arm64/nodeup",
-				"https://github.com/kubernetes/kops/releases/download/v1.32.0-beta.1/nodeup-linux-arm64",
+				"https://artifacts.k8s.io/binaries/kops/" + kops.Version + "/linux/arm64/nodeup",
+				"https://github.com/kubernetes/kops/releases/download/v" + kops.Version + "/nodeup-linux-arm64",
 			},
 		},
 	}

@@ -1,0 +1,390 @@
+#!/usr/bin/env bash
+
+# Copyright 2026 The Kubernetes Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+
+BIN_DIR="${REPO_ROOT}/.build/bin"
+mkdir -p "${BIN_DIR}"
+export PATH="${BIN_DIR}:$PATH"
+
+source "${REPO_ROOT}"/tests/e2e/scenarios/lib/common.sh
+
+# AI Conformance requirements:
+# - Kubernetes 1.35
+# - NVIDIA L4 Instances (g6.xlarge on AWS)
+# - Gateway API
+# - Gang Scheduling (Kueue)
+# - Robust Controller (KubeRay)
+
+K8S_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt)
+export K8S_VERSION
+
+export CLOUD_PROVIDER=aws
+# Ensure region with L4 (g6) availability
+export AWS_REGION="${AWS_REGION:-us-east-2}"
+SCENARIO_ROOT="${REPO_ROOT}/tests/e2e/scenarios/ai-conformance"
+
+# Check for g6.xlarge availability in the region
+echo "Checking availability of g6.xlarge in ${AWS_REGION}..."
+(cd "${SCENARIO_ROOT}/tools/check-aws-availability" && go build -o check-aws-availability main.go)
+AVAILABILITY=$("${SCENARIO_ROOT}/tools/check-aws-availability/check-aws-availability" -region "${AWS_REGION}" -instance-type g6.xlarge)
+if [[ "${AVAILABILITY}" == "false" ]]; then
+  echo "Error: g6.xlarge instances are not available in ${AWS_REGION}. Please choose a region with L4 GPU support."
+  exit 1
+fi
+rm -f "${SCENARIO_ROOT}/tools/check-aws-availability/check-aws-availability"
+
+# Put kOps onto PATH
+kops-acquire-latest
+cp "${KOPS}" "${BIN_DIR}/kops"
+
+# Cluster Configuration
+# - Networking: Cilium with Gateway API enabled
+# - Nodes: c5.large (we need some non-GPU nodes for non-GPU workloads)
+# - NVIDIA driver and runtime are managed by GPU Operator (not kOps)
+# - Cluster Autoscaler: For Cluster Autoscaling of GPU Nodes
+# - Metrics Server: For HPA support
+OVERRIDES="${OVERRIDES-} --networking=cilium"
+OVERRIDES="${OVERRIDES} --set=cluster.spec.networking.cilium.gatewayAPI.enabled=true"
+OVERRIDES="${OVERRIDES} --set=cluster.spec.addons[0].manifest=https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml"
+OVERRIDES="${OVERRIDES} --node-size=c5.large"
+OVERRIDES="${OVERRIDES} --node-count=2"
+OVERRIDES="${OVERRIDES} --zones=us-east-2a,us-east-2b,us-east-2c"
+OVERRIDES="${OVERRIDES} --set=cluster.spec.clusterAutoscaler.enabled=true"
+OVERRIDES="${OVERRIDES} --set=cluster.spec.metricsServer.enabled=true"
+OVERRIDES="${OVERRIDES} --set=cluster.spec.metricsServer.insecure=true"
+
+kops-up
+
+# Now add an instance group for GPU nodes with the appropriate labels for NVIDIA DRA
+# TODO: find zones, match images, etc. rather than hard-coding
+kops create --name "${CLUSTER_NAME}" -f - <<EOF
+apiVersion: kops.k8s.io/v1alpha2
+kind: InstanceGroup
+metadata:
+  name: gpu-nodes
+  labels:
+    kops.k8s.io/cluster: ${CLUSTER_NAME}
+spec:
+  image: 099720109477/ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20251212
+  machineType: g6.xlarge
+  maxSize: 3
+  minSize: 2
+  role: Node
+  rootVolumeSize: 48
+  subnets:
+  - us-east-2a
+  - us-east-2b
+  - us-east-2c
+EOF
+
+kops update cluster --name "${CLUSTER_NAME}" --yes --admin
+
+echo "Listing node with their labels..."
+kubectl get nodes --show-labels
+
+echo "----------------------------------------------------------------"
+echo "Deploying AI Conformance Components"
+echo "----------------------------------------------------------------"
+
+# cert-manager
+echo "Installing cert-manager..."
+kubectl apply --server-side -f https://github.com/cert-manager/cert-manager/releases/download/v1.19.2/cert-manager.yaml
+
+echo "Waiting for cert-manager to be ready..."
+kubectl rollout status deployment -n cert-manager cert-manager --timeout=5m
+kubectl rollout status deployment -n cert-manager cert-manager-webhook --timeout=5m
+kubectl rollout status deployment -n cert-manager cert-manager-cainjector --timeout=5m
+
+# Setup helm repos for monitoring and NVIDIA components
+helm repo add nvidia https://helm.ngc.nvidia.com/nvidia
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+
+# Prometheus Stack (kube-prometheus-stack)
+# Provides Prometheus, Grafana, Alertmanager, and ServiceMonitor CRDs
+# Must be installed before dcgm-exporter so ServiceMonitor CRDs are available
+echo "Installing kube-prometheus-stack..."
+helm upgrade -i kube-prometheus-stack \
+  oci://ghcr.io/prometheus-community/charts/kube-prometheus-stack \
+  --namespace monitoring \
+  --create-namespace \
+  --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false \
+  --set prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false \
+  --set grafana.enabled=false \
+  --wait
+
+# Prometheus Adapter
+# Bridges Prometheus metrics to the Kubernetes custom metrics API (custom.metrics.k8s.io),
+# required for HPA to scale on custom metrics like vllm:num_requests_waiting.
+# Note: colons in metric names are incompatible with the Kubernetes custom metrics
+# API (they appear in URL paths), so the adapter renames the metric with underscores.
+echo "Installing prometheus-adapter..."
+cat >prometheus-adapter-values.yaml <<'ADAPTER_EOF'
+prometheus:
+  url: http://kube-prometheus-stack-prometheus.monitoring.svc
+  port: 9090
+rules:
+  custom:
+  - seriesQuery: '{__name__=~"^vllm:num_requests_waiting$"}'
+    resources:
+      overrides:
+        namespace:
+          resource: "namespace"
+        pod:
+          resource: "pod"
+    name:
+      matches: ""
+      as: "vllm_num_requests_waiting"
+    metricsQuery: sum by(namespace, pod) (<<.Series>>)
+ADAPTER_EOF
+helm upgrade -i prometheus-adapter prometheus-community/prometheus-adapter \
+  --namespace monitoring \
+  -f prometheus-adapter-values.yaml \
+  --wait
+rm -f prometheus-adapter-values.yaml
+
+# NVIDIA GPU Operator
+# Manages the full NVIDIA stack: kernel driver, container toolkit, device plugin, DCGM exporter.
+# The driver is installed into /run/nvidia/driver on each node.
+# DCGM exporter is enabled with ServiceMonitor for Prometheus integration.
+echo "Installing NVIDIA GPU Operator with DCGM exporter..."
+helm upgrade -i nvidia-gpu-operator --wait \
+  -n gpu-operator --create-namespace \
+  nvidia/gpu-operator \
+  --version=v25.10.1 \
+  --set dcgmExporter.enabled=true \
+  --set dcgmExporter.serviceMonitor.enabled=true \
+  --set dcgmExporter.serviceMonitor.additionalLabels.release=kube-prometheus-stack
+
+echo "GPU Operator installation complete. Checking component status..."
+kubectl get pods -n gpu-operator -o wide || echo "Warning: GPU Operator pods not ready yet"
+
+echo "DCGM Exporter pod status in gpu-operator namespace..."
+kubectl get pods -n gpu-operator -l app=nvidia-dcgm-exporter -o wide || echo "Warning: DCGM exporter pods not found"
+
+echo "GPU Operator deployment details for debugging:"
+kubectl get all -n gpu-operator || true
+
+PATH="$(pwd):$PATH"
+export PATH
+
+# NVIDIA DRA Driver
+# Uses the driver installed by GPU Operator at /run/nvidia/driver (the default).
+echo "Installing NVIDIA DRA Driver..."
+
+cat >values.yaml <<EOF
+# The driver daemonset needs a toleration for the nvidia.com/gpu taint
+kubeletPlugin:
+  tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
+EOF
+
+helm upgrade -i nvidia-dra-driver-gpu nvidia/nvidia-dra-driver-gpu \
+  --version="25.12.0" \
+  --create-namespace \
+  --namespace nvidia-dra-driver-gpu \
+  --set resources.gpus.enabled=true \
+  --set nvidiaDriverRoot=/run/nvidia/driver \
+  --set gpuResourcesEnabledOverride=true \
+  -f values.yaml \
+  --wait
+
+# KubeRay
+# Use the Helm chart; the kustomize "default-with-webhooks" overlay has incomplete RBAC
+# (missing cluster-scope secrets permission), causing the operator to crash-loop.
+# The Helm chart does not support webhooks, so we install without them.
+echo "Installing KubeRay Operator..."
+helm repo add kuberay https://ray-project.github.io/kuberay-helm/
+helm repo update kuberay
+helm upgrade -i kuberay-operator kuberay/kuberay-operator \
+  --version 1.5.0 \
+  --namespace ray-system \
+  --create-namespace \
+  --wait
+
+# Kueue
+echo "Installing Kueue..."
+helm install kueue https://github.com/kubernetes-sigs/kueue/releases/download/v0.16.2/kueue-0.16.2.tgz \
+  --namespace kueue-system \
+  --create-namespace \
+  --wait --timeout 300s
+
+# Gateway API Implementation - Istio
+helm repo add istio https://istio-release.storage.googleapis.com/charts
+helm repo update
+
+wget https://github.com/istio/istio/releases/download/1.29.1/istioctl-1.29.1-linux-amd64.tar.gz -O "${BIN_DIR}/istioctl.tar.gz"
+tar -xzf "${BIN_DIR}/istioctl.tar.gz" -C "${BIN_DIR}"
+rm "${BIN_DIR}/istioctl.tar.gz"
+
+istioctl install --set profile=minimal -y
+
+echo "----------------------------------------------------------------"
+echo "Verifying Cluster and Components"
+echo "----------------------------------------------------------------"
+
+# Wait for kOps validation
+kops validate cluster --wait=15m
+
+# Verify Components
+echo "Verifying NVIDIA Device Plugin..."
+kubectl rollout status daemonset -n kube-system nvidia-device-plugin-daemonset --timeout=5m || echo "Warning: NVIDIA Device Plugin not ready yet"
+
+echo "Verifying Kueue..."
+kubectl rollout status deployment -n kueue-system kueue-controller-manager --timeout=5m || echo "Warning: Kueue not ready yet"
+
+echo "Verifying KubeRay..."
+kubectl rollout status deployment -n ray-system kuberay-operator --timeout=5m || echo "Warning: KubeRay not ready yet"
+
+echo "Verifying Gateway API..."
+kubectl get gatewayclass || echo "Warning: GatewayClass not found"
+
+echo "Verifying Prometheus Stack..."
+kubectl rollout status deployment -n monitoring kube-prometheus-stack-operator --timeout=5m || echo "Warning: Prometheus Operator not ready yet"
+kubectl rollout status statefulset -n monitoring prometheus-kube-prometheus-stack-prometheus --timeout=5m || echo "Warning: Prometheus not ready yet"
+
+echo "Verifying Prometheus Adapter..."
+kubectl rollout status deployment -n monitoring prometheus-adapter --timeout=5m || echo "Warning: Prometheus Adapter not ready yet"
+echo "Checking custom metrics API registration..."
+kubectl get apiservice v1beta1.custom.metrics.k8s.io || echo "Warning: custom metrics API not registered"
+
+echo "Verifying DCGM Exporter in gpu-operator namespace..."
+kubectl rollout status daemonset -n gpu-operator nvidia-dcgm-exporter --timeout=5m || echo "Warning: DCGM Exporter not ready yet"
+
+echo "DCGM Exporter pod details for debugging:"
+kubectl get pods -n gpu-operator -l app=nvidia-dcgm-exporter -o wide || echo "Warning: No DCGM exporter pods found"
+kubectl describe pods -n gpu-operator -l app=nvidia-dcgm-exporter || true
+
+echo "Verifying ServiceMonitor for DCGM in gpu-operator namespace..."
+kubectl get servicemonitor -n gpu-operator nvidia-dcgm-exporter -o yaml || echo "Warning: DCGM ServiceMonitor not found"
+
+echo "Verifying Allocatable GPUs..."
+# Wait a bit for nodes to report resources
+sleep 30
+kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}: {.status.allocatable.nvidia\.com/gpu} GPUs{"\n"}{end}'
+
+echo "Running Sample DRA Workload..."
+# Create a ResourceClaim and Pod to test DRA
+kubectl apply -f - <<EOF
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaim
+metadata:
+  name: test-gpu-claim
+  namespace: default
+spec:
+  devices:
+    requests:
+    - name: single-gpu
+      exactly:
+        deviceClassName: gpu.nvidia.com
+        allocationMode: ExactCount
+        count: 1
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: test-gpu-pod
+  namespace: default
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+      containers:
+      - name: test
+        image: nvcr.io/nvidia/k8s/cuda-sample:vectoradd-cuda12.5.0-ubuntu22.04
+        command: ["/bin/sh", "-c"]
+        args: ["/cuda-samples/vectorAdd"]
+        resources:
+          claims:
+          - name: gpu
+      resourceClaims:
+      - name: gpu
+        resourceClaimName: test-gpu-claim
+EOF
+
+echo "Waiting for Sample Workload to Complete..."
+kubectl -n default wait --for=condition=complete job/test-gpu-pod --timeout=5m || true
+kubectl -n default logs job/test-gpu-pod || echo "Failed to get logs"
+
+echo "Verifying GPU Metrics in Prometheus..."
+# Wait for DCGM exporter to start collecting metrics
+# Query Prometheus for DCGM GPU metrics with retries
+PROM_POD=$(kubectl get pods -n monitoring -l app.kubernetes.io/name=prometheus -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+if [ -n "${PROM_POD}" ]; then
+  echo "Querying Prometheus for DCGM_FI_DEV_GPU_UTIL metric (retrying up to 5 times)..."
+  for i in {1..5}; do
+    echo "Attempt $i..."
+    METRICS=$(kubectl exec -n monitoring "${PROM_POD}" -c prometheus -- \
+      wget -qO- 'http://localhost:9090/api/v1/query?query=DCGM_FI_DEV_GPU_UTIL' 2>/dev/null || true)
+    if echo "${METRICS}" | grep -q "result"; then
+      echo "Successfully retrieved GPU metrics:"
+      echo "${METRICS}" | head -c 500
+      break
+    fi
+    echo "Metrics not yet available, waiting 20s..."
+    sleep 20
+  done
+else
+  echo "Warning: Prometheus pod not found"
+fi
+
+echo "----------------------------------------------------------------"
+echo "GPU Operator Component Status for Debugging"
+echo "----------------------------------------------------------------"
+
+echo "All GPU Operator pods:"
+kubectl get pods -n gpu-operator -o wide || true
+
+echo ""
+echo "GPU Operator DaemonSets:"
+kubectl get daemonsets -n gpu-operator -o wide || true
+
+echo ""
+echo "DCGM Exporter DaemonSet details:"
+kubectl describe daemonset -n gpu-operator nvidia-dcgm-exporter || true
+
+echo ""
+echo "DCGM Exporter Service:"
+kubectl get service -n gpu-operator nvidia-dcgm-exporter -o yaml || echo "No DCGM service found"
+
+echo ""
+echo "DCGM Exporter ServiceMonitor:"
+kubectl get servicemonitor -n gpu-operator nvidia-dcgm-exporter -o yaml || echo "No ServiceMonitor found"
+
+echo ""
+echo "Recent GPU Operator events:"
+kubectl get events -n gpu-operator --sort-by='.lastTimestamp' | tail -20 || true
+
+echo "AI Conformance Environment Setup Complete."
+
+# Now run the actual AI conformance tests
+cd "${REPO_ROOT}/tests/e2e/scenarios/ai-conformance/validators"
+go test -v -p 1 ./... -timeout=60m
+
+# Compile and write the conformance report
+cd "${REPO_ROOT}/tests/e2e/scenarios/ai-conformance"
+go run ./tools/write-conformance-report

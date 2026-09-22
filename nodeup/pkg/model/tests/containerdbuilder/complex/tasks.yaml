@@ -1,6 +1,30 @@
+contents: |+
+  [host."https://fallback.example.com"]
+    capabilities = ["pull", "resolve"]
+
+path: /etc/containerd/certs.d/_default/hosts.toml
+type: file
+---
+contents: |+
+  [host."https://registry-1.docker.io"]
+    capabilities = ["pull", "resolve"]
+
+path: /etc/containerd/certs.d/docker.io/hosts.toml
+type: file
+---
+contents: |+
+  [host."https://mirror.example.com"]
+    capabilities = ["pull", "resolve"]
+
+  [host."https://backup.example.com"]
+    capabilities = ["pull", "resolve"]
+
+path: /etc/containerd/certs.d/registry.k8s.io/hosts.toml
+type: file
+---
 contents: |
   {
-      "cniVersion": "0.4.0",
+      "cniVersion": "1.0.0",
       "name": "k8s-pod-network",
       "plugins": [
           {
@@ -26,12 +50,13 @@ contents: |
   [plugins]
 
     [plugins."io.containerd.grpc.v1.cri"]
-      sandbox_image = "registry.k8s.io/pause:3.9"
+      sandbox_image = "registry.k8s.io/pause:3.10.1"
 
       [plugins."io.containerd.grpc.v1.cri".cni]
         conf_template = "/etc/containerd/config-cni.template"
 
       [plugins."io.containerd.grpc.v1.cri".containerd]
+        default_runtime_name = "runc"
 
         [plugins."io.containerd.grpc.v1.cri".containerd.runtimes]
 
@@ -47,6 +72,9 @@ contents: |
             test_int = 1
             test_intstr = "1"
             test_str = "test"
+
+      [plugins."io.containerd.grpc.v1.cri".registry]
+        config_path = "/etc/containerd/certs.d"
 path: /etc/containerd/config.toml
 type: file
 ---
@@ -128,8 +156,7 @@ mode: "0755"
 path: /usr/sbin/runc
 type: file
 ---
-contents: |2
-
+contents: |2-
 
                                    Apache License
                              Version 2.0, January 2004
@@ -348,7 +375,7 @@ definition: |
   [Unit]
   Description=containerd container runtime
   Documentation=https://containerd.io
-  After=network.target local-fs.target
+  After=network.target dbus.service
 
   [Service]
   EnvironmentFile=/etc/sysconfig/containerd

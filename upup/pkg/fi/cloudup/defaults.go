@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
 	"strings"
 
 	"k8s.io/klog/v2"
@@ -31,6 +30,12 @@ import (
 	"k8s.io/kops/util/pkg/vfs"
 
 	kopsversion "k8s.io/kops"
+)
+
+const (
+	defaultAWSNetworkCIDR    = "172.20.0.0/16"
+	defaultAzureNetworkCIDR  = "10.0.0.0/16"
+	defaultNonMasqueradeCIDR = "100.64.0.0/10"
 )
 
 // PerformAssignments populates values that are required and immutable
@@ -70,24 +75,11 @@ func PerformAssignments(c *kops.Cluster, vfsContext *vfs.VFSContext, cloud fi.Cl
 		}
 	}
 
-	setNetworkCIDR := (cloud.ProviderID() == kops.CloudProviderAWS) || (cloud.ProviderID() == kops.CloudProviderAzure)
-	if setNetworkCIDR && c.Spec.Networking.NetworkCIDR == "" {
+	if cloud.ProviderID() == kops.CloudProviderAWS && c.Spec.Networking.NetworkCIDR == "" {
 		if c.SharedVPC() {
-			var vpcInfo *fi.VPCInfo
-			var err error
-			if cloud.ProviderID() == kops.CloudProviderAzure {
-				if c.Spec.CloudProvider.Azure == nil || c.Spec.CloudProvider.Azure.ResourceGroupName == "" {
-					return fmt.Errorf("missing required --azure-resource-group-name when specifying Network ID")
-				}
-				vpcInfo, err = cloud.(azure.AzureCloud).FindVNetInfo(c.Spec.Networking.NetworkID, c.Spec.CloudProvider.Azure.ResourceGroupName)
-				if err != nil {
-					return err
-				}
-			} else {
-				vpcInfo, err = cloud.FindVPCInfo(c.Spec.Networking.NetworkID)
-				if err != nil {
-					return err
-				}
+			vpcInfo, err := cloud.FindVPCInfo(c.Spec.Networking.NetworkID)
+			if err != nil {
+				return err
 			}
 			if vpcInfo == nil {
 				return fmt.Errorf("unable to find Network ID %q", c.Spec.Networking.NetworkID)
@@ -97,10 +89,8 @@ func PerformAssignments(c *kops.Cluster, vfsContext *vfs.VFSContext, cloud fi.Cl
 				return fmt.Errorf("unable to infer NetworkCIDR from Network ID, please specify --network-cidr")
 			}
 		} else {
-			if cloud.ProviderID() == kops.CloudProviderAWS {
-				// TODO: Choose non-overlapping networking CIDRs for VPCs, using vpcInfo
-				c.Spec.Networking.NetworkCIDR = "172.20.0.0/16"
-			}
+			// TODO: Choose non-overlapping networking CIDRs for VPCs, using vpcInfo
+			c.Spec.Networking.NetworkCIDR = defaultAWSNetworkCIDR
 		}
 
 		// Amazon VPC CNI uses the same network
@@ -109,8 +99,29 @@ func PerformAssignments(c *kops.Cluster, vfsContext *vfs.VFSContext, cloud fi.Cl
 		}
 	}
 
+	if cloud.ProviderID() == kops.CloudProviderAzure && c.Spec.Networking.NetworkCIDR == "" {
+		if c.SharedVPC() {
+			if c.Spec.CloudProvider.Azure == nil || c.Spec.CloudProvider.Azure.ResourceGroupName == "" {
+				return fmt.Errorf("missing required --azure-resource-group-name when specifying Network ID")
+			}
+			vpcInfo, err := cloud.(azure.AzureCloud).FindVNetInfo(c.Spec.Networking.NetworkID, c.Spec.CloudProvider.Azure.ResourceGroupName)
+			if err != nil {
+				return err
+			}
+			if vpcInfo == nil {
+				return fmt.Errorf("unable to find Network ID %q", c.Spec.Networking.NetworkID)
+			}
+			c.Spec.Networking.NetworkCIDR = vpcInfo.CIDR
+			if c.Spec.Networking.NetworkCIDR == "" {
+				return fmt.Errorf("unable to infer NetworkCIDR from Network ID, please specify --network-cidr")
+			}
+		} else {
+			c.Spec.Networking.NetworkCIDR = defaultAzureNetworkCIDR
+		}
+	}
+
 	if c.Spec.Networking.NonMasqueradeCIDR == "" {
-		c.Spec.Networking.NonMasqueradeCIDR = "100.64.0.0/10"
+		c.Spec.Networking.NonMasqueradeCIDR = defaultNonMasqueradeCIDR
 	}
 
 	// TODO: Unclear this should be here - it isn't too hard to change
@@ -135,9 +146,9 @@ func PerformAssignments(c *kops.Cluster, vfsContext *vfs.VFSContext, cloud fi.Cl
 	c.Spec.Networking.EgressProxy = proxy
 
 	if c.Spec.CloudProvider.Azure != nil && c.Spec.CloudProvider.Azure.StorageAccountID == "" {
-		storageAccountName := os.Getenv("AZURE_STORAGE_ACCOUNT")
-		if storageAccountName == "" {
-			return fmt.Errorf("AZURE_STORAGE_ACCOUNT must be set")
+		storageAccountName, err := azureStorageAccountFromConfigStore(vfsContext, c.Spec.ConfigStore.Base)
+		if err != nil {
+			return err
 		}
 		sa, err := cloud.(azure.AzureCloud).FindStorageAccountInfo(storageAccountName)
 		if err != nil {
@@ -148,6 +159,23 @@ func PerformAssignments(c *kops.Cluster, vfsContext *vfs.VFSContext, cloud fi.Cl
 	}
 
 	return ensureKubernetesVersion(vfsContext, c)
+}
+
+// azureStorageAccountFromConfigStore extracts the Azure storage account
+// from an azureblob:// ConfigStore.Base.
+func azureStorageAccountFromConfigStore(vfsContext *vfs.VFSContext, configBase string) (string, error) {
+	if configBase == "" {
+		return "", fmt.Errorf("ConfigStore.Base is not set; cannot determine Azure storage account")
+	}
+	p, err := vfsContext.BuildVfsPath(configBase)
+	if err != nil {
+		return "", fmt.Errorf("parsing ConfigStore.Base %q: %w", configBase, err)
+	}
+	azurePath, ok := p.(*vfs.AzureBlobPath)
+	if !ok {
+		return "", fmt.Errorf("expected azureblob:// ConfigStore.Base for Azure cluster, got %q", configBase)
+	}
+	return azurePath.Account(), nil
 }
 
 // ensureKubernetesVersion populates KubernetesVersion, if it is not already set

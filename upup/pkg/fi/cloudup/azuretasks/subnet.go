@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	network "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/network/armnetwork"
@@ -39,6 +40,7 @@ type Subnet struct {
 	VirtualNetwork       *VirtualNetwork
 	NatGateway           *NatGateway
 	NetworkSecurityGroup *NetworkSecurityGroup
+	RouteTable           *RouteTable
 
 	CIDR   *string
 	Shared *bool
@@ -47,6 +49,7 @@ type Subnet struct {
 var (
 	_ fi.CloudupTask   = &Subnet{}
 	_ fi.CompareWithID = &Subnet{}
+	// Subnet does not implement CloudupTaskNormalize because Azure subnets do not support tags.
 )
 
 // CompareWithID returns the Name of the VM Scale Set.
@@ -88,6 +91,10 @@ func (s *Subnet) Find(c *fi.CloudupContext) (*Subnet, error) {
 	if found.Properties == nil {
 		return nil, fmt.Errorf("found subnet without properties")
 	}
+	if found.Properties.ProvisioningState != nil && *found.Properties.ProvisioningState == network.ProvisioningStateFailed {
+		klog.Warningf("found subnet %q in failed provisioning state", *s.Name)
+		return nil, nil
+	}
 
 	s.ID = found.ID
 
@@ -114,6 +121,12 @@ func (s *Subnet) Find(c *fi.CloudupContext) (*Subnet, error) {
 			ID: found.Properties.NetworkSecurityGroup.ID,
 		}
 	}
+	if found.Properties.RouteTable != nil {
+		fs.RouteTable = &RouteTable{
+			Name: fi.PtrTo(path.Base(fi.ValueOf(found.Properties.RouteTable.ID))),
+			ID:   found.Properties.RouteTable.ID,
+		}
+	}
 
 	return fs, nil
 }
@@ -136,6 +149,9 @@ func (*Subnet) CheckChanges(a, e, changes *Subnet) error {
 	// Check if unchangeable fields won't be changed.
 	if changes.Name != nil {
 		return fi.CannotChangeField("Name")
+	}
+	if changes.CIDR != nil {
+		return fi.CannotChangeField("CIDR")
 	}
 	return nil
 }
@@ -161,6 +177,11 @@ func (*Subnet) RenderAzure(t *azure.AzureAPITarget, a, e, changes *Subnet) error
 	if e.NetworkSecurityGroup != nil {
 		subnet.Properties.NetworkSecurityGroup = &network.SecurityGroup{
 			ID: e.NetworkSecurityGroup.ID,
+		}
+	}
+	if e.RouteTable != nil {
+		subnet.Properties.RouteTable = &network.RouteTable{
+			ID: e.RouteTable.ID,
 		}
 	}
 

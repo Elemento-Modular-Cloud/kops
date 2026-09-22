@@ -20,16 +20,16 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/hetznercloud/hcloud-go/hcloud/metadata"
+	"github.com/hetznercloud/hcloud-go/v2/hcloud/metadata"
 	"k8s.io/kops/pkg/bootstrap"
 )
 
-const HetznerAuthenticationTokenPrefix = "x-hetzner-id "
+const HetznerAuthenticationTokenPrefix = "x-hetzner-id " //nolint:gosec // This is an authentication scheme prefix, not a credential.
 
 type hetznerAuthenticator struct {
 }
 
-var _ bootstrap.Authenticator = &hetznerAuthenticator{}
+var _ bootstrap.Authenticator = (*hetznerAuthenticator)(nil)
 
 func NewHetznerAuthenticator() (bootstrap.Authenticator, error) {
 	return &hetznerAuthenticator{}, nil
@@ -40,5 +40,5 @@ func (h *hetznerAuthenticator) CreateToken(body []byte) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to retrieve server ID: %w", err)
 	}
-	return HetznerAuthenticationTokenPrefix + strconv.Itoa(serverID), nil
+	return HetznerAuthenticationTokenPrefix + strconv.FormatInt(serverID, 10), nil
 }

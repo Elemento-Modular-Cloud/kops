@@ -1,0 +1,11 @@
+kind: StorageClass
+apiVersion: storage.k8s.io/v1
+metadata:
+  name: managed-csi
+provisioner: disk.csi.azure.com
+allowVolumeExpansion: true
+parameters:
+  skuName: StandardSSD_LRS
+  cachingMode: None
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer

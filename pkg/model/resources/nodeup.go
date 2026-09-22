@@ -39,6 +39,7 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
 	"k8s.io/kops/upup/pkg/fi/utils"
 	"k8s.io/kops/util/pkg/architectures"
+	"k8s.io/kops/util/pkg/vfs/openstackconfig"
 )
 
 var nodeUpTemplate = `#!/bin/bash
@@ -74,7 +75,7 @@ download-or-bust() {
   local -r file="$1"
   local -r hash="$2"
   local -a urls
-  mapfile -t urls < <(split-commas "$3")
+  IFS=, read -r -a urls <<< "$3"
 
   if [[ -f "${file}" ]]; then
     if ! validate-hash "${file}" "${hash}"; then
@@ -86,26 +87,7 @@ download-or-bust() {
 
   while true; do
     for url in "${urls[@]}"; do
-      commands=(
-        "curl -f --compressed -Lo ${file} --connect-timeout 20 --retry 6 --retry-delay 10"
-        "wget --compression=auto -O ${file} --connect-timeout=20 --tries=6 --wait=10"
-        "curl -f -Lo ${file} --connect-timeout 20 --retry 6 --retry-delay 10"
-        "wget -O ${file} --connect-timeout=20 --tries=6 --wait=10"
-      )
-      for cmd in "${commands[@]}"; do
-        echo "== Downloading ${url} using ${cmd} =="
-        if ! (${cmd} "${url}"); then
-          echo "== Failed to download ${url} using ${cmd} =="
-          continue
-        fi
-        if ! validate-hash "${file}" "${hash}"; then
-          echo "== Failed to validate hash for ${url} =="
-          rm -f "${file}"
-        else
-          echo "== Downloaded ${url} with hash ${hash} =="
-          return 0
-        fi
-      done
+      {{ CopyCheckUrlBlock }}
     done
 
     echo "== All downloads failed; sleeping before retrying =="
@@ -123,10 +105,6 @@ validate-hash() {
     echo "== File ${file} is corrupted; hash ${actual} doesn't match expected ${expected} =="
     return 1
   fi
-}
-
-function split-commas() {
-  echo "$1" | tr "," "\n"
 }
 
 function download-release() {
@@ -238,9 +216,7 @@ func (b *NodeUpScript) Build() (fi.Resource, error) {
 			return string(bootConfigData), nil
 		},
 
-		"GzipBase64": func(data string) (string, error) {
-			return gzipBase64(data)
-		},
+		"GzipBase64": gzipBase64,
 
 		"CompressUserData": func() bool {
 			return b.CompressUserData
@@ -256,9 +232,57 @@ func (b *NodeUpScript) Build() (fi.Resource, error) {
 
 		"ProxyEnv":             b.ProxyEnv,
 		"EnvironmentVariables": b.EnvironmentVariables,
+		"CopyCheckUrlBlock":    b.copyCheckUrlBlock,
 	}
 
 	return newTemplateResource("nodeup", nodeUpTemplate, functions, nil)
+}
+
+func (b *NodeUpScript) copyCheckUrlBlock() (string, error) {
+	if b.CloudProvider == string(kops.CloudProviderGCE) {
+		return `commands=(
+        "gcloud storage cp ${url} ${file}"
+        "curl -f --compressed -Lo ${file} --connect-timeout 20 --retry 6 --retry-delay 10 ${url}"
+        "wget --compression=auto -O ${file} --connect-timeout=20 --tries=6 --wait=10 ${url}"
+        "curl -f -Lo ${file} --connect-timeout 20 --retry 6 --retry-delay 10 ${url}"
+        "wget -O ${file} --connect-timeout=20 --tries=6 --wait=10 ${url}"
+      )
+      for cmd in "${commands[@]}"; do
+        echo "== Downloading ${url} using ${cmd} =="
+        if ! (${cmd}); then
+          echo "== Failed to download ${url} using ${cmd} =="
+          continue
+        fi
+        if ! validate-hash "${file}" "${hash}"; then
+          echo "== Failed to validate hash for ${url} =="
+          rm -f "${file}"
+        else
+          echo "== Downloaded ${url} with hash ${hash} =="
+          return 0
+        fi
+      done`, nil
+	} else {
+		return `commands=(
+        "curl -f --compressed -Lo ${file} --connect-timeout 20 --retry 6 --retry-delay 10"
+        "wget --compression=auto -O ${file} --connect-timeout=20 --tries=6 --wait=10"
+        "curl -f -Lo ${file} --connect-timeout 20 --retry 6 --retry-delay 10"
+        "wget -O ${file} --connect-timeout=20 --tries=6 --wait=10"
+      )
+      for cmd in "${commands[@]}"; do
+        echo "== Downloading ${url} using ${cmd} =="
+        if ! (${cmd} "${url}"); then
+          echo "== Failed to download ${url} using ${cmd} =="
+          continue
+        fi
+        if ! validate-hash "${file}" "${hash}"; then
+          echo "== Failed to validate hash for ${url} =="
+          rm -f "${file}"
+        else
+          echo "== Downloaded ${url} with hash ${hash} =="
+          return 0
+        fi
+      done`, nil
+	}
 }
 
 func gzipBase64(data string) (string, error) {
@@ -299,7 +323,7 @@ func AWSMultipartMIME(bootScript string, ig *kops.InstanceGroup) (string, error)
 			return "", err
 		}
 
-		writer.Write([]byte(fmt.Sprintf("Content-Type: multipart/mixed; boundary=\"%s\"\r\n", boundary)))
+		fmt.Fprintf(writer, "Content-Type: multipart/mixed; boundary=\"%s\"\r\n", boundary)
 		writer.Write([]byte("MIME-Version: 1.0\r\n\r\n"))
 
 		var err error
@@ -317,7 +341,7 @@ func AWSMultipartMIME(bootScript string, ig *kops.InstanceGroup) (string, error)
 			}
 		}
 
-		writer.Write([]byte(fmt.Sprintf("\r\n--%s--\r\n", boundary)))
+		fmt.Fprintf(writer, "\r\n--%s--\r\n", boundary)
 
 		writer.Flush()
 		mimeWriter.Close()
@@ -389,11 +413,12 @@ func buildEnvironmentVariables(cluster *kops.Cluster, ig *kops.InstanceGroup) (m
 			)
 		}
 
-		// credentials needed always in control-plane and when using gossip also in nodes
-		passEnvs := false
-		if ig.IsControlPlane() || cluster.UsesLegacyGossip() {
-			passEnvs = true
+		// Map our Insecure Skip Verify setting
+		if cluster.Spec.CloudProvider.Openstack != nil && fi.ValueOf(cluster.Spec.CloudProvider.Openstack.InsecureSkipVerify) {
+			os.Setenv(openstackconfig.EnvKeyOpenstackTLSInsecureSkipVerify, "true")
 		}
+
+		passEnvs := ig.IsControlPlane()
 		// Pass in required credentials when using user-defined swift endpoint
 		if os.Getenv("OS_AUTH_URL") != "" && passEnvs {
 			for _, envVar := range osEnvs {
@@ -411,7 +436,7 @@ func buildEnvironmentVariables(cluster *kops.Cluster, ig *kops.InstanceGroup) (m
 		}
 	}
 
-	if cluster.GetCloudProvider() == kops.CloudProviderHetzner && (ig.IsControlPlane() || cluster.UsesLegacyGossip()) {
+	if cluster.GetCloudProvider() == kops.CloudProviderHetzner && ig.IsControlPlane() {
 		hcloudToken := os.Getenv("HCLOUD_TOKEN")
 		if hcloudToken != "" {
 			env["HCLOUD_TOKEN"] = hcloudToken
@@ -431,14 +456,13 @@ func buildEnvironmentVariables(cluster *kops.Cluster, ig *kops.InstanceGroup) (m
 	}
 
 	if cluster.GetCloudProvider() == kops.CloudProviderAzure {
-		env["AZURE_STORAGE_ACCOUNT"] = os.Getenv("AZURE_STORAGE_ACCOUNT")
 		azureEnv := os.Getenv("AZURE_ENVIRONMENT")
 		if azureEnv != "" {
-			env["AZURE_ENVIRONMENT"] = os.Getenv("AZURE_ENVIRONMENT")
+			env["AZURE_ENVIRONMENT"] = azureEnv
 		}
 	}
 
-	if cluster.GetCloudProvider() == kops.CloudProviderScaleway && (ig.IsControlPlane() || cluster.UsesLegacyGossip()) {
+	if cluster.GetCloudProvider() == kops.CloudProviderScaleway && ig.IsControlPlane() {
 		profile, err := scaleway.CreateValidScalewayProfile()
 		if err != nil {
 			return nil, err

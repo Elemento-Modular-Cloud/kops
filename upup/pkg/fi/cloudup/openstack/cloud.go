@@ -320,7 +320,7 @@ type openstackCloud struct {
 	useVIPACL       *bool
 }
 
-var _ fi.Cloud = &openstackCloud{}
+var _ fi.Cloud = (*openstackCloud)(nil)
 
 var openstackCloudInstances = make(map[string]OpenstackCloud)
 
@@ -617,6 +617,29 @@ func InstanceInClusterAndIG(instance servers.Server, clusterName string, instanc
 	return true
 }
 
+func deletePorts(c OpenstackCloud, instanceGroupName string, clusterName string) error {
+	tags := []string{
+		fmt.Sprintf("%s=%s", TagClusterName, clusterName),
+		fmt.Sprintf("%s=%s", TagKopsInstanceGroup, instanceGroupName),
+	}
+
+	ports, err := c.ListPorts(ports.ListOpts{Tags: strings.Join(tags, ",")})
+	if err != nil {
+		return fmt.Errorf("could not list ports %v", err)
+	}
+
+	for _, port := range ports {
+		klog.V(2).Infof("Delete port '%s' (%s)", port.Name, port.ID)
+		err := c.DeletePort(port.ID)
+
+		if err != nil {
+			return fmt.Errorf("could not delete port %q: %v", port.ID, err)
+		}
+	}
+
+	return nil
+}
+
 func deleteGroup(c OpenstackCloud, g *cloudinstances.CloudInstanceGroup) error {
 	cluster := g.Raw.(*kops.Cluster)
 	allInstances, err := c.ListInstances(servers.ListOpts{
@@ -639,18 +662,10 @@ func deleteGroup(c OpenstackCloud, g *cloudinstances.CloudInstanceGroup) error {
 			return fmt.Errorf("could not delete instance %q: %v", instance.ID, err)
 		}
 	}
-	ports, err := c.ListPorts(ports.ListOpts{})
-	if err != nil {
-		return fmt.Errorf("could not list ports %v", err)
-	}
 
-	for _, port := range ports {
-		if strings.HasPrefix(port.Name, fmt.Sprintf("port-%s", g.InstanceGroup.Name)) && fi.ArrayContains(port.Tags, fmt.Sprintf("%s=%s", TagClusterName, cluster.Name)) {
-			err := c.DeletePort(port.ID)
-			if err != nil {
-				return fmt.Errorf("could not delete port %q: %v", port.ID, err)
-			}
-		}
+	err = deletePorts(c, g.InstanceGroup.Name, cluster.Name)
+	if err != nil {
+		return err
 	}
 
 	sgName := g.InstanceGroup.Name
@@ -796,7 +811,7 @@ func getIPIngressStatus(c OpenstackCloud, cluster *kops.Cluster) (ingresses []fi
 			val2, ok2 := instance.Metadata["KopsRole"]
 			if ok && val == cluster.Name && ok2 {
 				role, success := kops.ParseInstanceGroupRole(val2, false)
-				if success && role == kops.InstanceGroupRoleControlPlane {
+				if success && role.HasControlPlane() {
 					ifName := instance.Metadata[TagKopsNetwork]
 					address, err := GetServerFixedIP(&instance, ifName)
 					if err == nil {

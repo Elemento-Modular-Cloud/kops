@@ -28,7 +28,7 @@ import (
 	"k8s.io/kops/upup/pkg/fi"
 )
 
-var _ fi.Cloud = &Cloud{}
+var _ fi.Cloud = (*Cloud)(nil)
 
 // Cloud holds the fi.Cloud implementation for metal resources.
 type Cloud struct {
@@ -91,13 +91,13 @@ func (c *Cloud) GetCloudGroups(cluster *kops.Cluster, instancegroups []*kops.Ins
 			}
 
 			match := true
-			switch ig.Spec.Role {
-			case kops.InstanceGroupRoleControlPlane:
+			switch {
+			case ig.Spec.Role.HasControlPlane():
 				if !isControlPlaneNode {
 					match = false
 				}
 
-			case kops.InstanceGroupRoleNode:
+			case ig.Spec.Role.HasNode():
 				if isControlPlaneNode {
 					match = false
 				}

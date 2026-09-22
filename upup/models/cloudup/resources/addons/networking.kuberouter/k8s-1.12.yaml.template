@@ -1,5 +1,4 @@
-# Pulled and modified from https://raw.githubusercontent.com/cloudnativelabs/kube-router/v1.6.0/daemonset/kubeadm-kuberouter.yaml
-
+# Pulled and modified from https://raw.githubusercontent.com/cloudnativelabs/kube-router/v2.1.0/daemonset/kubeadm-kuberouter.yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -61,10 +60,12 @@ spec:
           level: s0
 {{ end }}
       serviceAccountName: kube-router
+      serviceAccount: kube-router
       containers:
       - name: kube-router
-        image: docker.io/cloudnativelabs/kube-router:v2.5.0
+        image: docker.io/cloudnativelabs/kube-router:v2.10.0
         args:
+        - --strict-external-ip-validation=false
         - --run-router=true
         - --run-firewall=true
         - --run-service-proxy=true
@@ -93,7 +94,7 @@ spec:
           periodSeconds: 3
         resources:
           requests:
-            cpu: 100m
+            cpu: 250m
             memory: 250Mi
         securityContext:
           privileged: true
@@ -110,14 +111,14 @@ spec:
           mountPath: /run/xtables.lock
           readOnly: false
         - name: rt-tables
-          mountPath: /etc/iproute2/rt_tables
+          mountPath: /usr/share/iproute2/rt_tables
           readOnly: false
         - name: containerd-sock
           mountPath: /run/containerd/containerd.sock
           readOnly: true
       initContainers:
       - name: install-cni
-        image: docker.io/cloudnativelabs/kube-router:v2.5.0
+        image: docker.io/cloudnativelabs/kube-router:v2.10.0
         command:
         - /bin/sh
         - -c
@@ -158,7 +159,7 @@ spec:
           type: FileOrCreate
       - name: rt-tables
         hostPath:
-          path: /etc/iproute2/rt_tables
+          path: /usr/share/iproute2/rt_tables
           type: FileOrCreate
       - name: containerd-sock
         hostPath:

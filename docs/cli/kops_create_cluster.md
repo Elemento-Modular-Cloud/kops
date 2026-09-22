@@ -52,6 +52,22 @@ kops create cluster [CLUSTER] [flags]
   --node-count 3 \
   --yes
   
+  # Create a cluster in GCE with a dedicated APIServer-Only front-end.
+  export KOPS_FEATURE_FLAGS="+APIServerNodes"
+  export ZONES="us-west1-a,us-west1-b,us-west1-c"
+  export PROJECT="my-project"
+  export KOPS_STATE_STORE="gs://${PROJECT}-kops-state"
+  export KOPS_CLUSTER_NAME="k8s-cluster.example.com"
+  kops create cluster --name=${KOPS_CLUSTER_NAME} \
+  --cloud=gce \
+  --zones=${ZONES} \
+  --project=${PROJECT} \
+  --node-count=3 --node-size=e2-standard-2 \
+  --api-server-count=2 --api-server-size=e2-standard-2 \
+  --control-plane-count=3 --control-plane-size=e2-standard-4 \
+  --yes
+  
+  
   # Generate a cluster spec to apply later.
   # Run the following, then: kops create -f filename.yaml
   kops create cluster --name=k8s-cluster.example.com \
@@ -82,6 +98,7 @@ kops create cluster [CLUSTER] [flags]
       --control-plane-size strings              Machine type(s) for control-plane nodes
       --control-plane-tenancy string            Tenancy of the control-plane group (AWS only): default or dedicated
       --control-plane-volume-size int32         Instance volume size (in GB) for control-plane nodes
+      --control-plane-volume-type string        Instance volume type for control-plane nodes
       --control-plane-zones strings             Zones in which to run control-plane nodes. (must be an odd number)
       --disable-subnet-tags                     Disable automatic subnet tagging
       --discovery-store string                  A public location where we publish OIDC-compatible discovery information under a cluster-specific directory. Enables IRSA in AWS.
@@ -89,7 +106,7 @@ kops create cluster [CLUSTER] [flags]
       --dns-zone string                         DNS hosted zone (defaults to longest matching zone)
       --dry-run                                 If true, only print the object that would be sent, without sending it. This flag can be used to create a cluster YAML or JSON manifest.
       --encrypt-etcd-storage                    Generate key in AWS KMS and use it for encrypt etcd volumes
-      --etcd-clusters strings                   Names of the etcd clusters: main, events (default [main,events])
+      --etcd-clusters strings                   Names of the etcd clusters: main, events, leases (default [main,events])
       --etcd-storage-type string                The default storage type for etcd members
       --gce-service-account string              Service account with which the GCE VM runs. Warning: if not set, VMs will run as default compute service account.
   -h, --help                                    help for cluster
@@ -100,13 +117,14 @@ kops create cluster [CLUSTER] [flags]
       --kubernetes-version string               Version of Kubernetes to run (defaults to version in channel)
       --network-cidr strings                    Network CIDR(s) to use
       --network-id string                       Shared Network or VPC to use
-      --networking string                       Networking mode.  kubenet, external, flannel-vxlan (or flannel), flannel-udp, calico, canal, kube-router, amazonvpc, cilium, cilium-etcd, kindnet, cni. (default "cilium")
+      --networking string                       Networking mode.  kubenet, external, flannel-vxlan (or flannel), flannel-udp, calico, kube-router, amazonvpc, cilium, cilium-etcd, kindnet, cni. (default "cilium")
       --node-count int32                        Total number of worker nodes. Defaults to one node per zone
       --node-image string                       Machine image for worker nodes. Takes precedence over --image
       --node-security-groups strings            Additional pre-created security groups to add to worker nodes.
       --node-size strings                       Machine type(s) for worker nodes
       --node-tenancy string                     Tenancy of the node group (AWS only): default or dedicated
       --node-volume-size int32                  Instance volume size (in GB) for worker nodes
+      --node-volume-type string                 Instance volume type (e.g. gp2, gp3, io1) for worker nodes
       --os-dns-servers string                   comma separated list of DNS Servers which is used in network
       --os-ext-net string                       External network to use with the openstack router
       --os-ext-subnet string                    External floating subnet to use with the openstack router
@@ -133,10 +151,12 @@ kops create cluster [CLUSTER] [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   yaml config file (default is $HOME/.kops.yaml)
-      --name string     Name of cluster. Overrides KOPS_CLUSTER_NAME environment variable
-      --state string    Location of state storage (kops 'config' file). Overrides KOPS_STATE_STORE environment variable
-  -v, --v Level         number for the log level verbosity
+      --alsologtostderrthreshold severity   logs at or above this threshold go to stderr when -alsologtostderr=true (no effect when -logtostderr=true)
+      --config string                       yaml config file (default is $HOME/.kops.yaml)
+      --legacy_stderr_threshold_behavior    If true, stderrthreshold is ignored when logtostderr=true (legacy behavior). If false, stderrthreshold is honored even when logtostderr=true
+      --name string                         Name of cluster. Overrides KOPS_CLUSTER_NAME environment variable
+      --state string                        Location of state storage (kops 'config' file). Overrides KOPS_STATE_STORE environment variable
+  -v, --v Level                             number for the log level verbosity
 ```
 
 ### SEE ALSO

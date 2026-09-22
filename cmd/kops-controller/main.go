@@ -29,18 +29,24 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	"k8s.io/klog/v2"
 	"k8s.io/klog/v2/klogr"
+	bootstrapapi "k8s.io/kops/clusterapi/bootstrap/kops/api/v1beta1"
+	controlplaneapi "k8s.io/kops/clusterapi/controlplane/kops/api/v1beta1"
 	"k8s.io/kops/cmd/kops-controller/controllers"
 	"k8s.io/kops/cmd/kops-controller/pkg/config"
 	"k8s.io/kops/cmd/kops-controller/pkg/server"
 	"k8s.io/kops/pkg/apis/kops/v1alpha2"
 	"k8s.io/kops/pkg/bootstrap"
 	"k8s.io/kops/pkg/bootstrap/pkibootstrap"
+	"k8s.io/kops/pkg/client/simple"
+	"k8s.io/kops/pkg/controllers/clusterapi"
 	"k8s.io/kops/pkg/nodeidentity"
 	nodeidentityaws "k8s.io/kops/pkg/nodeidentity/aws"
 	nodeidentityazure "k8s.io/kops/pkg/nodeidentity/azure"
+	nodeidentityclusterapi "k8s.io/kops/pkg/nodeidentity/clusterapi"
 	nodeidentitydo "k8s.io/kops/pkg/nodeidentity/do"
 	nodeidentitygce "k8s.io/kops/pkg/nodeidentity/gce"
 	nodeidentityhetzner "k8s.io/kops/pkg/nodeidentity/hetzner"
+	nodeidentitylinode "k8s.io/kops/pkg/nodeidentity/linode"
 	nodeidentitymetal "k8s.io/kops/pkg/nodeidentity/metal"
 	nodeidentityos "k8s.io/kops/pkg/nodeidentity/openstack"
 	nodeidentityscw "k8s.io/kops/pkg/nodeidentity/scaleway"
@@ -50,6 +56,7 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/do"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce/tpm/gcetpmverifier"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner"
+	linodecloudup "k8s.io/kops/upup/pkg/fi/cloudup/linode"
 	"k8s.io/kops/upup/pkg/fi/cloudup/openstack"
 	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
 	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
@@ -74,6 +81,11 @@ func main() {
 	ctx := context.Background()
 
 	klog.InitFlags(nil)
+	// Opt into the new klog behavior so that -stderrthreshold is honored even
+	// when -logtostderr=true (the default).
+	// Ref: kubernetes/klog#212, kubernetes/klog#432
+	flag.Set("legacy_stderr_threshold_behavior", "false") //nolint:errcheck
+	flag.Set("stderrthreshold", "INFO")                   //nolint:errcheck
 
 	// Disable metrics by default (avoid port conflicts, also risky because we are host network)
 	metricsAddress := ":0"
@@ -104,15 +116,15 @@ func main() {
 
 	ctrl.SetLogger(klogr.New())
 
-	scheme, err := buildScheme()
+	scheme, err := buildScheme(&opt)
 	if err != nil {
 		setupLog.Error(err, "error building scheme")
 		os.Exit(1)
 	}
 
 	kubeConfig := ctrl.GetConfigOrDie()
-	kubeConfig.Burst = 200
-	kubeConfig.QPS = 100
+	kubeConfig.Burst = 300
+	kubeConfig.QPS = 150
 
 	mgr, err := ctrl.NewManager(kubeConfig, ctrl.Options{
 		Scheme: scheme,
@@ -129,6 +141,13 @@ func main() {
 
 	vfsContext := vfs.NewVFSContext()
 
+	var capiManager *nodeidentityclusterapi.Manager
+	if opt.CAPI.IsEnabled() {
+		capiManager = nodeidentityclusterapi.NewManager(mgr.GetClient())
+	}
+
+	var clientset simple.Clientset
+
 	if opt.Server != nil {
 		var verifiers []bootstrap.Verifier
 		var err error
@@ -141,7 +160,7 @@ func main() {
 			verifiers = append(verifiers, verifier)
 		}
 		if opt.Server.Provider.GCE != nil {
-			verifier, err := gcetpmverifier.NewTPMVerifier(opt.Server.Provider.GCE)
+			verifier, err := gcetpmverifier.NewTPMVerifier(opt.Server.Provider.GCE, capiManager)
 			if err != nil {
 				setupLog.Error(err, "unable to create verifier")
 				os.Exit(1)
@@ -188,6 +207,8 @@ func main() {
 			}
 			verifiers = append(verifiers, verifier)
 		}
+		if opt.Server.Provider.Linode != nil {
+			verifier, err := linodecloudup.NewLinodeVerifier(opt.Server.Provider.Linode)
 		if opt.Server.Provider.Elemento != nil {
 			verifier, err := elemento.NewElementoVerifier(opt.Server.Provider.Elemento)
 			if err != nil {
@@ -226,6 +247,7 @@ func main() {
 			setupLog.Error(err, "unable to create server")
 			os.Exit(1)
 		}
+		clientset = srv.GetClientset()
 		mgr.Add(srv)
 	}
 
@@ -237,7 +259,7 @@ func main() {
 		}
 	}
 
-	if err := addNodeController(ctx, mgr, vfsContext, &opt); err != nil {
+	if err := addNodeController(ctx, mgr, &opt); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NodeController")
 		os.Exit(1)
 	}
@@ -249,6 +271,17 @@ func main() {
 
 	// +kubebuilder:scaffold:builder
 
+	if opt.CAPI.IsEnabled() {
+		if clientset == nil {
+			setupLog.Error(fmt.Errorf("clientset is not initialized"), "registering Cluster API controllers")
+			os.Exit(1)
+		}
+		if err := clusterapi.RegisterControllers(mgr, clientset); err != nil {
+			setupLog.Error(err, "registering Cluster API controllers")
+			os.Exit(1)
+		}
+	}
+
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")
@@ -256,7 +289,7 @@ func main() {
 	}
 }
 
-func buildScheme() (*runtime.Scheme, error) {
+func buildScheme(opt *config.Options) (*runtime.Scheme, error) {
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {
 		return nil, fmt.Errorf("error registering corev1: %v", err)
@@ -268,52 +301,71 @@ func buildScheme() (*runtime.Scheme, error) {
 	if err := coordinationv1.AddToScheme(scheme); err != nil {
 		return nil, fmt.Errorf("error registering coordinationv1: %v", err)
 	}
+	if opt.CAPI.IsEnabled() {
+		if err := bootstrapapi.AddToScheme(scheme); err != nil {
+			return nil, fmt.Errorf("error registering kops bootstrap cluster API: %v", err)
+		}
+		if err := controlplaneapi.AddToScheme(scheme); err != nil {
+			return nil, fmt.Errorf("error registering kops control-plane cluster API: %v", err)
+		}
+	}
+
 	return scheme, nil
 }
 
-func addNodeController(ctx context.Context, mgr manager.Manager, vfsContext *vfs.VFSContext, opt *config.Options) error {
-	var legacyIdentifier nodeidentity.LegacyIdentifier
+func addNodeController(ctx context.Context, mgr manager.Manager, opt *config.Options) error {
+	var capiManager *nodeidentityclusterapi.Manager
+	if opt.CAPI.IsEnabled() {
+		capiManager = nodeidentityclusterapi.NewManager(mgr.GetClient())
+	}
+
 	var identifier nodeidentity.Identifier
 	var err error
 	switch opt.Cloud {
 	case "aws":
 		identifier, err = nodeidentityaws.New(ctx, opt.CacheNodeidentityInfo)
 		if err != nil {
-			return fmt.Errorf("error building identifier: %v", err)
+			return fmt.Errorf("error building node identifier: %w", err)
 		}
 
 	case "gce":
-		legacyIdentifier, err = nodeidentitygce.New()
+		identifier, err = nodeidentitygce.New(opt.ClusterName, capiManager)
 		if err != nil {
-			return fmt.Errorf("error building identifier: %v", err)
+			return fmt.Errorf("error building node identifier: %w", err)
 		}
 
 	case "openstack":
 		identifier, err = nodeidentityos.New(opt.CacheNodeidentityInfo)
 		if err != nil {
-			return fmt.Errorf("error building identifier: %v", err)
+			return fmt.Errorf("error building node identifier: %w", err)
 		}
 
 	case "digitalocean":
-		legacyIdentifier, err = nodeidentitydo.New()
+		identifier, err = nodeidentitydo.New(opt.CacheNodeidentityInfo)
 		if err != nil {
-			return fmt.Errorf("error building identifier: %v", err)
+			return fmt.Errorf("error building node identifier: %w", err)
 		}
 
 	case "hetzner":
 		identifier, err = nodeidentityhetzner.New(opt.CacheNodeidentityInfo)
 		if err != nil {
-			return fmt.Errorf("error building identifier: %w", err)
+			return fmt.Errorf("error building node identifier: %w", err)
 		}
 
 	case "azure":
 		identifier, err = nodeidentityazure.New(opt.CacheNodeidentityInfo)
 		if err != nil {
-			return fmt.Errorf("error building identifier: %v", err)
+			return fmt.Errorf("error building node identifier: %w", err)
 		}
 
 	case "scaleway":
 		identifier, err = nodeidentityscw.New(opt.CacheNodeidentityInfo)
+		if err != nil {
+			return fmt.Errorf("error building node identifier: %w", err)
+		}
+	
+	case "elemento":
+		identifier, err = nodeidentityelemento.New(opt.CacheNodeidentityInfo)
 		if err != nil {
 			return fmt.Errorf("error building identifier: %w", err)
 		}
@@ -330,6 +382,12 @@ func addNodeController(ctx context.Context, mgr manager.Manager, vfsContext *vfs
 			return fmt.Errorf("error building metal node identifier: %w", err)
 		}
 
+	case "linode":
+		identifier, err = nodeidentitylinode.New(opt.CacheNodeidentityInfo)
+		if err != nil {
+			return fmt.Errorf("error building linode node identifier: %w", err)
+		}
+
 	case "":
 		return fmt.Errorf("must specify cloud")
 
@@ -337,29 +395,12 @@ func addNodeController(ctx context.Context, mgr manager.Manager, vfsContext *vfs
 		return fmt.Errorf("identifier for cloud %q not implemented", opt.Cloud)
 	}
 
-	if identifier != nil {
-		nodeController, err := controllers.NewNodeReconciler(mgr, identifier)
-		if err != nil {
-			return err
-		}
-		if err := nodeController.SetupWithManager(mgr); err != nil {
-			return err
-		}
-	} else {
-		if opt.ConfigBase == "" {
-			return fmt.Errorf("must specify configBase")
-		}
-		if opt.SecretStore == "" {
-			return fmt.Errorf("must specify secretStore")
-		}
-
-		nodeController, err := controllers.NewLegacyNodeReconciler(mgr, vfsContext, opt.ConfigBase, legacyIdentifier)
-		if err != nil {
-			return err
-		}
-		if err := nodeController.SetupWithManager(mgr); err != nil {
-			return err
-		}
+	nodeController, err := controllers.NewNodeReconciler(mgr, identifier)
+	if err != nil {
+		return err
+	}
+	if err := nodeController.SetupWithManager(mgr); err != nil {
+		return err
 	}
 
 	return nil
@@ -406,6 +447,12 @@ func setupCloudIPAM(ctx context.Context, mgr manager.Manager, opt *config.Option
 		ipamController, err := controllers.NewGCEIPAMReconciler(mgr)
 		if err != nil {
 			return fmt.Errorf("creating gce IPAM controller: %w", err)
+		}
+		controller = ipamController
+	case "metal":
+		ipamController, err := controllers.NewMetalIPAMReconciler(ctx, mgr)
+		if err != nil {
+			return fmt.Errorf("creating metal IPAM controller: %w", err)
 		}
 		controller = ipamController
 	default:

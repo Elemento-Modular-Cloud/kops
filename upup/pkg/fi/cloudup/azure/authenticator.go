@@ -17,93 +17,57 @@ limitations under the License.
 package azure
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
 
+	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/bootstrap"
 )
 
-const AzureAuthenticationTokenPrefix = "x-azure-id "
+// AzureAuthenticationTokenPrefix prefixes bootstrap tokens created from Azure IMDS instance
+// identity data.
+const AzureAuthenticationTokenPrefix = "x-azure-id " //nolint:gosec // This is an authentication scheme prefix, not a credential.
 
-type azureAuthenticator struct {
-}
+type azureAuthenticator struct{}
 
-var _ bootstrap.Authenticator = &azureAuthenticator{}
+var _ bootstrap.Authenticator = (*azureAuthenticator)(nil)
 
+// NewAzureAuthenticator returns an authenticator that mints Azure bootstrap tokens backed by IMDS
+// metadata and an attested document signature.
 func NewAzureAuthenticator() (bootstrap.Authenticator, error) {
 	return &azureAuthenticator{}, nil
 }
 
+// CreateToken fetches the local VM identity from IMDS and returns a bootstrap token containing the
+// resource ID and signed attested document.
 func (h *azureAuthenticator) CreateToken(body []byte) (string, error) {
-	m, err := queryInstanceMetadata()
+	klog.V(4).Infof("Azure authenticator creating bootstrap token")
+
+	// bootstrap.Authenticator.CreateToken carries no context; the IMDS HTTP client's own timeout
+	// bounds these calls.
+	ctx := context.TODO()
+
+	// Query IMDS for the VM's resource ID.
+	metadata, err := QueryComputeInstanceMetadata(ctx)
 	if err != nil {
 		return "", fmt.Errorf("querying instance metadata: %w", err)
 	}
-
-	vmId := m.Compute.VMID
-	if vmId == "" {
-		return "", fmt.Errorf("missing virtual machine ID")
+	if metadata.ResourceID == "" {
+		return "", fmt.Errorf("missing resource ID")
 	}
+	klog.V(4).Infof("Azure authenticator obtained resource ID %q", metadata.ResourceID)
 
-	// The fully qualified VMSS VM resource ID format is:
-	// /subscriptions/SUBSCRIPTION_ID/resourceGroups/RESOURCE_GROUP_NAME/providers/Microsoft.Compute/virtualMachineScaleSets/VMSS_NAME/virtualMachines/VMSS_INDEX
-	r := strings.Split(m.Compute.ResourceID, "/")
-	if len(r) != 11 || r[7] != "virtualMachineScaleSets" || r[9] != "virtualMachines" {
-		return "", fmt.Errorf("unexpected resource ID format: %q", m.Compute.ResourceID)
-	}
-	vmssName := r[8]
-	vmssIndex := r[10]
-
-	return AzureAuthenticationTokenPrefix + vmId + " " + vmssName + " " + vmssIndex, nil
-}
-
-type instanceComputeMetadata struct {
-	ResourceGroupName string `json:"resourceGroupName"`
-	ResourceID        string `json:"resourceId"`
-	SubscriptionID    string `json:"subscriptionId"`
-	VMID              string `json:"vmId"`
-}
-
-type instanceMetadata struct {
-	Compute *instanceComputeMetadata `json:"compute"`
-}
-
-// queryInstanceMetadata queries Azure Instance Metadata Service (IMDS)
-// https://learn.microsoft.com/en-us/azure/virtual-machines/instance-metadata-service?tabs=linux
-func queryInstanceMetadata() (*instanceMetadata, error) {
-	transport := &http.Transport{Proxy: nil}
-
-	client := http.Client{Transport: transport}
-
-	req, err := http.NewRequest("GET", "http://169.254.169.254/metadata/instance", nil)
+	// Query IMDS for a PKCS7-signed attested document containing the nonce.
+	nonce := nonceForBody(body)
+	doc, err := queryIMDSAttestedDocument(ctx, nonce)
 	if err != nil {
-		return nil, fmt.Errorf("creating a new request: %w", err)
+		return "", fmt.Errorf("querying attested document: %w", err)
 	}
-	req.Header.Add("Metadata", "True")
-
-	q := req.URL.Query()
-	q.Add("format", "json")
-	q.Add("api-version", "2021-02-01")
-	req.URL.RawQuery = q.Encode()
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("sending request to the instance metadata server: %w", err)
+	if doc.Signature == "" {
+		return "", fmt.Errorf("empty attested document signature")
 	}
+	klog.V(2).Infof("Azure authenticator obtained attested document for %q", metadata.ResourceID)
 
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading a response from the metadata server: %w", err)
-	}
-	metadata := &instanceMetadata{}
-	err = json.Unmarshal(body, metadata)
-	if err != nil {
-		return nil, fmt.Errorf("unmarshalling instance metadata: %w", err)
-	}
-
-	return metadata, nil
+	// Token format: "x-azure-id <resourceID> <base64-pkcs7-signature>"
+	return AzureAuthenticationTokenPrefix + metadata.ResourceID + " " + doc.Signature, nil
 }

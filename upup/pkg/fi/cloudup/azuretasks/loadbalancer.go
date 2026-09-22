@@ -19,17 +19,61 @@ package azuretasks
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	network "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/network/armnetwork"
 	"k8s.io/klog/v2"
-	"k8s.io/kops/pkg/wellknownports"
 	"k8s.io/kops/pkg/wellknownservices"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/azure"
 )
+
+// LoadBalancerProbe defines a health probe for the load balancer.
+type LoadBalancerProbe struct {
+	// Name is the probe name, e.g. "Health-HTTPS-3988".
+	Name string
+	// Protocol is the probe protocol, e.g. network.ProbeProtocolTCP.
+	Protocol network.ProbeProtocol
+	// Port is the port to probe.
+	Port int32
+	// RequestPath is the path for HTTP/HTTPS probes (nil for TCP).
+	RequestPath *string
+	// IntervalInSeconds is the probe interval.
+	IntervalInSeconds int32
+	// NumberOfProbes is the number of probes before marking unhealthy.
+	NumberOfProbes int32
+}
+
+var _ fi.CloudupHasDependencies = (*LoadBalancerProbe)(nil)
+
+func (e *LoadBalancerProbe) GetDependencies(tasks map[string]fi.CloudupTask) []fi.CloudupTask {
+	return nil
+}
+
+// LoadBalancerRule defines a load balancing rule.
+type LoadBalancerRule struct {
+	// Name is the rule name, e.g. "TCP-443".
+	Name string
+	// Port is both the frontend and backend port.
+	Port int32
+	// ProbeName references the probe by name.
+	ProbeName string
+	// Protocol is the transport protocol, e.g. network.TransportProtocolTCP.
+	Protocol network.TransportProtocol
+	// IdleTimeoutInMinutes is the idle timeout for the rule.
+	IdleTimeoutInMinutes int32
+	// EnableFloatingIP enables Direct Server Return.
+	EnableFloatingIP bool
+	// LoadDistribution is the load distribution policy.
+	LoadDistribution network.LoadDistribution
+}
+
+var _ fi.CloudupHasDependencies = (*LoadBalancerRule)(nil)
+
+func (e *LoadBalancerRule) GetDependencies(tasks map[string]fi.CloudupTask) []fi.CloudupTask {
+	return nil
+}
 
 // LoadBalancer is an Azure Cloud LoadBalancer
 // +kops:fitask
@@ -42,11 +86,23 @@ type LoadBalancer struct {
 	// External is set to true when the loadbalancer is used for external traffic
 	External *bool
 
+	// PublicIPAddress is the public IP address for external load balancers.
+	PublicIPAddress *PublicIPAddress
+
 	Tags map[string]*string
+
+	// SKU is the load balancer SKU, e.g. network.LoadBalancerSKUNameStandard.
+	SKU network.LoadBalancerSKUName
 
 	// WellKnownServices indicates which services are supported by this resource.
 	// This field is internal and is not rendered to the cloud.
 	WellKnownServices []wellknownservices.WellKnownService
+
+	// Probes defines the health probes for the load balancer.
+	Probes []LoadBalancerProbe
+
+	// Rules defines the load balancing rules.
+	Rules []LoadBalancerRule
 }
 
 var (
@@ -110,6 +166,10 @@ func (lb *LoadBalancer) Find(c *fi.CloudupContext) (*LoadBalancer, error) {
 	if found == nil {
 		return nil, nil
 	}
+	if found.Properties != nil && found.Properties.ProvisioningState != nil && *found.Properties.ProvisioningState == network.ProvisioningStateFailed {
+		klog.Warningf("found load balancer %q in failed provisioning state", *lb.Name)
+		return nil, nil
+	}
 
 	lbProperties := found.Properties
 
@@ -130,10 +190,55 @@ func (lb *LoadBalancer) Find(c *fi.CloudupContext) (*LoadBalancer, error) {
 		External: to.Ptr(feConfig.Properties.PublicIPAddress != nil),
 		Tags:     found.Tags,
 	}
+	if found.SKU != nil {
+		actual.SKU = fi.ValueOf(found.SKU.Name)
+	}
 	if subnet != nil {
 		actual.Subnet = &Subnet{
 			Name: subnet.Name,
 		}
+	}
+	if feConfig.Properties.PublicIPAddress != nil {
+		actual.PublicIPAddress = &PublicIPAddress{
+			ID: feConfig.Properties.PublicIPAddress.ID,
+		}
+	}
+
+	for _, probe := range lbProperties.Probes {
+		if probe.Properties == nil {
+			continue
+		}
+		p := LoadBalancerProbe{
+			Name:              fi.ValueOf(probe.Name),
+			Protocol:          fi.ValueOf(probe.Properties.Protocol),
+			Port:              fi.ValueOf(probe.Properties.Port),
+			IntervalInSeconds: fi.ValueOf(probe.Properties.IntervalInSeconds),
+			NumberOfProbes:    fi.ValueOf(probe.Properties.NumberOfProbes),
+		}
+		if probe.Properties.RequestPath != nil {
+			p.RequestPath = probe.Properties.RequestPath
+		}
+		actual.Probes = append(actual.Probes, p)
+	}
+
+	for _, rule := range lbProperties.LoadBalancingRules {
+		if rule.Properties == nil {
+			continue
+		}
+		r := LoadBalancerRule{
+			Name:                 fi.ValueOf(rule.Name),
+			Port:                 fi.ValueOf(rule.Properties.FrontendPort),
+			Protocol:             fi.ValueOf(rule.Properties.Protocol),
+			IdleTimeoutInMinutes: fi.ValueOf(rule.Properties.IdleTimeoutInMinutes),
+			EnableFloatingIP:     fi.ValueOf(rule.Properties.EnableFloatingIP),
+			LoadDistribution:     fi.ValueOf(rule.Properties.LoadDistribution),
+		}
+		if rule.Properties.Probe != nil && rule.Properties.Probe.ID != nil {
+			// Extract probe name from the full resource ID
+			parts := strings.Split(fi.ValueOf(rule.Properties.Probe.ID), "/")
+			r.ProbeName = parts[len(parts)-1]
+		}
+		actual.Rules = append(actual.Rules, r)
 	}
 
 	return actual, nil
@@ -178,7 +283,7 @@ func (*LoadBalancer) RenderAzure(t *azure.AzureAPITarget, a, e, changes *LoadBal
 	feConfigProperties := &network.FrontendIPConfigurationPropertiesFormat{}
 	if *e.External {
 		feConfigProperties.PublicIPAddress = &network.PublicIPAddress{
-			ID: to.Ptr(fmt.Sprintf("/%s/publicIPAddresses/%s", idPrefix, *e.Name)),
+			ID: e.PublicIPAddress.ID,
 		}
 	} else {
 		feConfigProperties.PrivateIPAllocationMethod = to.Ptr(network.IPAllocationMethodDynamic)
@@ -186,11 +291,11 @@ func (*LoadBalancer) RenderAzure(t *azure.AzureAPITarget, a, e, changes *LoadBal
 			ID: to.Ptr(fmt.Sprintf("/%s/virtualNetworks/%s/subnets/%s", idPrefix, *e.Subnet.VirtualNetwork.Name, *e.Subnet.Name)),
 		}
 	}
-	// TODO: Move hardcoded values to the model
+
 	lb := network.LoadBalancer{
 		Location: to.Ptr(t.Cloud.Region()),
 		SKU: &network.LoadBalancerSKU{
-			Name: to.Ptr(network.LoadBalancerSKUNameStandard),
+			Name: to.Ptr(e.SKU),
 		},
 		Properties: &network.LoadBalancerPropertiesFormat{
 			FrontendIPConfigurations: []*network.FrontendIPConfiguration{
@@ -208,65 +313,40 @@ func (*LoadBalancer) RenderAzure(t *azure.AzureAPITarget, a, e, changes *LoadBal
 		Tags: e.Tags,
 	}
 
-	if slices.Contains(e.WellKnownServices, wellknownservices.KubeAPIServer) {
-		lb.Properties.Probes = append(lb.Properties.Probes, &network.Probe{
-			Name: to.Ptr("Health-TCP-443"),
+	for _, probe := range e.Probes {
+		p := &network.Probe{
+			Name: to.Ptr(probe.Name),
 			Properties: &network.ProbePropertiesFormat{
-				Protocol:          to.Ptr(network.ProbeProtocolTCP),
-				Port:              to.Ptr[int32](wellknownports.KubeAPIServer),
-				IntervalInSeconds: to.Ptr[int32](15),
-				NumberOfProbes:    to.Ptr[int32](4),
+				Protocol:          to.Ptr(probe.Protocol),
+				Port:              to.Ptr(probe.Port),
+				IntervalInSeconds: to.Ptr(probe.IntervalInSeconds),
+				NumberOfProbes:    to.Ptr(probe.NumberOfProbes),
 			},
-		})
-		lb.Properties.LoadBalancingRules = append(lb.Properties.LoadBalancingRules, &network.LoadBalancingRule{
-			Name: to.Ptr("TCP-443"),
-			Properties: &network.LoadBalancingRulePropertiesFormat{
-				Protocol:             to.Ptr(network.TransportProtocolTCP),
-				FrontendPort:         to.Ptr[int32](wellknownports.KubeAPIServer),
-				BackendPort:          to.Ptr[int32](wellknownports.KubeAPIServer),
-				IdleTimeoutInMinutes: to.Ptr[int32](4),
-				EnableFloatingIP:     to.Ptr(false),
-				LoadDistribution:     to.Ptr(network.LoadDistributionDefault),
-				FrontendIPConfiguration: &network.SubResource{
-					ID: to.Ptr(fmt.Sprintf("/%s/loadbalancers/%s/frontendIPConfigurations/%s", idPrefix, *e.Name, *to.Ptr("LoadBalancerFrontEnd"))),
-				},
-				BackendAddressPool: &network.SubResource{
-					ID: to.Ptr(fmt.Sprintf("/%s/loadbalancers/%s/backendAddressPools/%s", idPrefix, *e.Name, *to.Ptr("LoadBalancerBackEnd"))),
-				},
-				Probe: &network.SubResource{
-					ID: to.Ptr(fmt.Sprintf("/%s/loadbalancers/%s/probes/%s", idPrefix, *e.Name, *to.Ptr("Health-TCP-443"))),
-				},
-			},
-		})
+		}
+		if probe.RequestPath != nil {
+			p.Properties.RequestPath = probe.RequestPath
+		}
+		lb.Properties.Probes = append(lb.Properties.Probes, p)
 	}
 
-	if slices.Contains(e.WellKnownServices, wellknownservices.KopsController) {
-		lb.Properties.Probes = append(lb.Properties.Probes, &network.Probe{
-			Name: to.Ptr("Health-TCP-3988"),
-			Properties: &network.ProbePropertiesFormat{
-				Protocol:          to.Ptr(network.ProbeProtocolTCP),
-				Port:              to.Ptr[int32](wellknownports.KopsControllerPort),
-				IntervalInSeconds: to.Ptr[int32](15),
-				NumberOfProbes:    to.Ptr[int32](4),
-			},
-		})
+	for _, rule := range e.Rules {
 		lb.Properties.LoadBalancingRules = append(lb.Properties.LoadBalancingRules, &network.LoadBalancingRule{
-			Name: to.Ptr("TCP-3988"),
+			Name: to.Ptr(rule.Name),
 			Properties: &network.LoadBalancingRulePropertiesFormat{
-				Protocol:             to.Ptr(network.TransportProtocolTCP),
-				FrontendPort:         to.Ptr[int32](wellknownports.KopsControllerPort),
-				BackendPort:          to.Ptr[int32](wellknownports.KopsControllerPort),
-				IdleTimeoutInMinutes: to.Ptr[int32](4),
-				EnableFloatingIP:     to.Ptr(false),
-				LoadDistribution:     to.Ptr(network.LoadDistributionDefault),
+				Protocol:             to.Ptr(rule.Protocol),
+				FrontendPort:         to.Ptr(rule.Port),
+				BackendPort:          to.Ptr(rule.Port),
+				IdleTimeoutInMinutes: to.Ptr(rule.IdleTimeoutInMinutes),
+				EnableFloatingIP:     to.Ptr(rule.EnableFloatingIP),
+				LoadDistribution:     to.Ptr(rule.LoadDistribution),
 				FrontendIPConfiguration: &network.SubResource{
-					ID: to.Ptr(fmt.Sprintf("/%s/loadbalancers/%s/frontendIPConfigurations/%s", idPrefix, *e.Name, *to.Ptr("LoadBalancerFrontEnd"))),
+					ID: to.Ptr(fmt.Sprintf("/%s/loadbalancers/%s/frontendIPConfigurations/%s", idPrefix, *e.Name, "LoadBalancerFrontEnd")),
 				},
 				BackendAddressPool: &network.SubResource{
-					ID: to.Ptr(fmt.Sprintf("/%s/loadbalancers/%s/backendAddressPools/%s", idPrefix, *e.Name, *to.Ptr("LoadBalancerBackEnd"))),
+					ID: to.Ptr(fmt.Sprintf("/%s/loadbalancers/%s/backendAddressPools/%s", idPrefix, *e.Name, "LoadBalancerBackEnd")),
 				},
 				Probe: &network.SubResource{
-					ID: to.Ptr(fmt.Sprintf("/%s/loadbalancers/%s/probes/%s", idPrefix, *e.Name, *to.Ptr("Health-TCP-3988"))),
+					ID: to.Ptr(fmt.Sprintf("/%s/loadbalancers/%s/probes/%s", idPrefix, *e.Name, rule.ProbeName)),
 				},
 			},
 		})

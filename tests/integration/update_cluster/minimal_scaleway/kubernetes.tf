@@ -58,6 +58,14 @@ resource "aws_s3_object" "kops-version-txt" {
   server_side_encryption = "AES256"
 }
 
+resource "aws_s3_object" "manifests-channels-kops-channels" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_object_manifests-channels-kops-channels_content")
+  key                    = "tests/scw-minimal.k8s.local/manifests/channels/kops-channels.yaml"
+  provider               = aws.files
+  server_side_encryption = "AES256"
+}
+
 resource "aws_s3_object" "manifests-etcdmanager-events-control-plane-fr-par-1" {
   bucket                 = "testingBucket"
   content                = file("${path.module}/data/aws_s3_object_manifests-etcdmanager-events-control-plane-fr-par-1_content")
@@ -185,7 +193,7 @@ resource "scaleway_instance_ip" "nodes-fr-par-1-0" {
 
 resource "scaleway_instance_server" "control-plane-fr-par-1-0" {
   enable_dynamic_ip = true
-  image             = "ubuntu_focal"
+  image             = "ubuntu_resolute"
   ip_id             = scaleway_instance_ip.control-plane-fr-par-1-0.id
   lifecycle {
     ignore_changes = [additional_volume_ids]
@@ -201,7 +209,7 @@ resource "scaleway_instance_server" "control-plane-fr-par-1-0" {
 
 resource "scaleway_instance_server" "nodes-fr-par-1-0" {
   enable_dynamic_ip      = true
-  image                  = "ubuntu_focal"
+  image                  = "ubuntu_resolute"
   ip_id                  = scaleway_instance_ip.nodes-fr-par-1-0.id
   name                   = "nodes-fr-par-1-0"
   replace_on_type_change = false
@@ -240,7 +248,7 @@ resource "scaleway_lb_backend" "lb-backend-https" {
   lb_id            = scaleway_lb.api-scw-minimal-k8s-local.id
   name             = "lb-backend-https"
   proxy_protocol   = "none"
-  server_ips       = [scaleway_instance_server.control-plane-fr-par-1-0.private_ip]
+  server_ips       = [scaleway_instance_server.control-plane-fr-par-1-0.private_ips[0].address]
 }
 
 resource "scaleway_lb_backend" "lb-backend-kops-controller" {
@@ -249,7 +257,7 @@ resource "scaleway_lb_backend" "lb-backend-kops-controller" {
   lb_id            = scaleway_lb.api-scw-minimal-k8s-local.id
   name             = "lb-backend-kops-controller"
   proxy_protocol   = "none"
-  server_ips       = [scaleway_instance_server.control-plane-fr-par-1-0.private_ip]
+  server_ips       = [scaleway_instance_server.control-plane-fr-par-1-0.private_ips[0].address]
 }
 
 resource "scaleway_lb_frontend" "lb-frontend-https" {

@@ -23,7 +23,9 @@ import (
 	compute "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute"
 	network "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/network/armnetwork"
 	"k8s.io/klog/v2"
+	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/protokube/pkg/gossip"
+	"k8s.io/kops/upup/pkg/fi/cloudup/azure"
 )
 
 type client interface {
@@ -61,7 +63,8 @@ func (p *SeedProvider) GetSeeds() ([]string, error) {
 
 	var vmssNames []string
 	for _, vmss := range vmsses {
-		if p.isVMSSForCluster(vmss) {
+		// Seed only from control-plane nodes; workers do not run gossip.
+		if p.isVMSSForCluster(vmss) && isControlPlaneVMSS(vmss) {
 			vmssNames = append(vmssNames, *vmss.Name)
 		}
 	}
@@ -97,4 +100,13 @@ func (p *SeedProvider) isVMSSForCluster(vmss *compute.VirtualMachineScaleSet) bo
 	}
 	// TODO(kenji): Filter by ProvisioningState if necessary.
 	return found == len(p.tags)
+}
+
+// isControlPlaneVMSS reports whether the scale set hosts control-plane nodes.
+func isControlPlaneVMSS(vmss *compute.VirtualMachineScaleSet) bool {
+	// VMSS carry the "control-plane" role tag; azure.TagRoleControlPlane
+	// ("control_plane") is a different spelling, used for disk tags.
+	controlPlaneRoleTag := azure.TagNameRolePrefix + kops.InstanceGroupRoleControlPlane.ToLowerString()
+	_, ok := vmss.Tags[controlPlaneRoleTag]
+	return ok
 }

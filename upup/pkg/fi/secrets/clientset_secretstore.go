@@ -27,12 +27,12 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
-	"k8s.io/kops/pkg/acls"
 	"k8s.io/kops/pkg/apis/kops"
 	kopsinternalversion "k8s.io/kops/pkg/client/clientset_generated/clientset/typed/kops/internalversion"
 	"k8s.io/kops/pkg/pki"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/util/pkg/vfs"
+	"k8s.io/kops/util/pkg/vfs/acls"
 )
 
 // NamePrefix is a prefix we use to avoid collisions with other keysets
@@ -45,7 +45,7 @@ type ClientsetSecretStore struct {
 	clientset kopsinternalversion.KopsInterface
 }
 
-var _ fi.SecretStore = &ClientsetSecretStore{}
+var _ fi.SecretStore = (*ClientsetSecretStore)(nil)
 
 // NewClientsetSecretStore is the constructor for ClientsetSecretStore
 func NewClientsetSecretStore(cluster *kops.Cluster, clientset kopsinternalversion.KopsInterface, namespace string) fi.SecretStore {
@@ -123,8 +123,7 @@ func (c *ClientsetSecretStore) ListSecrets() ([]string, error) {
 	for i := range list.Items {
 		keyset := &list.Items[i]
 
-		switch keyset.Spec.Type {
-		case kops.SecretTypeSecret:
+		if keyset.Spec.Type == kops.SecretTypeSecret {
 			name := strings.TrimPrefix(keyset.Name, NamePrefix)
 			names = append(names, name)
 		}

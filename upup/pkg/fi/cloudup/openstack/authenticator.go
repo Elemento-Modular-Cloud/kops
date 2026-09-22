@@ -22,12 +22,12 @@ import (
 	"k8s.io/kops/pkg/bootstrap"
 )
 
-const OpenstackAuthenticationTokenPrefix = "x-openstack-id "
+const OpenstackAuthenticationTokenPrefix = "x-openstack-id " //nolint:gosec // This is an authentication scheme prefix, not a credential.
 
 type openstackAuthenticator struct {
 }
 
-var _ bootstrap.Authenticator = &openstackAuthenticator{}
+var _ bootstrap.Authenticator = (*openstackAuthenticator)(nil)
 
 func NewOpenstackAuthenticator() (bootstrap.Authenticator, error) {
 	return &openstackAuthenticator{}, nil

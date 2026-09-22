@@ -42,13 +42,12 @@ import (
 
 type nodeUpConfigBuilder struct {
 	assetBuilder               *assets.AssetBuilder
-	channels                   []string
+	channelsManifest           string
 	configBase                 vfs.Path
 	cluster                    *kops.Cluster
 	etcdManifests              map[string][]string
 	images                     map[kops.InstanceGroupRole]map[architectures.Architecture][]*nodeup.Image
 	protokubeAsset             map[architectures.Architecture][]*assets.MirroredAsset
-	channelsAsset              map[architectures.Architecture][]*assets.MirroredAsset
 	encryptionConfigSecretHash string
 }
 
@@ -58,18 +57,12 @@ func NewNodeUpConfigBuilder(cluster *kops.Cluster, assetBuilder *assets.AssetBui
 		return nil, fmt.Errorf("error parsing configStore.base %q: %v", cluster.Spec.ConfigStore.Base, err)
 	}
 
-	channels := []string{
-		configBase.Join("addons", "bootstrap-channel.yaml").Path(),
-	}
-
-	for i := range cluster.Spec.Addons {
-		channels = append(channels, cluster.Spec.Addons[i].Manifest)
-	}
+	// Must match channelsManifestPath in pkg/model/components/channels/model.go.
+	channelsManifest := configBase.Join("manifests/channels/kops-channels.yaml").Path()
 
 	etcdManifests := map[string][]string{}
 	images := map[kops.InstanceGroupRole]map[architectures.Architecture][]*nodeup.Image{}
 	protokubeAsset := map[architectures.Architecture][]*assets.MirroredAsset{}
-	channelsAsset := map[architectures.Architecture][]*assets.MirroredAsset{}
 
 	for _, arch := range architectures.GetSupported() {
 		asset, err := wellknownassets.ProtokubeAsset(assetBuilder, arch)
@@ -79,17 +72,9 @@ func NewNodeUpConfigBuilder(cluster *kops.Cluster, assetBuilder *assets.AssetBui
 		protokubeAsset[arch] = append(protokubeAsset[arch], asset)
 	}
 
-	for _, arch := range architectures.GetSupported() {
-		asset, err := wellknownassets.ChannelsAsset(assetBuilder, arch)
-		if err != nil {
-			return nil, err
-		}
-		channelsAsset[arch] = append(channelsAsset[arch], asset)
-	}
-
 	for _, role := range kops.AllInstanceGroupRoles {
-		isMaster := role == kops.InstanceGroupRoleControlPlane
-		isAPIServer := role == kops.InstanceGroupRoleAPIServer
+		isMaster := role.HasControlPlane()
+		isAPIServer := role.HasAPIServer()
 
 		images[role] = make(map[architectures.Architecture][]*nodeup.Image)
 		if kopsmodel.IsBaseURL(cluster.Spec.KubernetesVersion) {
@@ -129,7 +114,7 @@ func NewNodeUpConfigBuilder(cluster *kops.Cluster, assetBuilder *assets.AssetBui
 		// don't need to push/pull from a registry
 		if os.Getenv("KOPS_BASE_URL") != "" && isMaster {
 			for _, arch := range architectures.GetSupported() {
-				for _, name := range []string{"kops-utils-cp", "kops-controller", "dns-controller", "kube-apiserver-healthcheck"} {
+				for _, name := range []string{"kops-utils-cp", "kops-controller", "kops-channels", "dns-controller", "kube-apiserver-healthcheck"} {
 					baseURL, err := url.Parse(os.Getenv("KOPS_BASE_URL"))
 					if err != nil {
 						return nil, err
@@ -187,13 +172,12 @@ func NewNodeUpConfigBuilder(cluster *kops.Cluster, assetBuilder *assets.AssetBui
 
 	configBuilder := nodeUpConfigBuilder{
 		assetBuilder:               assetBuilder,
-		channels:                   channels,
+		channelsManifest:           channelsManifest,
 		configBase:                 configBase,
 		cluster:                    cluster,
 		etcdManifests:              etcdManifests,
 		images:                     images,
 		protokubeAsset:             protokubeAsset,
-		channelsAsset:              channelsAsset,
 		encryptionConfigSecretHash: encryptionConfigSecretHash,
 	}
 
@@ -214,8 +198,8 @@ func (n *nodeUpConfigBuilder) BuildConfig(ig *kops.InstanceGroup, wellKnownAddre
 	}
 
 	usesLegacyGossip := cluster.UsesLegacyGossip()
-	isMaster := role == kops.InstanceGroupRoleControlPlane
-	hasAPIServer := isMaster || role == kops.InstanceGroupRoleAPIServer
+	isMaster := role.HasControlPlane()
+	hasAPIServer := isMaster || role.HasAPIServer()
 
 	config, bootConfig := nodeup.NewConfig(cluster, ig)
 
@@ -247,7 +231,7 @@ func (n *nodeUpConfigBuilder) BuildConfig(ig *kops.InstanceGroup, wellKnownAddre
 		}
 	}
 
-	if role != kops.InstanceGroupRoleBastion {
+	if !role.HasBastion() {
 		if err := loadCertificates(keysets, fi.CertificateIDCA, config, true); err != nil {
 			return nil, nil, err
 		}
@@ -269,13 +253,20 @@ func (n *nodeUpConfigBuilder) BuildConfig(ig *kops.InstanceGroup, wellKnownAddre
 				if err := loadCertificates(keysets, "etcd-peers-ca-"+k, config, true); err != nil {
 					return nil, nil, err
 				}
-				if k != "events" && k != "main" {
+				if k != "events" && k != "main" && k != "leases" {
 					if err := loadCertificates(keysets, "etcd-clients-ca-"+k, config, true); err != nil {
 						return nil, nil, err
 					}
 				}
 			}
 			config.KeypairIDs["service-account"] = keysets["service-account"].Primary.Id
+
+			// Add key for registering with the discovery service (if configured)
+			if cluster.Spec.ServiceAccountIssuerDiscovery != nil &&
+				cluster.Spec.ServiceAccountIssuerDiscovery.DiscoveryService != nil &&
+				cluster.Spec.ServiceAccountIssuerDiscovery.DiscoveryService.URL != "" {
+				config.KeypairIDs[fi.DiscoveryCAID] = keysets[fi.DiscoveryCAID].Primary.Id
+			}
 		} else {
 			if keysets["etcd-client-cilium"] != nil {
 				config.KeypairIDs["etcd-client-cilium"] = keysets["etcd-client-cilium"].Primary.Id
@@ -303,21 +294,6 @@ func (n *nodeUpConfigBuilder) BuildConfig(ig *kops.InstanceGroup, wellKnownAddre
 			for _, key := range []string{"kubelet", "kube-proxy", "kube-router"} {
 				if keysets[key] != nil {
 					config.KeypairIDs[key] = keysets[key].Primary.Id
-				}
-			}
-		}
-
-		if isMaster || usesLegacyGossip {
-			config.Channels = n.channels
-			for _, arch := range architectures.GetSupported() {
-				for _, a := range n.protokubeAsset[arch] {
-					config.Assets[arch] = append(config.Assets[arch], a.CompactString())
-				}
-			}
-
-			for _, arch := range architectures.GetSupported() {
-				for _, a := range n.channelsAsset[arch] {
-					config.Assets[arch] = append(config.Assets[arch], a.CompactString())
 				}
 			}
 		}
@@ -367,50 +343,55 @@ func (n *nodeUpConfigBuilder) BuildConfig(ig *kops.InstanceGroup, wellKnownAddre
 			}
 		}
 
-	case kops.CloudProviderDO, kops.CloudProviderScaleway, kops.CloudProviderAzure:
+	case kops.CloudProviderDO, kops.CloudProviderScaleway, kops.CloudProviderAzure, kops.CloudProviderMetal:
 		// Use any IP address that is found (including public ones)
-		for _, additionalIP := range wellKnownAddresses[wellknownservices.KubeAPIServer] {
-			controlPlaneIPs = append(controlPlaneIPs, additionalIP)
+		controlPlaneIPs = append(controlPlaneIPs, wellKnownAddresses[wellknownservices.KubeAPIServer]...)
+	}
+
+	// Bake control-plane IPs into /etc/hosts (for api.internal and kops-controller.internal):
+	//   - non-CP roles in any cluster that exposes kops-controller on the API LB,
+	//   - any role on clouds without DNS-based kops-controller discovery.
+	// CP nodes get api.internal=127.0.0.1 from etc_hosts.go's IsMaster branch and don't
+	// connect to kops-controller.internal externally, so they don't need APIServerIPs.
+	if cluster.UsesLoadBalancerForKopsController() && !ig.HasAPIServer() {
+		bootConfig.APIServerIPs = controlPlaneIPs
+	} else {
+		switch cluster.GetCloudProvider() {
+		case kops.CloudProviderHetzner, kops.CloudProviderScaleway, kops.CloudProviderDO, kops.CloudProviderMetal:
+			bootConfig.APIServerIPs = controlPlaneIPs
 		}
 	}
 
-	if cluster.UsesNoneDNS() {
-		bootConfig.APIServerIPs = controlPlaneIPs
-	} else {
-		// If we do have a fixed IP, we use it (on some clouds, initially)
-		// This covers the clouds in UseKopsControllerForNodeConfig which use kops-controller for node config,
-		// but don't have a specialized discovery mechanism for finding kops-controller etc.
-		switch cluster.GetCloudProvider() {
-		case kops.CloudProviderHetzner, kops.CloudProviderScaleway, kops.CloudProviderDO:
-			bootConfig.APIServerIPs = controlPlaneIPs
+	// Bake Etcd LB IPs into /etc/hosts if etcd is not local and there is an API Server.
+	if role.HasAPIServer() {
+		if len(wellKnownAddresses[wellknownservices.EtcdMain]) > 0 {
+			if len(wellKnownAddresses[wellknownservices.EtcdMain]) > 1 {
+				return nil, nil, fmt.Errorf("we currently do not support multiple Etcd IPs")
+			}
+			bootConfig.EtcdIPs = wellKnownAddresses[wellknownservices.EtcdMain]
+		}
+	}
+
+	if !role.HasBastion() {
+		// protokube runs on control-plane nodes, and on legacy-gossip workers that don't bootstrap via kops-controller (mirrors nodeup's ProtokubeBuilder.Build).
+		if isMaster || (usesLegacyGossip && len(bootConfig.APIServerIPs) == 0) {
+			for _, arch := range architectures.GetSupported() {
+				for _, a := range n.protokubeAsset[arch] {
+					config.Assets[arch] = append(config.Assets[arch], a.CompactString())
+				}
+			}
 		}
 	}
 
 	useConfigServer := kopsmodel.UseKopsControllerForNodeConfig(cluster) && !ig.HasAPIServer()
 	if useConfigServer {
-		hosts := []string{"kops-controller.internal." + cluster.ObjectMeta.Name}
-		if len(bootConfig.APIServerIPs) > 0 {
-			hosts = bootConfig.APIServerIPs
-		}
-
-		configServer := &nodeup.ConfigServerOptions{
-			CACertificates: config.CAs[fi.CertificateIDCA],
-		}
-		for _, host := range hosts {
-			baseURL := url.URL{
-				Scheme: "https",
-				Host:   net.JoinHostPort(host, strconv.Itoa(wellknownports.KopsControllerPort)),
-				Path:   "/",
-			}
-			configServer.Servers = append(configServer.Servers, baseURL.String())
-		}
-		bootConfig.ConfigServer = configServer
+		bootConfig.ConfigServer = buildConfigServerOptions(cluster.ObjectMeta.Name, config.CAs[fi.CertificateIDCA], bootConfig.APIServerIPs)
 		delete(config.CAs, fi.CertificateIDCA)
 	} else {
 		bootConfig.ConfigBase = fi.PtrTo(n.configBase.Path())
 	}
 
-	for _, manifest := range n.assetBuilder.StaticManifests {
+	for _, manifest := range n.assetBuilder.StaticManifests() {
 		if !manifest.AppliesToRole(role) {
 			continue
 		}
@@ -421,7 +402,7 @@ func (n *nodeUpConfigBuilder) BuildConfig(ig *kops.InstanceGroup, wellKnownAddre
 		})
 	}
 
-	for _, staticFile := range n.assetBuilder.StaticFiles {
+	for _, staticFile := range n.assetBuilder.StaticFiles() {
 		match := false
 		for _, r := range staticFile.Roles {
 			if r == role {
@@ -446,6 +427,7 @@ func (n *nodeUpConfigBuilder) BuildConfig(ig *kops.InstanceGroup, wellKnownAddre
 			config.EtcdClusterNames = append(config.EtcdClusterNames, etcdCluster.Name)
 		}
 		config.EtcdManifests = n.etcdManifests[ig.Name]
+		config.ChannelsManifest = n.channelsManifest
 	}
 
 	if cluster.Spec.CloudProvider.AWS != nil {
@@ -458,6 +440,30 @@ func (n *nodeUpConfigBuilder) BuildConfig(ig *kops.InstanceGroup, wellKnownAddre
 	config.Packages = append(config.Packages, ig.Spec.Packages...)
 
 	return config, bootConfig, nil
+}
+
+func buildConfigServerOptions(clusterName string, caCertificates string, apiserverIPs []string) *nodeup.ConfigServerOptions {
+	kopsControllerName := "kops-controller.internal." + clusterName
+	hosts := []string{kopsControllerName}
+
+	configServer := &nodeup.ConfigServerOptions{
+		CACertificates: caCertificates,
+	}
+	if len(apiserverIPs) > 0 {
+		hosts = apiserverIPs
+		configServer.TLSServerName = kopsControllerName
+	}
+
+	for _, host := range hosts {
+		baseURL := url.URL{
+			Scheme: "https",
+			Host:   net.JoinHostPort(host, strconv.Itoa(wellknownports.KopsControllerPort)),
+			Path:   "/",
+		}
+		configServer.Servers = append(configServer.Servers, baseURL.String())
+	}
+
+	return configServer
 }
 
 func loadCertificates(keysets map[string]*fi.Keyset, name string, config *nodeup.Config, includeKeypairID bool) error {
@@ -481,7 +487,7 @@ func loadCertificates(keysets map[string]*fi.Keyset, name string, config *nodeup
 
 // buildWarmPoolImages returns a list of container images that should be pre-pulled during instance pre-initialization
 func (n *nodeUpConfigBuilder) buildWarmPoolImages(ig *kops.InstanceGroup) []string {
-	if ig == nil || ig.Spec.Role == kops.InstanceGroupRoleControlPlane {
+	if ig == nil || ig.Spec.Role.HasControlPlane() {
 		return nil
 	}
 
@@ -491,7 +497,7 @@ func (n *nodeUpConfigBuilder) buildWarmPoolImages(ig *kops.InstanceGroup) []stri
 	// TODO: Exclude images that only run on control-plane nodes in a generic way
 	desiredImagePrefixes := []string{
 		// Ignore images hosted in private ECR repositories as containerd cannot actually pull these
-		//"602401143452.dkr.ecr.us-west-2.amazonaws.com/", // Amazon VPC CNI
+		// "602401143452.dkr.ecr.us-west-2.amazonaws.com/", // Amazon VPC CNI
 		// Ignore images hosted on docker.io until a solution for rate limiting is implemented
 		//"docker.io/calico/",
 		//"docker.io/cilium/",
@@ -507,11 +513,21 @@ func (n *nodeUpConfigBuilder) buildWarmPoolImages(ig *kops.InstanceGroup) []stri
 	}
 	assetBuilder := n.assetBuilder
 	if assetBuilder != nil {
-		for _, image := range assetBuilder.ImageAssets {
+		// Add kops-managed images
+		for _, image := range assetBuilder.ImageAssets() {
 			for _, prefix := range desiredImagePrefixes {
-				if strings.HasPrefix(image.DownloadLocation, prefix) {
+				remappedPrefix := assets.NormalizeImage(assetBuilder, prefix)
+				if strings.HasPrefix(image.DownloadLocation, remappedPrefix) {
 					images[image.DownloadLocation] = true
 				}
+			}
+		}
+
+		// Add ig-level extra images
+		if ig.Spec.WarmPool != nil && len(ig.Spec.WarmPool.AdditionalImages) > 0 {
+			for _, image := range ig.Spec.WarmPool.AdditionalImages {
+				remapped := assets.NormalizeImage(assetBuilder, image)
+				images[remapped] = true
 			}
 		}
 	}

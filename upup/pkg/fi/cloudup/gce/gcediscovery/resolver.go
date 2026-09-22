@@ -39,7 +39,7 @@ type Discovery struct {
 	allZonesInRegion []string
 }
 
-var _ gossip.SeedProvider = &Discovery{}
+var _ gossip.SeedProvider = (*Discovery)(nil)
 
 func (r *Discovery) GetSeeds() ([]string, error) {
 	var seeds []string
@@ -49,8 +49,24 @@ func (r *Discovery) GetSeeds() ([]string, error) {
 
 	ctx := context.TODO()
 
+	// Seed only from control-plane nodes; workers do not run gossip.
+	controlPlaneTag := gce.TagForRole(r.clusterName, kops.InstanceGroupRoleControlPlane)
+
 	if err := r.findInstances(ctx, func(i *compute.Instance) (bool, error) {
 		// TODO: Expose multiple IPs topologies?
+
+		hasControlPlaneTag := false
+		if i.Tags != nil {
+			for _, tag := range i.Tags.Items {
+				if tag == controlPlaneTag {
+					hasControlPlaneTag = true
+					break
+				}
+			}
+		}
+		if !hasControlPlaneTag {
+			return true, nil
+		}
 
 		for _, ni := range i.NetworkInterfaces {
 			// TODO: Check e.g. Network

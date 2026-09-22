@@ -1,61 +1,59 @@
 kind: Addons
 metadata:
-  creationTimestamp: null
   name: bootstrap
 spec:
   addons:
   - id: k8s-1.16
     manifest: kops-controller.addons.k8s.io/k8s-1.16.yaml
-    manifestHash: 8b05861af28274817bba93deac09eb167d558d776697255c4cda9b1b31445221
+    manifestHash: 58fe6d5f1300b0703508933aa77ea9ccf34f84b9799028dadd7079cbb9975e8e
     name: kops-controller.addons.k8s.io
     needsRollingUpdate: control-plane
     selector:
       k8s-addon: kops-controller.addons.k8s.io
-    version: 9.99.0
   - id: k8s-1.12
     manifest: coredns.addons.k8s.io/k8s-1.12.yaml
-    manifestHash: 591e3b40d00949575616698ce1c9230db8cb00bdab4f8a0d5ef14080a1d7a93c
+    manifestHash: c89f00f91983d51347e920cada21c0d48792dfa4ae32f3eef9e4ebf45495250c
     name: coredns.addons.k8s.io
     selector:
       k8s-addon: coredns.addons.k8s.io
-    version: 9.99.0
   - id: k8s-1.9
     manifest: kubelet-api.rbac.addons.k8s.io/k8s-1.9.yaml
-    manifestHash: 01c120e887bd98d82ef57983ad58a0b22bc85efb48108092a24c4b82e4c9ea81
+    manifestHash: da91eb5cf9a29f1b03510007d6d54603aef2fc23a305abc9ba496c510dfd3bc7
     name: kubelet-api.rbac.addons.k8s.io
     selector:
       k8s-addon: kubelet-api.rbac.addons.k8s.io
-    version: 9.99.0
   - manifest: limit-range.addons.k8s.io/v1.5.0.yaml
-    manifestHash: 2d55c3bc5e354e84a3730a65b42f39aba630a59dc8d32b30859fcce3d3178bc2
+    manifestHash: 686cc69e559a1c6f5e8b94e38de54a575a25c432ed5ceec565244b965fb5f07f
     name: limit-range.addons.k8s.io
     selector:
       k8s-addon: limit-range.addons.k8s.io
-    version: 9.99.0
   - id: k8s-1.12
     manifest: dns-controller.addons.k8s.io/k8s-1.12.yaml
-    manifestHash: f17b4203e3b8e79c95eb6e41f586778b49ee15c2111611b3515e228522683af8
+    manifestHash: 5c4088f2427f70a8ad8b6d574479b57f7764bd560a62aa18a1b1efad240e30a7
     name: dns-controller.addons.k8s.io
     selector:
       k8s-addon: dns-controller.addons.k8s.io
-    version: 9.99.0
+  - id: k8s-1.15
+    manifest: cluster-autoscaler.addons.k8s.io/k8s-1.15.yaml
+    manifestHash: d5520ffa5552a7f2cfc659fa19472299ef8e58d1fbc8117b8c33ade21157cc0f
+    name: cluster-autoscaler.addons.k8s.io
+    selector:
+      k8s-addon: cluster-autoscaler.addons.k8s.io
   - id: v1.7.0
     manifest: storage-gce.addons.k8s.io/v1.7.0.yaml
-    manifestHash: 6c6d100b10243fc62e0195706aa862b42632faeac05a117d07a263a2c5a8e87c
+    manifestHash: 4f73c7d683f04e61d60e90053a6db1fd82272dc0c13790390740f5e207181c77
     name: storage-gce.addons.k8s.io
     selector:
       k8s-addon: storage-gce.addons.k8s.io
-    version: 9.99.0
   - id: k8s-1.23
     manifest: gcp-pd-csi-driver.addons.k8s.io/k8s-1.23.yaml
-    manifestHash: cc88cfb7d6a720cd02f97796438bce89d0f15f6b0bcd0fb12c06ad556a1206fd
+    manifestHash: b0d1b75a405846ae0716a86d9d38eb5da6bc2b708ef8fead88bf8e55fdac5da3
     name: gcp-pd-csi-driver.addons.k8s.io
     selector:
       k8s-addon: gcp-pd-csi-driver.addons.k8s.io
-    version: 9.99.0
   - id: k8s-1.23
     manifest: gcp-cloud-controller.addons.k8s.io/k8s-1.23.yaml
-    manifestHash: 002dac69385a975a8a2c4182981033e05880031c179dd1459ee569076cdce654
+    manifestHash: c98bbd8dc46276aa8ad095ff6ec6d7309a011592107d80e427a102d1862dbc44
     name: gcp-cloud-controller.addons.k8s.io
     prune:
       kinds:
@@ -105,4 +103,3 @@ spec:
         - kube-system
     selector:
       k8s-addon: gcp-cloud-controller.addons.k8s.io
-    version: 9.99.0

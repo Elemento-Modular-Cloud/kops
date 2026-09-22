@@ -75,7 +75,7 @@ func TestAWSValidateEBSCSIDriver(t *testing.T) {
 		},
 	}
 	for _, g := range grid {
-		g.Input.KubernetesVersion = "1.21.0"
+		g.Input.KubernetesVersion = "1.35.0"
 		cluster := &kops.Cluster{
 			Spec: g.Input,
 		}
@@ -241,7 +241,7 @@ func TestValidateInstanceGroupSpec(t *testing.T) {
 	mockEC2.Images = append(mockEC2.Images, &ec2types.Image{
 		CreationDate:   aws.String("2016-10-21T20:07:19.000Z"),
 		ImageId:        aws.String("ami-073c8c0760395aab8"),
-		Name:           aws.String("focal"),
+		Name:           aws.String("resolute"),
 		OwnerId:        aws.String(awsup.WellKnownAccountUbuntu),
 		RootDeviceName: aws.String("/dev/xvda"),
 		Architecture:   ec2types.ArchitectureValuesX8664,
@@ -342,7 +342,7 @@ func TestMixedInstancePolicies(t *testing.T) {
 	mockEC2.Images = append(mockEC2.Images, &ec2types.Image{
 		CreationDate:   aws.String("2016-10-21T20:07:19.000Z"),
 		ImageId:        aws.String("ami-073c8c0760395aab8"),
-		Name:           aws.String("focal"),
+		Name:           aws.String("resolute"),
 		OwnerId:        aws.String(awsup.WellKnownAccountUbuntu),
 		RootDeviceName: aws.String("/dev/xvda"),
 		Architecture:   ec2types.ArchitectureValuesX8664,
@@ -370,7 +370,7 @@ func TestInstanceMetadataOptions(t *testing.T) {
 	mockEC2.Images = append(mockEC2.Images, &ec2types.Image{
 		CreationDate:   aws.String("2016-10-21T20:07:19.000Z"),
 		ImageId:        aws.String("ami-073c8c0760395aab8"),
-		Name:           aws.String("focal"),
+		Name:           aws.String("resolute"),
 		OwnerId:        aws.String(awsup.WellKnownAccountUbuntu),
 		RootDeviceName: aws.String("/dev/xvda"),
 		Architecture:   ec2types.ArchitectureValuesX8664,
@@ -884,5 +884,64 @@ func TestAWSAdditionalRoutes(t *testing.T) {
 			errs := validateNetworking(&cluster, &cluster.Spec.Networking, field.NewPath("spec", "networking"), false, &cloudProviderConstraints{})
 			testErrors(t, test, errs, test.expected)
 		})
+	}
+}
+
+func TestAWSValidateNLBSecurityGroupMode(t *testing.T) {
+	grid := []struct {
+		Input          kops.ClusterSpec
+		ExpectedErrors []string
+	}{
+		{
+			Input: kops.ClusterSpec{
+				CloudProvider: kops.CloudProviderSpec{
+					AWS: &kops.AWSSpec{
+						NLBSecurityGroupMode: fi.PtrTo("Managed"),
+					},
+				},
+			},
+		},
+		{
+			Input: kops.ClusterSpec{
+				CloudProvider: kops.CloudProviderSpec{
+					AWS: &kops.AWSSpec{
+						NLBSecurityGroupMode: fi.PtrTo(""),
+					},
+				},
+			},
+			ExpectedErrors: []string{"Unsupported value::spec.cloudProvider.aws.nlbSecurityGroupMode"},
+		},
+		{
+			Input: kops.ClusterSpec{
+				CloudProvider: kops.CloudProviderSpec{
+					AWS: &kops.AWSSpec{},
+				},
+			},
+		},
+		{
+			Input: kops.ClusterSpec{
+				CloudProvider: kops.CloudProviderSpec{
+					AWS: &kops.AWSSpec{
+						NLBSecurityGroupMode: fi.PtrTo("Invalid"),
+					},
+				},
+			},
+			ExpectedErrors: []string{"Unsupported value::spec.cloudProvider.aws.nlbSecurityGroupMode"},
+		},
+		{
+			Input: kops.ClusterSpec{
+				CloudProvider: kops.CloudProviderSpec{
+					AWS: &kops.AWSSpec{
+						NLBSecurityGroupMode: fi.PtrTo("managed"),
+					},
+				},
+			},
+			ExpectedErrors: []string{"Unsupported value::spec.cloudProvider.aws.nlbSecurityGroupMode"},
+		},
+	}
+	for _, g := range grid {
+		cluster := &kops.Cluster{Spec: g.Input}
+		errs := awsValidateNLBSecurityGroupMode(cluster)
+		testErrors(t, g.Input, errs, g.ExpectedErrors)
 	}
 }

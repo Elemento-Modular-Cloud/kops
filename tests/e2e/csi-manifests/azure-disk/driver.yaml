@@ -1,0 +1,30 @@
+# Manifest for Kubernetes external tests.
+# See https://github.com/kubernetes/kubernetes/tree/master/test/e2e/storage/external
+# https://github.com/kubernetes-sigs/azuredisk-csi-driver/blob/master/test/external-e2e/manifest/testdriver.yaml
+
+StorageClass:
+  FromFile: tests/e2e/csi-manifests/azure-disk/sc.yaml
+DriverInfo:
+  Name: disk.csi.azure.com
+  SupportedSizeRange:
+    Min: 1Gi
+  SupportedFsType:
+    ext4: {}
+    ext3: {}
+    xfs: {}
+  Capabilities:
+    persistence: true
+    fsGroup: true
+    block: true
+    exec: true
+    multipods: true
+    controllerExpansion: true
+    nodeExpansion: true
+    onlineExpansion: true
+    volumeLimits: true
+    singleNodeVolume: true
+    topology: true
+    snapshotDataSource: false
+    pvcDataSource: false
+    RWX: false
+    readWriteOncePod: true

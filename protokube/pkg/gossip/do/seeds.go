@@ -23,7 +23,9 @@ import (
 
 	"github.com/digitalocean/godo"
 	"k8s.io/klog/v2"
+	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/protokube/pkg/gossip"
+	"k8s.io/kops/upup/pkg/fi/cloudup/do"
 )
 
 type SeedProvider struct {
@@ -42,9 +44,13 @@ func (p *SeedProvider) GetSeeds() ([]string, error) {
 	}
 
 	for _, droplet := range droplets {
+		// Seed only from control-plane nodes; workers do not run gossip.
+		if !dropletIsControlPlane(droplet) {
+			continue
+		}
 		for _, dropTag := range droplet.Tags {
 			klog.V(4).Infof("Get Seeds - droplet found=%s,SeedProvider Tag=%s", dropTag, p.tag)
-			if strings.Contains(dropTag, strings.Replace(p.tag, ".", "-", -1)) {
+			if strings.Contains(dropTag, strings.ReplaceAll(p.tag, ".", "-")) {
 				klog.V(4).Infof("Tag matched for droplet tag =%s. Getting private IP", p.tag)
 				ip, err := droplet.PrivateIPv4()
 				if err == nil {
@@ -70,4 +76,15 @@ func NewSeedProvider(godoClient *godo.Client, tag string) (*SeedProvider, error)
 		godoClient: godoClient,
 		tag:        tag,
 	}, nil
+}
+
+// dropletIsControlPlane reports whether the droplet hosts a control-plane node.
+func dropletIsControlPlane(droplet godo.Droplet) bool {
+	roleTag := do.TagKubernetesInstanceRole + ":" + string(kops.InstanceGroupRoleControlPlane)
+	for _, tag := range droplet.Tags {
+		if tag == roleTag {
+			return true
+		}
+	}
+	return false
 }

@@ -60,6 +60,11 @@ func run(ctx context.Context) error {
 	flag.StringVar(&listen, "listen", listen, "endpoint on which to serve grpc")
 	flag.StringVar(&run, "run", run, "visualization program to run [jaeger, docker-jaeger]")
 	klog.InitFlags(nil)
+	// Opt into the new klog behavior so that -stderrthreshold is honored even
+	// when -logtostderr=true (the default).
+	// Ref: kubernetes/klog#212, kubernetes/klog#432
+	flag.Set("legacy_stderr_threshold_behavior", "false") //nolint:errcheck
+	flag.Set("stderrthreshold", "INFO")                   //nolint:errcheck
 	flag.Parse()
 
 	if src == "" {
@@ -76,7 +81,7 @@ func run(ctx context.Context) error {
 				}
 				err := runJaeger(ctx, opt)
 				if err != nil {
-					klog.Warningf("error starting jaeger: %w", err)
+					klog.Warningf("error starting jaeger: %v", err)
 				}
 			}()
 		default:
@@ -91,7 +96,7 @@ func run(ctx context.Context) error {
 	}
 
 	klog.Infof("listing files under %v", srcPath)
-	srcFiles, err := srcPath.ReadTree()
+	srcFiles, err := srcPath.ReadTree(ctx)
 	if err != nil {
 		return fmt.Errorf("reading tree %q: %w", srcFiles, err)
 	}
@@ -166,7 +171,7 @@ func (s *Server) GetTrace(req *storagev1.GetTraceRequest, stream storagev1.SpanR
 		}
 		klog.V(4).Infof("<-GetTrace %v", prototext.Format(chunk))
 		if err := stream.Send(chunk); err != nil {
-			klog.Warningf("error sending chunk: %w", err)
+			klog.Warningf("error sending chunk: %v", err)
 			return err
 		}
 

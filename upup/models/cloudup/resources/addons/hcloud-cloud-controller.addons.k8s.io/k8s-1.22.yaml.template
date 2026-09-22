@@ -1,37 +1,86 @@
-# Pulled and modified using: kustomize build https://github.com/hetznercloud/hcloud-cloud-controller-manager.git/deploy
-
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: hcloud
-  namespace: kube-system
-stringData:
-  network: "{{ HCLOUD_NETWORK }}"
-  token: "{{ HCLOUD_TOKEN }}"
----
-# Source: hcloud-cloud-controller-manager/templates/serviceaccount.yaml
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: hcloud-cloud-controller-manager
   namespace: kube-system
 ---
-# Source: hcloud-cloud-controller-manager/templates/clusterrolebinding.yaml
-kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
 metadata:
-  name: "system:hcloud-cloud-controller-manager"
+  name: system:hcloud-cloud-controller-manager
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  verbs:
+  - '*'
+- apiGroups:
+  - ""
+  resources:
+  - nodes/status
+  verbs:
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - services/status
+  verbs:
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - create
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+  - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: system:hcloud-cloud-controller-manager:restricted
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: cluster-admin
+  name: system:hcloud-cloud-controller-manager
 subjects:
-  - kind: ServiceAccount
-    name: hcloud-cloud-controller-manager
-    namespace: kube-system
+- kind: ServiceAccount
+  name: hcloud-cloud-controller-manager
+  namespace: kube-system
 ---
-# Source: hcloud-cloud-controller-manager/templates/deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -42,56 +91,60 @@ spec:
   revisionHistoryLimit: 2
   selector:
     matchLabels:
-      app: hcloud-cloud-controller-manager
+      app.kubernetes.io/instance: hcloud-cloud-controller-manager
+      app.kubernetes.io/name: hcloud-cloud-controller-manager
   template:
     metadata:
       labels:
-        app: hcloud-cloud-controller-manager
+        app.kubernetes.io/instance: hcloud-cloud-controller-manager
+        app.kubernetes.io/name: hcloud-cloud-controller-manager
     spec:
-      serviceAccountName: hcloud-cloud-controller-manager
-      dnsPolicy: Default
-      tolerations:
-        # Allow HCCM itself to schedule on nodes that have not yet been initialized by HCCM.
-        - key: "node.cloudprovider.kubernetes.io/uninitialized"
-          value: "true"
-          effect: "NoSchedule"
-        - key: "CriticalAddonsOnly"
-          operator: "Exists"
-
-        # Allow HCCM to schedule on control plane nodes.
-        - key: "node-role.kubernetes.io/master"
-          effect: NoSchedule
-          operator: Exists
-        - key: "node-role.kubernetes.io/control-plane"
-          effect: NoSchedule
-          operator: Exists
-
-        - key: "node.kubernetes.io/not-ready"
-          effect: "NoExecute"
       containers:
-        - name: hcloud-cloud-controller-manager
-          command:
-            - "/bin/hcloud-cloud-controller-manager"
-            {{- range $arg := CloudControllerConfigArgv }}
-            - "{{ $arg }}"
-            {{- end }}
-          env:
-            - name: HCLOUD_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  key: token
-                  name: hcloud
-            - name: HCLOUD_NETWORK
-              valueFrom:
-                secretKeyRef:
-                  key: network
-                  name: hcloud
-          image: '{{ .ExternalCloudControllerManager.Image }}'
-          ports:
-            - name: metrics
-              containerPort: 8233
-          resources:
-            requests:
-              cpu: 100m
-              memory: 50Mi
+      - args:
+        - --allocate-node-cidrs=true
+        - --allow-untagged-cloud
+        - --cloud-provider=hcloud
+        - --cluster-cidr={{ .Networking.PodCIDR }}
+        - --configure-cloud-routes=false
+        - --feature-gates=CloudControllerManagerWatchBasedRoutesReconciliation=true
+        - --route-reconciliation-period=30s
+        - --v={{ or .ExternalCloudControllerManager.LogLevel 2 }}
+        - --webhook-secure-port=0
+        - --leader-elect=false
+        env:
+        - name: HCLOUD_NETWORK
+          valueFrom:
+            secretKeyRef:
+              key: network
+              name: hcloud
+        - name: HCLOUD_TOKEN
+          valueFrom:
+            secretKeyRef:
+              key: token
+              name: hcloud
+        image: '{{ .ExternalCloudControllerManager.Image }}'
+        name: hcloud-cloud-controller-manager
+        ports:
+        - containerPort: 8233
+          name: metrics
+        resources:
+          requests:
+            cpu: 100m
+            memory: 50Mi
+      dnsPolicy: Default
       priorityClassName: system-cluster-critical
+      serviceAccountName: hcloud-cloud-controller-manager
+      tolerations:
+      - effect: NoSchedule
+        key: node.cloudprovider.kubernetes.io/uninitialized
+        value: "true"
+      - key: CriticalAddonsOnly
+        operator: Exists
+      - effect: NoSchedule
+        key: node-role.kubernetes.io/master
+        operator: Exists
+      - effect: NoSchedule
+        key: node-role.kubernetes.io/control-plane
+        operator: Exists
+      - effect: NoExecute
+        key: node.kubernetes.io/not-ready

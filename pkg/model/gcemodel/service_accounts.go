@@ -77,12 +77,12 @@ func (b *ServiceAccountsBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		c.AddTask(serviceAccount)
 
 		role := ig.Spec.Role
-		if role == kops.InstanceGroupRoleAPIServer {
+		if role.HasAPIServer() {
 			// Because these share a serviceaccount, we share a role
 			role = kops.InstanceGroupRoleControlPlane
 		}
 
-		if err := b.addInstanceGroupServiceAccountPermissions(c, *serviceAccount.Email, role); err != nil {
+		if err := b.addInstanceGroupServiceAccountPermissions(c, serviceAccount, role); err != nil {
 			return err
 		}
 	}
@@ -90,8 +90,7 @@ func (b *ServiceAccountsBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	return nil
 }
 
-func (b *ServiceAccountsBuilder) addInstanceGroupServiceAccountPermissions(c *fi.CloudupModelBuilderContext, serviceAccountEmail string, role kops.InstanceGroupRole) error {
-	member := "serviceAccount:" + serviceAccountEmail
+func (b *ServiceAccountsBuilder) addInstanceGroupServiceAccountPermissions(c *fi.CloudupModelBuilderContext, serviceAccount *gcetasks.ServiceAccount, role kops.InstanceGroupRole) error {
 
 	// Ideally we would use a custom role here, but the deletion of a custom role takes 7 days,
 	// which means we can't easily recycle cluster names.
@@ -104,26 +103,13 @@ func (b *ServiceAccountsBuilder) addInstanceGroupServiceAccountPermissions(c *fi
 			Name:      s("serviceaccount-control-plane"),
 			Lifecycle: b.Lifecycle,
 
-			Project: s(b.ProjectID),
-			Member:  s(member),
-			Role:    s("roles/container.serviceAgent"),
+			Project:              s(b.ProjectID),
+			MemberServiceAccount: serviceAccount,
+			Role:                 s("roles/container.serviceAgent"),
 		})
 
 	case kops.InstanceGroupRoleNode:
-		// Known permissions:
-		//  * compute.zones.list (to find out region; we could replace this with string manipulation)
-		//  * compute.instances.list (for discovery; we don't need in the case of a load balancer or DNS)
-
-		// We use the GCE viewer role
-
-		c.AddTask(&gcetasks.ProjectIAMBinding{
-			Name:      s("serviceaccount-nodes"),
-			Lifecycle: b.Lifecycle,
-
-			Project: s(b.ProjectID),
-			Member:  s(member),
-			Role:    s("roles/compute.viewer"),
-		})
+		// Worker nodes need no project-level role.
 	}
 	return nil
 }

@@ -18,7 +18,9 @@ package cloudup
 
 import (
 	"context"
+	"crypto/x509/pkix"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -36,12 +38,16 @@ import (
 	"k8s.io/kops/pkg/client/simple"
 	"k8s.io/kops/pkg/clouds"
 	"k8s.io/kops/pkg/featureflag"
+	"k8s.io/kops/pkg/pki"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/azure"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce"
 	"k8s.io/kops/upup/pkg/fi/cloudup/openstack"
+	"k8s.io/kops/upup/pkg/fi/fitasks"
 	"k8s.io/kops/util/pkg/architectures"
+
+	discoveryapi "k8s.io/kops/discovery/apis/discovery.kops.k8s.io/v1alpha1"
 )
 
 const (
@@ -61,6 +67,11 @@ type NewClusterOptions struct {
 	ConfigBase string
 	// DiscoveryStore is the location where we will store public OIDC-compatible discovery documents, under a cluster-specific directory. It defaults to not publishing discovery documents.
 	DiscoveryStore string
+
+	// PublicDiscoveryServiceURL indicates that we should use a public discovery service URL for OIDC discovery.
+	// We create a discovery ID CA, and append the universe ID to the URL.
+	PublicDiscoveryServiceURL string
+
 	// KubernetesVersion is the version of Kubernetes to deploy. It defaults to the version recommended by the channel.
 	KubernetesVersion string
 	// KubernetesFeatureGates is the list of Kubernetes feature gates to enable/disable.
@@ -123,6 +134,14 @@ type NewClusterOptions struct {
 	ControlPlaneCount int32
 	// APIServerCount is the number of API servers to create. Defaults to 0.
 	APIServerCount int32
+	// EtcdCount is the number of API servers to create. Defaults to 0.
+	EtcdCount int32
+	// SchedulerCount is the number of API servers to create. Defaults to 0.
+	SchedulerCount int32
+	// CloudControllerManagerCount is the number of API servers to create. Defaults to 0.
+	CloudControllerManagerCount int32
+	// KubeControllerManagerCount is the number of API servers to create. Defaults to 0.
+	KubeControllerManagerCount int32
 	// EncryptEtcdStorage is whether to encrypt the etcd volumes.
 	EncryptEtcdStorage *bool
 
@@ -131,8 +150,7 @@ type NewClusterOptions struct {
 	// EtcdStorageType is the underlying cloud storage class of the etcd volumes.
 	EtcdStorageType string
 
-	// NodeCount is the number of nodes to create. Defaults to leaving the count unspecified
-	// on the InstanceGroup, which results in a count of 2.
+	// NodeCount is the number of nodes to create.
 	NodeCount int32
 	// Bastion enables the creation of a Bastion instance.
 	Bastion bool
@@ -161,12 +179,17 @@ type NewClusterOptions struct {
 	// InstanceManager specifies which manager to use for managing instances.
 	InstanceManager string
 
-	Image             string
-	NodeImage         string
-	ControlPlaneImage string
-	BastionImage      string
-	ControlPlaneSizes []string
-	NodeSizes         []string
+	Image                       string
+	NodeImage                   string
+	ControlPlaneImage           string
+	BastionImage                string
+	ControlPlaneSizes           []string
+	APIServerSizes              []string
+	EtcdSizes                   []string
+	SchedulerSizes              []string
+	CloudControllerManagerSizes []string
+	KubeControllerManagerSizes  []string
+	NodeSizes                   []string
 }
 
 func (o *NewClusterOptions) InitDefaults() {
@@ -176,6 +199,10 @@ func (o *NewClusterOptions) InitDefaults() {
 	o.EtcdClusters = []string{"main", "events"}
 	o.Networking = "cilium"
 	o.InstanceManager = "cloudgroups"
+
+	// Azure-specific
+	o.AzureAdminUser = "kops"
+	o.AzureSubscriptionID = os.Getenv("AZURE_SUBSCRIPTION_ID")
 }
 
 type NewClusterResult struct {
@@ -192,6 +219,8 @@ type NewClusterResult struct {
 // It is the responsibility of the caller to call cloudup.PerformAssignments() on
 // the returned cluster spec.
 func NewCluster(opt *NewClusterOptions, clientset simple.Clientset) (*NewClusterResult, error) {
+	ctx := context.TODO()
+
 	if opt.ClusterName == "" {
 		return nil, fmt.Errorf("name is required")
 	}
@@ -359,6 +388,8 @@ func NewCluster(opt *NewClusterOptions, clientset simple.Clientset) (*NewCluster
 		cloud = osCloud
 	case api.CloudProviderScaleway:
 		cluster.Spec.CloudProvider.Scaleway = &api.ScalewaySpec{}
+	case api.CloudProviderLinode:
+		cluster.Spec.CloudProvider.Linode = &api.LinodeSpec{}
 	case api.CloudProviderElemento:
 		cluster.Spec.CloudProvider.Elemento = &api.ElementoSpec{}
 	case api.CloudProviderMetal:
@@ -412,6 +443,35 @@ func NewCluster(opt *NewClusterOptions, clientset simple.Clientset) (*NewCluster
 		return nil, err
 	}
 
+	if opt.PublicDiscoveryServiceURL != "" {
+		discoveryServiceURL := opt.PublicDiscoveryServiceURL
+
+		keystore, err := clientset.KeyStore(cluster)
+		if err != nil {
+			return nil, err
+		}
+
+		universeID, err := discoveryUniverseID(ctx, keystore)
+		if err != nil {
+			return nil, err
+		}
+
+		if !strings.HasSuffix(discoveryServiceURL, "/") {
+			discoveryServiceURL += "/"
+		}
+		discoveryServiceURL += universeID + "/"
+
+		cluster.Spec.ServiceAccountIssuerDiscovery = &api.ServiceAccountIssuerDiscoveryConfig{
+			DiscoveryService: &api.DiscoveryServiceOptions{
+				URL: discoveryServiceURL,
+			},
+		}
+		if cluster.GetCloudProvider() == api.CloudProviderAWS {
+			cluster.Spec.ServiceAccountIssuerDiscovery.EnableAWSOIDCProvider = true
+			cluster.Spec.IAM.UseServiceAccountExternalPermissions = fi.PtrTo(true)
+		}
+	}
+
 	var nodes []*api.InstanceGroup
 
 	switch opt.InstanceManager {
@@ -422,7 +482,7 @@ func NewCluster(opt *NewClusterOptions, clientset simple.Clientset) (*NewCluster
 		cluster.Spec.Karpenter = &api.KarpenterConfig{
 			Enabled: true,
 		}
-		nodes, err = setupKarpenterNodes(cluster)
+		nodes, err = setupKarpenterNodes(opt)
 		if err != nil {
 			return nil, err
 		}
@@ -477,7 +537,7 @@ func NewCluster(opt *NewClusterOptions, clientset simple.Clientset) (*NewCluster
 				}
 
 			}
-		} else if g.Spec.Role == api.InstanceGroupRoleBastion {
+		} else if g.Spec.Role.HasBastion() {
 			if g.Spec.MachineType == "" {
 				g.Spec.MachineType, err = defaultMachineType(cloud, cluster, g)
 				if err != nil {
@@ -487,6 +547,18 @@ func NewCluster(opt *NewClusterOptions, clientset simple.Clientset) (*NewCluster
 		} else {
 			if g.IsAPIServerOnly() && !featureflag.APIServerNodes.Enabled() {
 				return nil, fmt.Errorf("apiserver nodes requires the APIServerNodes feature flag to be enabled")
+			}
+			if !featureflag.ExperimentalRoles.Enabled() {
+				switch {
+				case g.Spec.Role.HasEtcd():
+					return nil, fmt.Errorf("etcd nodes requires the ExperimentalRoles feature flag to be enabled")
+				case g.Spec.Role.HasScheduler():
+					return nil, fmt.Errorf("scheduler nodes requires the ExperimentalRoles feature flag to be enabled")
+				case g.Spec.Role.HasCloudControllerManager():
+					return nil, fmt.Errorf("cloud-controller-manager nodes requires the ExperimentalRoles feature flag to be enabled")
+				case g.Spec.Role.HasKubControllerManager():
+					return nil, fmt.Errorf("kube-controller-manager nodes requires the ExperimentalRoles feature flag to be enabled")
+				}
 			}
 			if g.Spec.MachineType == "" {
 				g.Spec.MachineType, err = defaultMachineType(cloud, cluster, g)
@@ -541,6 +613,8 @@ func NewCluster(opt *NewClusterOptions, clientset simple.Clientset) (*NewCluster
 		if len(g.Spec.Subnets) == 0 {
 			return nil, fmt.Errorf("unable to infer any Subnets for InstanceGroup %s ", g.ObjectMeta.Name)
 		}
+
+		ig.AddInstanceGroupNodeLabel()
 	}
 
 	result := NewClusterResult{
@@ -692,6 +766,26 @@ func setupZones(opt *NewClusterOptions, cluster *api.Cluster, allZones sets.Stri
 			subnet = &api.ClusterSubnetSpec{
 				Name: subnetName,
 				// region and zone are the same for DO
+				Region: region,
+				Zone:   region,
+			}
+			cluster.Spec.Networking.Subnets = append(cluster.Spec.Networking.Subnets, *subnet)
+		}
+		zoneToSubnetsMap[region] = append(zoneToSubnetsMap[region], subnet)
+		return zoneToSubnetsMap, nil
+
+	case api.CloudProviderLinode:
+		if len(opt.Zones) > 1 {
+			return nil, fmt.Errorf("linode cloud provider currently supports one region only")
+		}
+
+		// For Linode (Akamai) we pass regions via --zones.
+		region := opt.Zones[0]
+		subnet := model.FindSubnet(cluster, region)
+
+		if subnet == nil {
+			subnet = &api.ClusterSubnetSpec{
+				Name:   region,
 				Region: region,
 				Zone:   region,
 			}
@@ -939,12 +1033,6 @@ func setupControlPlane(opt *NewClusterOptions, cluster *api.Cluster, zoneToSubne
 				g.Spec.Zones = []string{zone}
 			}
 
-			if cluster.IsKubernetesLT("1.27") && cloudProvider == api.CloudProviderAWS {
-				g.Spec.InstanceMetadata = &api.InstanceMetadataOptions{
-					HTTPTokens: fi.PtrTo("required"),
-				}
-			}
-
 			for i, size := range opt.ControlPlaneSizes {
 				if i == 0 {
 					g.Spec.MachineType = size
@@ -1119,21 +1207,9 @@ func setupNodes(opt *NewClusterOptions, cluster *api.Cluster, zoneToSubnetsMap m
 			g.Spec.Zones = []string{zone}
 		}
 
-		if cluster.IsKubernetesLT("1.27") {
-			if cloudProvider == api.CloudProviderAWS {
-				g.Spec.InstanceMetadata = &api.InstanceMetadataOptions{
-					HTTPPutResponseHopLimit: fi.PtrTo(int64(1)),
-					HTTPTokens:              fi.PtrTo("required"),
-				}
-			}
-		}
-
 		if cloudProvider == api.CloudProviderGCE {
 			if g.Spec.NodeLabels == nil {
 				g.Spec.NodeLabels = make(map[string]string)
-			}
-			if cluster.IsKubernetesLT("1.29") {
-				g.Spec.NodeLabels["cloud.google.com/metadata-proxy-ready"] = "true"
 			}
 		}
 
@@ -1157,16 +1233,24 @@ func setupNodes(opt *NewClusterOptions, cluster *api.Cluster, zoneToSubnetsMap m
 	return nodes, nil
 }
 
-func setupKarpenterNodes(cluster *api.Cluster) ([]*api.InstanceGroup, error) {
+func setupKarpenterNodes(opt *NewClusterOptions) ([]*api.InstanceGroup, error) {
 	g := &api.InstanceGroup{}
 	g.Spec.Role = api.InstanceGroupRoleNode
 	g.Spec.Manager = api.InstanceManagerKarpenter
 	g.ObjectMeta.Name = "nodes"
+	if opt.NodeCount > 0 {
+		g.Spec.MinSize = fi.PtrTo(opt.NodeCount)
+	}
 
-	if cluster.IsKubernetesLT("1.27") {
-		g.Spec.InstanceMetadata = &api.InstanceMetadataOptions{
-			HTTPPutResponseHopLimit: fi.PtrTo(int64(1)),
-			HTTPTokens:              fi.PtrTo("required"),
+	for i, size := range opt.NodeSizes {
+		if i == 0 {
+			g.Spec.MachineType = size
+		}
+		if len(opt.NodeSizes) > 1 {
+			if g.Spec.MixedInstancesPolicy == nil {
+				g.Spec.MixedInstancesPolicy = &api.MixedInstancesPolicySpec{}
+			}
+			g.Spec.MixedInstancesPolicy.Instances = append(g.Spec.MixedInstancesPolicy.Instances, size)
 		}
 	}
 
@@ -1212,12 +1296,12 @@ func setupAPIServers(opt *NewClusterOptions, cluster *api.Cluster, zoneToSubnets
 			g.Spec.Zones = []string{zone}
 		}
 
-		if cluster.IsKubernetesLT("1.27") {
-			if cloudProvider == api.CloudProviderAWS {
-				g.Spec.InstanceMetadata = &api.InstanceMetadataOptions{
-					HTTPPutResponseHopLimit: fi.PtrTo(int64(1)),
-					HTTPTokens:              fi.PtrTo("required"),
-				}
+		for i, size := range opt.APIServerSizes {
+			if i == 0 {
+				g.Spec.MachineType = size
+			}
+			if i > 0 {
+				klog.Fatalf("multiple machine types for IG group not currently supported")
 			}
 		}
 
@@ -1248,8 +1332,6 @@ func setupNetworking(opt *NewClusterOptions, cluster *api.Cluster) error {
 		}
 	case "calico":
 		cluster.Spec.Networking.Calico = &api.CalicoNetworkingSpec{}
-	case "canal":
-		cluster.Spec.Networking.Canal = &api.CanalNetworkingSpec{}
 	case "kube-router":
 		cluster.Spec.Networking.KubeRouter = &api.KuberouterNetworkingSpec{}
 		if cluster.Spec.KubeProxy == nil {
@@ -1406,15 +1488,6 @@ func setupTopology(opt *NewClusterOptions, cluster *api.Cluster, allZones sets.S
 			}
 			if cluster.GetCloudProvider() == api.CloudProviderGCE {
 				bastionGroup.Spec.Zones = allZones.List()
-			}
-
-			if cluster.IsKubernetesLT("1.27") {
-				if cluster.GetCloudProvider() == api.CloudProviderAWS {
-					bastionGroup.Spec.InstanceMetadata = &api.InstanceMetadataOptions{
-						HTTPPutResponseHopLimit: fi.PtrTo(int64(1)),
-						HTTPTokens:              fi.PtrTo("required"),
-					}
-				}
 			}
 
 			bastionGroup.Spec.Image = opt.BastionImage
@@ -1651,18 +1724,7 @@ func defaultImage(cluster *api.Cluster, channel *api.Channel, architecture archi
 		}
 	}
 
-	if kubernetesVersion.LT(semver.MustParse("1.27.0")) {
-		switch cluster.GetCloudProvider() {
-		case api.CloudProviderDO:
-			return defaultDOImageFocal, nil
-		case api.CloudProviderHetzner:
-			return defaultHetznerImageFocal, nil
-		case api.CloudProviderScaleway:
-			return defaultScalewayImageFocal, nil
-		case api.CloudProviderElemento:
-			return defaultElementoImageFocal, nil
-		}
-	} else if kubernetesVersion.LT(semver.MustParse("1.32.0")) {
+	if kubernetesVersion.LT(semver.MustParse("1.32.0")) {
 		switch cluster.GetCloudProvider() {
 		case api.CloudProviderDO:
 			return defaultDOImageJammy, nil
@@ -1670,6 +1732,8 @@ func defaultImage(cluster *api.Cluster, channel *api.Channel, architecture archi
 			return defaultHetznerImageJammy, nil
 		case api.CloudProviderScaleway:
 			return defaultScalewayImageJammy, nil
+		case api.CloudProviderLinode:
+			return defaultLinodeImageJammy, nil
 		case api.CloudProviderMetal:
 			return "dummy-metal-image", nil
 		case api.CloudProviderElemento:
@@ -1683,6 +1747,8 @@ func defaultImage(cluster *api.Cluster, channel *api.Channel, architecture archi
 			return defaultHetznerImageNoble, nil
 		case api.CloudProviderScaleway:
 			return defaultScalewayImageNoble, nil
+		case api.CloudProviderLinode:
+			return defaultLinodeImageNoble, nil
 		case api.CloudProviderMetal:
 			return "dummy-metal-image", nil
 		case api.CloudProviderElemento:
@@ -1729,4 +1795,32 @@ func MachineArchitecture(cloud fi.Cloud, machineType string) (architectures.Arch
 		// No other clouds are known to support any other architectures at this time
 		return architectures.ArchitectureAmd64, nil
 	}
+}
+
+// discoveryUniverseID returns the universe ID for the cluster's discovery service,
+// creating a new discovery CA if necessary.
+func discoveryUniverseID(ctx context.Context, keystore fi.Keystore) (string, error) {
+	keyset, err := keystore.FindKeyset(ctx, fi.DiscoveryCAID)
+	if err != nil {
+		return "", fmt.Errorf("error finding discovery CA: %w", err)
+	}
+
+	if keyset == nil || keyset.Primary == nil || keyset.Primary.Certificate == nil {
+		subject := pkix.Name{
+			CommonName: fi.DiscoveryCAID,
+		}
+		keyset, err = fitasks.CreateKeyset(ctx, keystore, fi.DiscoveryCAID, pki.IssueCertRequest{
+			Subject: subject,
+			Type:    "ca",
+		})
+		if err != nil {
+			return "", fmt.Errorf("error creating discovery CA: %w", err)
+		}
+	}
+
+	if keyset == nil || keyset.Primary == nil || keyset.Primary.Certificate == nil || keyset.Primary.Certificate.Certificate == nil {
+		return "", fmt.Errorf("discovery CA creation failed")
+	}
+
+	return discoveryapi.ComputeUniverseIDFromCertificate(keyset.Primary.Certificate.Certificate), nil
 }
