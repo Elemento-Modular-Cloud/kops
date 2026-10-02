@@ -60,6 +60,9 @@ func (b *PlacementModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		return err
 	}
 	b.externalNodeIPs = make(map[string]string)
+	// if enabled as env variable and it's set to true, wait a couple of minutes to allow a control-plane node
+	// on an AtomOS server to start its bootstrapping process
+	b.delayAtomosControlPlane = cfg.DelayAtomosControlPlane
 	for _, node := range plan.Nodes {
 		if node.Infrastructure.Provider != "elemento" {
 			b.externalNodeIPs[node.Name] = node.InternalIP
