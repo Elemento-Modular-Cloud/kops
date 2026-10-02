@@ -143,8 +143,6 @@ func (b *KubeletOptionsBuilder) configureKubelet(cluster *kops.Cluster, kubelet 
 		cluster.Spec.CloudProvider.GCE.NodeTags = fi.PtrTo(gce.TagForRole(b.ClusterName, kops.InstanceGroupRoleNode))
 	}
 
-<<<<<<< HEAD
-=======
 	if cloudProvider == kops.CloudProviderHetzner {
 		kubelet.CloudProvider = "external"
 	}
@@ -172,10 +170,7 @@ func (b *KubeletOptionsBuilder) configureKubelet(cluster *kops.Cluster, kubelet 
 	// Prevent image GC from pruning the pause image
 	// https://github.com/kubernetes/enhancements/tree/master/keps/sig-node/2040-kubelet-cri#pinned-images
 	image := "registry.k8s.io/pause:3.9"
-	var err error
-	if image, err = b.AssetBuilder.RemapImage(image); err != nil {
-		return err
-	}
+	image = b.AssetBuilder.RemapImage(image)
 	kubelet.PodInfraContainerImage = image
 
 	if kubelet.FeatureGates == nil {
@@ -192,7 +187,6 @@ func (b *KubeletOptionsBuilder) configureKubelet(cluster *kops.Cluster, kubelet 
 		}
 	}
 
->>>>>>> 2fdf5a2a5a (delete vendor folder)
 	// Set systemd as the default cgroup driver for kubelet
 	// In Kubernetes 1.34, with the KubeletCgroupDriverFromCRI feature gate enabled and a container runtime
 	// that supports the RuntimeConfig CRI RPC, the kubelet automatically detects the appropriate cgroup driver
