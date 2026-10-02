@@ -19,6 +19,7 @@ package elementomodel
 import (
 	"fmt"
 	"io"
+	"time"
 
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/model"
@@ -38,6 +39,8 @@ type ServerGroupModelBuilder struct {
 }
 
 var _ fi.CloudupModelBuilder = &ServerGroupModelBuilder{}
+
+const atomosControlPlaneBootstrapDelay = 5 * time.Minute
 
 func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	network := b.LinkToNetwork()
@@ -70,6 +73,8 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 		}
 	}
 
+	var atomosControlPlaneGroups []*elementotasks.ServerGroup
+	var dependentProvisioningGroups []*elementotasks.ServerGroup
 	for _, ig := range b.InstanceGroups {
 		names, err := b.nodeNamesForInstanceGroup(ig)
 		if err != nil {
@@ -123,7 +128,7 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 			rootVolumeSize = fi.PtrTo(defaultSize)
 		}
 
-		serverGroup := elementotasks.ServerGroup{
+		serverGroup := &elementotasks.ServerGroup{
 			Name:                        fi.PtrTo(ig.Name),
 			Lifecycle:                   b.Lifecycle,
 			SSHKeys:                     sshkeyTasks,
@@ -175,7 +180,21 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 			serverGroup.DNSRecordTasks = dnsRecordTasks
 		}
 
-		c.AddTask(&serverGroup)
+		if ig.Spec.Role == kops.InstanceGroupRoleControlPlane && len(serverGroup.ExternalNodeIPs) == 0 {
+			atomosControlPlaneGroups = append(atomosControlPlaneGroups, serverGroup)
+		} else {
+			dependentProvisioningGroups = append(dependentProvisioningGroups, serverGroup)
+		}
+		c.AddTask(serverGroup)
+	}
+
+	if b.delayAtomosControlPlane && len(atomosControlPlaneGroups) > 0 && len(dependentProvisioningGroups) > 0 {
+		for _, group := range atomosControlPlaneGroups {
+			group.PostCreateDelay = atomosControlPlaneBootstrapDelay
+		}
+		for _, group := range dependentProvisioningGroups {
+			group.ProvisioningDependencies = append(group.ProvisioningDependencies, atomosControlPlaneGroups...)
+		}
 	}
 
 	return nil

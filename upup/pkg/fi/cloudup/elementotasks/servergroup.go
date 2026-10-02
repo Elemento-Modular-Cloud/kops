@@ -25,6 +25,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Elemento-Modular-Cloud/ecloud-go/ecloud"
 	"k8s.io/klog/v2"
@@ -68,6 +69,8 @@ type ServerGroup struct {
 
 	KubernetesAuthService       *KubernetesAuthService
 	KubernetesAuthInstanceGroup *KubernetesAuthInstanceGroup
+	ProvisioningDependencies    []*ServerGroup
+	PostCreateDelay             time.Duration
 
 	// RootVolumeSize is the size of the root volume in GB
 	RootVolumeSize *int32
@@ -98,6 +101,9 @@ func (v *ServerGroup) GetDependencies(tasks map[string]fi.CloudupTask) []fi.Clou
 	}
 	if v.KubernetesAuthInstanceGroup != nil {
 		deps = append(deps, v.KubernetesAuthInstanceGroup)
+	}
+	for _, dependency := range v.ProvisioningDependencies {
+		deps = append(deps, dependency)
 	}
 	if v.UserData != nil {
 		deps = append(deps, fi.FindDependencies(tasks, v.UserData)...)
@@ -311,22 +317,23 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 		}
 	}
 	authTarget := ""
+	authEndpoint := ""
 	if e.KubernetesAuthService != nil {
 		authTarget = e.KubernetesAuthService.AtomOSTarget
+		authEndpoint = strings.TrimSpace(fi.ValueOf(e.KubernetesAuthService.TailnetEndpoint))
 	}
 	if e.Labels[elemento.TagKubernetesInstanceRole] == "ControlPlane" {
 		if e.KubernetesAuthService == nil {
 			return fmt.Errorf("server group %q has no Kubernetes authentication service", fi.ValueOf(e.Name))
 		}
-		authURL := strings.TrimSpace(fi.ValueOf(e.KubernetesAuthService.TailnetEndpoint))
-		if authURL == "" {
+		if authEndpoint == "" {
 			return fmt.Errorf("Kubernetes authentication service for server group %q has no tailnet endpoint", fi.ValueOf(e.Name))
 		}
 		verifierAPIKey := strings.TrimSpace(os.Getenv("ELEMENTO_AUTH_VERIFIER_API_KEY"))
 		if verifierAPIKey == "" {
 			return fmt.Errorf("ELEMENTO_AUTH_VERIFIER_API_KEY must be set when creating Elemento control-plane servers")
 		}
-		userData = prependElementoAuthEnvironment(userData, authURL, verifierAPIKey)
+		userData = prependElementoAuthEnvironment(userData, authEndpoint, verifierAPIKey)
 	}
 	userDataBytes, err := fi.ResourceAsBytes(e.UserData)
 	if err != nil {
@@ -378,14 +385,16 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 			ServerType: &ecloud.ServerType{
 				Name: e.Size,
 			},
-			UserData:             userData,
-			KubeEnv:              kubeEnv,
-			EtcdMemberIndex:      e.EtcdMemberIndex,
-			Labels:               labels,
-			DNSIPAddress:         dnsIPAddress,
-			InternalIPAddress:    internalIPAddress,
-			KubernetesAuthTarget: authTarget,
-			SSHKeys:              []*ecloud.SSHKey{},
+			UserData:               userData,
+			KubeEnv:                kubeEnv,
+			EtcdMemberIndex:        e.EtcdMemberIndex,
+			Labels:                 labels,
+			DNSIPAddress:           dnsIPAddress,
+			InternalIPAddress:      internalIPAddress,
+			KubernetesAuthTarget:   authTarget,
+			KubernetesAuthEndpoint: authEndpoint,
+			PostCreateDelay:        e.PostCreateDelay,
+			SSHKeys:                []*ecloud.SSHKey{},
 		}
 
 		// Add root volume configuration if specified
