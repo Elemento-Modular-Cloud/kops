@@ -17,10 +17,14 @@ limitations under the License.
 package model
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"k8s.io/kops/pkg/wellknownusers"
 	"k8s.io/kops/upup/pkg/fi"
+	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
 	"sigs.k8s.io/yaml"
 )
@@ -52,6 +56,12 @@ func (b *KopsControllerBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 		UID:   wellknownusers.KopsControllerID,
 		Shell: "/sbin/nologin",
 	})
+
+	if b.CloudProvider() == "elemento" {
+		if err := b.buildElementoAuthFiles(c); err != nil {
+			return err
+		}
+	}
 
 	issueCert := &nodetasks.IssueCert{
 		Name:           "kops-controller",
@@ -101,6 +111,40 @@ func (b *KopsControllerBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 	c.AddTask(&nodetasks.File{
 		Path:     filepath.Join(pkiDir, "keypair-ids.yaml"),
 		Contents: fi.NewBytesResource(keypairIDs),
+		Type:     nodetasks.FileType_File,
+		Mode:     s("0600"),
+		Owner:    s(wellknownusers.KopsControllerName),
+	})
+
+	return nil
+}
+
+func (b *KopsControllerBuilder) buildElementoAuthFiles(c *fi.NodeupModelBuilderContext) error {
+	authServiceURL := strings.TrimSpace(os.Getenv("ELEMENTO_AUTH_URL"))
+	verifierAPIKey := strings.TrimSpace(os.Getenv("ELEMENTO_AUTH_VERIFIER_API_KEY"))
+	if authServiceURL == "" {
+		return fmt.Errorf("ELEMENTO_AUTH_URL must be set on Elemento control-plane nodes")
+	}
+	if verifierAPIKey == "" {
+		return fmt.Errorf("ELEMENTO_AUTH_VERIFIER_API_KEY must be set on Elemento control-plane nodes")
+	}
+
+	c.AddTask(&nodetasks.File{
+		Path:  elemento.ElementoAuthHostDirectory,
+		Type:  nodetasks.FileType_Directory,
+		Mode:  s("0700"),
+		Owner: s(wellknownusers.KopsControllerName),
+	})
+	c.AddTask(&nodetasks.File{
+		Path:     filepath.Join(elemento.ElementoAuthHostDirectory, "auth-service-url"),
+		Contents: fi.NewStringResource(authServiceURL + "\n"),
+		Type:     nodetasks.FileType_File,
+		Mode:     s("0600"),
+		Owner:    s(wellknownusers.KopsControllerName),
+	})
+	c.AddTask(&nodetasks.File{
+		Path:     filepath.Join(elemento.ElementoAuthHostDirectory, "verifier-api-key"),
+		Contents: fi.NewStringResource(verifierAPIKey + "\n"),
 		Type:     nodetasks.FileType_File,
 		Mode:     s("0600"),
 		Owner:    s(wellknownusers.KopsControllerName),

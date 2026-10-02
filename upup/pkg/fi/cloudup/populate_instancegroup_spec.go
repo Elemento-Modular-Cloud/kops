@@ -56,7 +56,6 @@ const (
 	defaultMasterMachineTypeHetzner  = "cx23"
 	defaultMasterMachineTypeScaleway = "DEV1-M"
 	defaultMasterMachineTypeLinode   = "g6-standard-2"
-	defaultMasterMachineTypeElemento = "argon2"
 	defaultMasterMachineTypeElemento = "neon"
 
 	defaultDOImageJammy       = "ubuntu-22-04-x64"
@@ -67,10 +66,9 @@ const (
 	defaultHetznerImageNoble  = "ubuntu-24.04"
 	defaultScalewayImageNoble = "ubuntu_noble"
 	defaultLinodeImageNoble   = "linode/ubuntu24.04"
-	defaultMasterMachineTypeElemento = "argon"
-	defaultElementoImageFocal  = "ubuntu-20-04"
-	defaultElementoImageJammy  = "ubuntu-22-04"
-	defaultElementoImageNoble  = "ubuntu-24-04"
+	defaultElementoImageFocal = "ubuntu-20-04"
+	defaultElementoImageJammy = "ubuntu-22-04"
+	defaultElementoImageNoble = "ubuntu-24-04"
 )
 
 // TODO: this hardcoded list can be replaced with DescribeInstanceTypes' DedicatedHostsSupported field
@@ -422,14 +420,6 @@ func defaultMachineType(cloud fi.Cloud, cluster *kops.Cluster, ig *kops.Instance
 
 		case ig.Spec.Role.HasBastion():
 			return defaultBastionMachineTypeLinode, nil
-
-	case kops.CloudProviderElemento:
-		switch ig.Spec.Role {
-		case kops.InstanceGroupRoleControlPlane:
-			return defaultMasterMachineTypeElemento, nil
-
-		case kops.InstanceGroupRoleNode:
-			return defaultNodeMachineTypeElemento, nil
 		}
 
 	case kops.CloudProviderElemento:
@@ -440,6 +430,7 @@ func defaultMachineType(cloud fi.Cloud, cluster *kops.Cluster, ig *kops.Instance
 		case kops.InstanceGroupRoleNode:
 			return defaultNodeMachineTypeElemento, nil
 		}
+
 	}
 
 	klog.V(2).Infof("Cannot set default MachineType for CloudProvider=%q, Role=%q", cluster.GetCloudProvider(), ig.Spec.Role)

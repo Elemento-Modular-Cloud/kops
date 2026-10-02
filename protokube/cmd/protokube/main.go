@@ -110,6 +110,30 @@ func run() error {
 			klog.Errorf("Error initializing cloud %q: %s", cloud, err)
 			os.Exit(1)
 		}
+		cloudProvider = scwCloudProvider
+
+	} else if cloud == "elemento" {
+		cloudProvider = nil
+	} else if cloud == "metal" {
+		cloudProvider = nil
+	} else {
+		klog.Errorf("Unknown cloud %q", cloud)
+		os.Exit(1)
+	}
+
+	if dnsInternalSuffix == "" {
+		if clusterID == "" {
+			return fmt.Errorf("cluster-id is required when dns-internal-suffix is not set")
+		}
+		// TODO: Maybe only master needs DNS?
+		dnsInternalSuffix = ".internal." + clusterID
+		klog.Infof("Setting dns-internal-suffix to %q", dnsInternalSuffix)
+	}
+
+	// Make sure it's actually a suffix (starts with .)
+	if !strings.HasPrefix(dnsInternalSuffix, ".") {
+		dnsInternalSuffix = "." + dnsInternalSuffix
+	}
 
 		if cloudProvider == nil {
 			return fmt.Errorf("gossip not supported with cloudprovider %q", cloud)

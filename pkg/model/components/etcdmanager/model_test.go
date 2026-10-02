@@ -17,10 +17,12 @@ limitations under the License.
 package etcdmanager
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"testing"
 
+	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/assets"
 	"k8s.io/kops/pkg/featureflag"
 	"k8s.io/kops/pkg/model"
@@ -29,6 +31,35 @@ import (
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/util/pkg/vfs"
 )
+
+func TestBuildElementoStaticConfig(t *testing.T) {
+	etcdCluster := kops.EtcdClusterSpec{
+		Name:    "main",
+		Version: "3.5.17",
+		Members: []kops.EtcdMemberSpec{{Name: "1"}, {Name: "2"}, {Name: "3"}},
+	}
+
+	data, err := buildElementoStaticConfig("test.k8s", etcdCluster)
+	if err != nil {
+		t.Fatalf("building Elemento static config: %v", err)
+	}
+	var config StaticConfig
+	if err := json.Unmarshal([]byte(data), &config); err != nil {
+		t.Fatalf("decoding Elemento static config: %v", err)
+	}
+	if len(config.Nodes) != 3 {
+		t.Fatalf("expected 3 Elemento etcd nodes, got %d", len(config.Nodes))
+	}
+	if got := config.Nodes[0]; got.ID != "test.k8s--main--0" || len(got.IP) != 1 || got.IP[0] != "node0.main.test.k8s" {
+		t.Errorf("unexpected first Elemento etcd node: %#v", got)
+	}
+	if got := config.Nodes[1]; got.ID != "test.k8s--main--1" || len(got.IP) != 1 || got.IP[0] != "node1.main.test.k8s" {
+		t.Errorf("unexpected second Elemento etcd node: %#v", got)
+	}
+	if got := config.Nodes[2]; got.ID != "test.k8s--main--2" || len(got.IP) != 1 || got.IP[0] != "node2.main.test.k8s" {
+		t.Errorf("unexpected third Elemento etcd node: %#v", got)
+	}
+}
 
 func Test_RunEtcdManagerBuilder(t *testing.T) {
 	featureflag.ParseFlags("-ImageDigest")

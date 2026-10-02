@@ -103,36 +103,21 @@ func (v *verifier) parseTokenData(tokenPrefix string, authToken string, body []b
 // openssl ec -in ec-priv-key.pem -pubout > ec-pub-key.pem
 // Note that golang doesn't support secp256k1: https://groups.google.com/g/golang-nuts/c/Mbkug5t3ZYA
 
-func (v *verifier) VerifyToken(ctx context.Context, rawRequest *http.Request, authToken string, body []byte) (*bootstrap.VerifyResult, error) {
-	// DISABLED: Comment out all verification checks for testing
-	/*
-		// Reminder: we shouldn't trust any data we get from the client until we've checked the signature (and even then...)
-		// Thankfully the GCE SDK does seem to escape the parameters correctly, for example.
+func (v *verifier) VerifyToken(ctx context.Context, _ *http.Request, authToken string, body []byte) (*bootstrap.VerifyResult, error) {
+	// Do not trust any data supplied by the node until the signed token has
+	// been validated against the Host public key.
+	token, tokenData, err := v.parseTokenData(AuthenticationTokenPrefix, authToken, body)
+	if err != nil {
+		return nil, err
+	}
 
-		token, tokenData, err := v.parseTokenData(AuthenticationTokenPrefix, authToken, body)
-		if err != nil {
-			return nil, err
-		}
+	result, signingKey, err := v.getSigningKey(ctx, tokenData)
+	if err != nil {
+		return nil, err
+	}
 
-		// Verify the token has a valid signature.
-		result, signingKey, err := v.getSigningKey(ctx, tokenData)
-		if err != nil {
-			return nil, err
-		}
-
-		if !verifySignature(signingKey, token.Data, token.Signature) {
-			return nil, fmt.Errorf("failed to verify claim signature for node")
-		}
-
-		return result, nil
-	*/
-
-	// DISABLED: Return a dummy successful verification result
-	result := &bootstrap.VerifyResult{
-		NodeName:          "test-node",
-		CertificateNames:  []string{"127.0.0.1"},
-		ChallengeEndpoint: "127.0.0.1:10000",
-		InstanceGroupName: "nodes",
+	if !verifySignature(signingKey, token.Data, token.Signature) {
+		return nil, fmt.Errorf("failed to verify claim signature for node")
 	}
 
 	return result, nil

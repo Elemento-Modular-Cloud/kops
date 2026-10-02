@@ -21,6 +21,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"strings"
 
 	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
@@ -41,6 +43,10 @@ type ProtokubeBuilder struct {
 
 var _ fi.NodeupModelBuilder = &ProtokubeBuilder{}
 
+func kopsBinaryAssetPattern(name string) *regexp.Regexp {
+	return regexp.MustCompile(fmt.Sprintf(`(?:^|/)%s(?:-linux-%s)?$`, regexp.QuoteMeta(name), regexp.QuoteMeta(runtime.GOARCH)))
+}
+
 // Build is responsible for generating the options for protokube
 func (t *ProtokubeBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 	// Skip the cluster doesn't use gossip, or this is a worker that bootstraps via kops-controller.
@@ -51,16 +57,45 @@ func (t *ProtokubeBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 	}
 
 	{
-		name, res, err := t.Assets.FindMatch(regexp.MustCompile("protokube$"))
+		_, res, err := t.Assets.FindMatch(kopsBinaryAssetPattern("protokube"))
 		if err != nil {
 			return err
 		}
 
 		c.AddTask(&nodetasks.File{
-			Path:     filepath.Join("/opt/kops/bin", name),
+			Path:     filepath.Join("/opt/kops/bin", "protokube"),
 			Contents: res,
 			Type:     nodetasks.FileType_File,
 			Mode:     fi.PtrTo("0755"),
+		})
+	}
+
+	{
+		_, res, err := t.Assets.FindMatch(kopsBinaryAssetPattern("channels"))
+		if err != nil {
+			return err
+		}
+
+		c.AddTask(&nodetasks.File{
+			Path:     filepath.Join("/opt/kops/bin", "channels"),
+			Contents: res,
+			Type:     nodetasks.FileType_File,
+			Mode:     fi.PtrTo("0755"),
+		})
+	}
+
+	if t.IsMaster {
+		name := nodetasks.PKIXName{
+			CommonName:   "kops",
+			Organization: []string{rbac.SystemPrivilegedGroup},
+		}
+		kubeconfig := t.BuildIssuedKubeconfig("kops", name, c)
+
+		c.AddTask(&nodetasks.File{
+			Path:     "/var/lib/kops/kubeconfig",
+			Contents: kubeconfig,
+			Type:     nodetasks.FileType_File,
+			Mode:     s("0400"),
 		})
 	}
 

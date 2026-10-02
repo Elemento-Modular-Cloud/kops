@@ -20,9 +20,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
-	"math/rand"
+	"net"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/Elemento-Modular-Cloud/ecloud-go/ecloud"
 	"k8s.io/klog/v2"
@@ -37,8 +40,11 @@ type ServerGroup struct {
 	SSHKeys   []*SSHKey
 	Network   *Network
 
-	Count      int
-	NeedUpdate []string
+	Count                      int
+	ServerNames                []string
+	ExistingServerNames        []string
+	NeedUpdate                 []string
+	AuthenticationBindingError string
 
 	Location     string
 	Size         string
@@ -49,14 +55,70 @@ type ServerGroup struct {
 	EnableIPv6 bool
 
 	UserData fi.Resource
+	// KubeEnv is passed directly to the SDK, without fetching it back from S3.
+	KubeEnv         fi.Resource
+	ExternalNodeIPs map[string]string
+	EtcdMemberIndex *int
 
 	Labels map[string]string
+
+	DNSZoneTask    *DNSZone
+	DNSRecordTasks []*DNSRecord
+
+	DHCPReservationTasks []*DHCPReservation
+
+	KubernetesAuthService       *KubernetesAuthService
+	KubernetesAuthInstanceGroup *KubernetesAuthInstanceGroup
+	ProvisioningDependencies    []*ServerGroup
+	PostCreateDelay             time.Duration
 
 	// RootVolumeSize is the size of the root volume in GB
 	RootVolumeSize *int32
 }
 
+var _ fi.CloudupHasDependencies = &ServerGroup{}
+
+func (v *ServerGroup) GetDependencies(tasks map[string]fi.CloudupTask) []fi.CloudupTask {
+	var deps []fi.CloudupTask
+
+	for _, sshKey := range v.SSHKeys {
+		deps = append(deps, sshKey)
+	}
+	if v.Network != nil {
+		deps = append(deps, v.Network)
+	}
+	if v.DNSZoneTask != nil {
+		deps = append(deps, v.DNSZoneTask)
+	}
+	for _, dnsRecordTask := range v.DNSRecordTasks {
+		deps = append(deps, dnsRecordTask)
+	}
+	for _, dhcpReservationTask := range v.DHCPReservationTasks {
+		deps = append(deps, dhcpReservationTask)
+	}
+	if v.KubernetesAuthService != nil {
+		deps = append(deps, v.KubernetesAuthService)
+	}
+	if v.KubernetesAuthInstanceGroup != nil {
+		deps = append(deps, v.KubernetesAuthInstanceGroup)
+	}
+	for _, dependency := range v.ProvisioningDependencies {
+		deps = append(deps, dependency)
+	}
+	if v.UserData != nil {
+		deps = append(deps, fi.FindDependencies(tasks, v.UserData)...)
+	}
+	if v.KubeEnv != nil {
+		deps = append(deps, fi.FindDependencies(tasks, v.KubeEnv)...)
+	}
+
+	return deps
+}
+
 func (v *ServerGroup) Find(c *fi.CloudupContext) (*ServerGroup, error) {
+	if v.AuthenticationBindingError != "" {
+		return nil, errors.New(v.AuthenticationBindingError)
+	}
 	cloud := c.T.Cloud.(elemento.ElementoCloud)
 	client := cloud.ServerClient()
 
@@ -83,20 +145,10 @@ func (v *ServerGroup) Find(c *fi.CloudupContext) (*ServerGroup, error) {
 
 	fmt.Printf("EKOPS: Found %d existing servers for group %q\n", len(servers), fi.ValueOf(v.Name))
 
-	// Filter servers by name prefix to ensure we only process servers for this instance group
-	// Server names are formatted as: {ig-name}-{random-id}
-	igName := fi.ValueOf(v.Name)
-	var filteredServers []*ecloud.Server
-	for i, server := range servers {
-		fmt.Printf("EKOPS: Server %d: %s (Labels: %v)\n", i, server.Name, server.Labels)
-		// Only keep servers that belong to this instance group
-		if strings.HasPrefix(server.Name, igName+"-") {
-			filteredServers = append(filteredServers, server)
-		} else {
-			fmt.Printf("EKOPS: Skipping server %q (doesn't match instance group prefix %q)\n", server.Name, igName+"-")
-		}
+	servers, err = v.matchingServers(servers, c.T.Cluster.Name)
+	if err != nil {
+		return nil, err
 	}
-	servers = filteredServers
 
 	if len(servers) == 0 {
 		fmt.Printf("EKOPS: No existing servers found for group %q\n", fi.ValueOf(v.Name))
@@ -115,6 +167,10 @@ func (v *ServerGroup) Find(c *fi.CloudupContext) (*ServerGroup, error) {
 
 	actual := *v
 	actual.Count = len(servers)
+	actual.ExistingServerNames = nil
+	for _, server := range servers {
+		actual.ExistingServerNames = append(actual.ExistingServerNames, server.Name)
+	}
 
 	// Find servers that need to be updated
 	for i, server := range servers {
@@ -165,6 +221,9 @@ func (v *ServerGroup) Run(c *fi.CloudupContext) error {
 }
 
 func (*ServerGroup) CheckChanges(a, e, changes *ServerGroup) error {
+	if len(e.ServerNames) != e.Count {
+		return fmt.Errorf("server group %q has %d names for %d nodes", fi.ValueOf(e.Name), len(e.ServerNames), e.Count)
+	}
 	if e.Name == nil {
 		return fi.RequiredField("Name")
 	}
@@ -207,11 +266,16 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 		actualCount = a.Count
 	}
 	expectedCount := e.Count
+	var existingNames []string
+	if a != nil {
+		existingNames = a.ExistingServerNames
+	}
+	missingNames := missingServerNames(e.ServerNames, existingNames)
 
 	fmt.Printf("EKOPS: Server count analysis - Expected: %d, Actual: %d, Need to create: %d\n",
 		expectedCount, actualCount, expectedCount-actualCount)
 
-	if actualCount >= expectedCount {
+	if len(missingNames) == 0 {
 		fmt.Printf("EKOPS: No new servers needed for group %q\n", fi.ValueOf(e.Name))
 		return nil
 	}
@@ -222,10 +286,54 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 	if e.Network == nil {
 		return fmt.Errorf("failed to find network for server group %q", fi.ValueOf(e.Name))
 	}
+	dnsIPAddress := ""
+	if e.DNSZoneTask != nil {
+		dnsIPAddress = strings.TrimSpace(fi.ValueOf(e.DNSZoneTask.IPAddress))
+		if dnsIPAddress == "" {
+			dnsClient := t.Cloud.DnsClient()
+			dnsService, _, err := dnsClient.Get(context.TODO(), fi.ValueOf(e.DNSZoneTask.Name))
+			if err != nil {
+				return fmt.Errorf("getting DNS service IP for server group %q: %w", fi.ValueOf(e.Name), err)
+			}
+			if dnsService != nil {
+				dnsIPAddress = strings.TrimSpace(dnsService.IPAddress)
+			}
+		}
+		if dnsIPAddress == "" {
+			return fmt.Errorf("DNS zone task for server group %q has no service IP address", fi.ValueOf(e.Name))
+		}
+		e.DNSZoneTask.IPAddress = fi.PtrTo(dnsIPAddress)
+	}
 
 	userData, err := fi.ResourceAsString(e.UserData)
 	if err != nil {
 		return err
+	}
+	kubeEnv := ""
+	if e.KubeEnv != nil {
+		kubeEnv, err = fi.ResourceAsString(e.KubeEnv)
+		if err != nil {
+			return fmt.Errorf("reading role-specific kube_env: %w", err)
+		}
+	}
+	authTarget := ""
+	authEndpoint := ""
+	if e.KubernetesAuthService != nil {
+		authTarget = e.KubernetesAuthService.AtomOSTarget
+		authEndpoint = strings.TrimSpace(fi.ValueOf(e.KubernetesAuthService.TailnetEndpoint))
+	}
+	if e.Labels[elemento.TagKubernetesInstanceRole] == "ControlPlane" {
+		if e.KubernetesAuthService == nil {
+			return fmt.Errorf("server group %q has no Kubernetes authentication service", fi.ValueOf(e.Name))
+		}
+		if authEndpoint == "" {
+			return fmt.Errorf("Kubernetes authentication service for server group %q has no tailnet endpoint", fi.ValueOf(e.Name))
+		}
+		verifierAPIKey := strings.TrimSpace(os.Getenv("ELEMENTO_AUTH_VERIFIER_API_KEY"))
+		if verifierAPIKey == "" {
+			return fmt.Errorf("ELEMENTO_AUTH_VERIFIER_API_KEY must be set when creating Elemento control-plane servers")
+		}
+		userData = prependElementoAuthEnvironment(userData, authEndpoint, verifierAPIKey)
 	}
 	userDataBytes, err := fi.ResourceAsBytes(e.UserData)
 	if err != nil {
@@ -236,9 +344,25 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 	fmt.Printf("=== EKOPS: About to create %d servers for group %q ===\n", expectedCount-actualCount, fi.ValueOf(e.Name))
 	fmt.Printf("EKOPS: UserData length: %d bytes, hash: %s\n", len(userData), userDataHash)
 
-	for i := 1; i <= expectedCount-actualCount; i++ {
-		// Append a random/unique ID to the node name
-		name := fmt.Sprintf("%s-%x", fi.ValueOf(e.Name), rand.Int63())
+	for _, name := range missingNames {
+		networkID := fi.ValueOf(e.Network.ID)
+		internalIPAddress := e.ExternalNodeIPs[name]
+		var attachments []ecloud.ServerNetworkAttachment
+		if internalIPAddress == "" {
+			reservation := e.dhcpReservationForServerName(name)
+			if reservation == nil {
+				return fmt.Errorf("failed to find DHCP reservation task for server %q", name)
+			}
+			macAddress := fi.ValueOf(reservation.MACAddress)
+			if macAddress == "" {
+				return fmt.Errorf("DHCP reservation task for server %q has no MAC address", name)
+			}
+			internalIPAddress = strings.TrimSpace(fi.ValueOf(reservation.IPAddress))
+			attachments = []ecloud.ServerNetworkAttachment{{NetworkID: networkID, MACAddress: macAddress}}
+		}
+		if net.ParseIP(internalIPAddress) == nil {
+			return fmt.Errorf("server %q has invalid internal IP address %q", name, internalIPAddress)
+		}
 
 		// Initialize labels if nil
 		labels := e.Labels
@@ -251,23 +375,31 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 			StartAfterCreate: fi.PtrTo(true),
 			Networks: []*ecloud.Network{
 				{
-					ID: fi.ValueOf(e.Network.ID),
+					ID: networkID,
 				},
 			},
+			MacAddressConfig: attachments,
 			Datacenter: &ecloud.Datacenter{
 				Location: e.Location,
 			},
 			ServerType: &ecloud.ServerType{
 				Name: e.Size,
 			},
-			UserData: userData,
-			Labels:   labels,
-			SSHKeys:  []*ecloud.SSHKey{},
+			UserData:               userData,
+			KubeEnv:                kubeEnv,
+			EtcdMemberIndex:        e.EtcdMemberIndex,
+			Labels:                 labels,
+			DNSIPAddress:           dnsIPAddress,
+			InternalIPAddress:      internalIPAddress,
+			KubernetesAuthTarget:   authTarget,
+			KubernetesAuthEndpoint: authEndpoint,
+			PostCreateDelay:        e.PostCreateDelay,
+			SSHKeys:                []*ecloud.SSHKey{},
 		}
 
 		// Add root volume configuration if specified
 		if e.RootVolumeSize != nil {
-			opts.ServerType.Disk = int(fi.ValueOf(e.RootVolumeSize))
+			opts.ServerType.Disk = float64(fi.ValueOf(e.RootVolumeSize))
 		}
 
 		// Add the SSH keys.
@@ -284,10 +416,17 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 
 		fmt.Printf("EKOPS: Creating server %q with options: Location=%s, Size=%s, Image=%s\n",
 			name, e.Location, e.Size, e.Image)
+		fmt.Printf("EKOPS: Using network %q with internal IP %q for server %q\n",
+			networkID, internalIPAddress, name)
+
 		fmt.Printf("EKOPS: Calling client.Create() for server %q\n", name)
 
 		_, _, err = client.Create(context.TODO(), opts)
 		if err != nil {
+			var bindingErr *ecloud.KubernetesAuthBindingError
+			if errors.As(err, &bindingErr) {
+				e.AuthenticationBindingError = bindingErr.Error()
+			}
 			fmt.Printf("EKOPS: ERROR creating server %q: %v\n", name, err)
 			return err
 		}
@@ -295,6 +434,72 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 	}
 
 	return nil
+}
+
+func prependElementoAuthEnvironment(userData, authURL, verifierAPIKey string) string {
+	environment := fmt.Sprintf(
+		"export ELEMENTO_AUTH_URL=$(printf %%s %s | base64 -d)\nexport ELEMENTO_AUTH_VERIFIER_API_KEY=$(printf %%s %s | base64 -d)\n",
+		base64.StdEncoding.EncodeToString([]byte(authURL)),
+		base64.StdEncoding.EncodeToString([]byte(verifierAPIKey)),
+	)
+	if newline := strings.IndexByte(userData, '\n'); newline >= 0 {
+		return userData[:newline+1] + environment + userData[newline+1:]
+	}
+	return environment + userData
+}
+
+func (v *ServerGroup) dhcpReservationForServerName(serverName string) *DHCPReservation {
+	for _, reservation := range v.DHCPReservationTasks {
+		if fi.ValueOf(reservation.Name) == serverName {
+			return reservation
+		}
+	}
+	return nil
+}
+
+// The API does not apply label selectors, so enforce ownership locally.
+func (v *ServerGroup) matchingServers(servers []*ecloud.Server, cluster string) ([]*ecloud.Server, error) {
+	wanted := map[string]bool{}
+	for _, name := range v.ServerNames {
+		wanted[name] = true
+	}
+	seen := map[string]bool{}
+	var result []*ecloud.Server
+	for _, server := range servers {
+		if server == nil {
+			continue
+		}
+		owned := server.Labels[elemento.TagKubernetesClusterName] == cluster && server.Labels[elemento.TagKubernetesInstanceGroup] == fi.ValueOf(v.Name)
+		if !owned {
+			if wanted[server.Name] {
+				return nil, fmt.Errorf("server name %q already belongs to a different cluster or instance group", server.Name)
+			}
+			continue
+		}
+		if !wanted[server.Name] {
+			return nil, fmt.Errorf("existing server %q does not match the naming plan for instance group %q; automatic renaming is disabled", server.Name, fi.ValueOf(v.Name))
+		}
+		if seen[server.Name] {
+			return nil, fmt.Errorf("duplicate existing server name %q", server.Name)
+		}
+		seen[server.Name] = true
+		result = append(result, server)
+	}
+	return result, nil
+}
+
+func missingServerNames(wanted, existing []string) []string {
+	seen := map[string]bool{}
+	for _, name := range existing {
+		seen[name] = true
+	}
+	var missing []string
+	for _, name := range wanted {
+		if !seen[name] {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }
 
 func safeBytesHash(data []byte) string {

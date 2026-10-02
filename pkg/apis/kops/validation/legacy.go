@@ -23,7 +23,7 @@ import (
 
 	"github.com/blang/semver/v4"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/apis/kops/util"
 	"k8s.io/kops/pkg/featureflag"
@@ -172,7 +172,7 @@ func ValidateCluster(c *kops.Cluster, strict bool, vfsContext *vfs.VFSContext) f
 		case kops.CloudProviderScaleway:
 			k8sCloudProvider = "external"
 		case kops.CloudProviderLinode:
-      k8sCloudProvider = "linode"
+			k8sCloudProvider = "linode"
 		case kops.CloudProviderElemento:
 			k8sCloudProvider = "external"
 		default:

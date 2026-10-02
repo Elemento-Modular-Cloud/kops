@@ -19,6 +19,7 @@ package elementomodel
 import (
 	"fmt"
 	"io"
+	"time"
 
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/model"
@@ -27,6 +28,7 @@ import (
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
 	"k8s.io/kops/upup/pkg/fi/cloudup/elementotasks"
+	"k8s.io/kops/upup/pkg/fi/fitasks"
 )
 
 // ServerGroupModelBuilder configures server objects
@@ -38,7 +40,12 @@ type ServerGroupModelBuilder struct {
 
 var _ fi.CloudupModelBuilder = &ServerGroupModelBuilder{}
 
+const atomosControlPlaneBootstrapDelay = 5 * time.Minute
+
 func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
+	network := b.LinkToNetwork()
+	authService := &elementotasks.KubernetesAuthService{Name: fi.PtrTo(b.ClusterName())}
+	authCluster := &elementotasks.KubernetesAuthCluster{Name: fi.PtrTo(b.ClusterName())}
 	var sshkeyTasks []*elementotasks.SSHKey
 	for _, sshkey := range b.SSHPublicKeys {
 		fingerprint, err := pki.ComputeOpenSSHKeyFingerprint(string(sshkey))
@@ -57,16 +64,42 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 		sshkeyTasks = append(sshkeyTasks, t)
 	}
 
+	var dnsZoneTask *elementotasks.DNSZone
+	if b.Cluster.PublishesDNSRecords() {
+		dnsZoneTask = &elementotasks.DNSZone{
+			Name:      fi.PtrTo(b.ClusterName()),
+			Network:   network,
+			Lifecycle: b.Lifecycle,
+		}
+	}
+
+	var atomosControlPlaneGroups []*elementotasks.ServerGroup
+	var dependentProvisioningGroups []*elementotasks.ServerGroup
 	for _, ig := range b.InstanceGroups {
+		names, err := b.nodeNamesForInstanceGroup(ig)
+		if err != nil {
+			return err
+		}
 		igSize := fi.ValueOf(ig.Spec.MinSize)
 		labels, err := b.CloudTagsForInstanceGroup(ig)
 		if err != nil {
 			return err
 		}
+		labels[elemento.TagKubernetesClusterName] = b.ClusterName()
+		labels[elemento.TagKubernetesInstanceGroup] = ig.Name
+		labels[elemento.TagKubernetesInstanceRole] = string(ig.Spec.Role)
 
-		userData, err := b.BootstrapScriptBuilder.ResourceNodeUp(c, ig)
+		userData, bootConfig, err := b.BootstrapScriptBuilder.ResourceNodeUpWithBootConfig(c, ig)
 		if err != nil {
 			return err
+		}
+		if igSize == 0 {
+			c.AddTask(&fitasks.ManagedFile{
+				Name:      fi.PtrTo("kubeenv-" + ig.Name),
+				Lifecycle: b.Lifecycle,
+				Location:  fi.PtrTo("igconfig/" + ig.Spec.Role.ToLowerString() + "/" + ig.Name + "/kube_env.yaml"),
+				Contents:  bootConfig,
+			})
 		}
 
 		// For debugging: wrap the userData to print it when it's ready
@@ -77,7 +110,9 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 			}
 		}
 
-		fmt.Printf("CREATING server group for instance group %q with size %d\n", ig.Name, igSize)
+		serverCount := int(igSize)
+
+		fmt.Printf("CREATING server group for instance group %q with size %d\n", ig.Name, serverCount)
 		fmt.Printf("--- End of UserData ---\n")
 
 		// Determine root volume size
@@ -93,24 +128,73 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 			rootVolumeSize = fi.PtrTo(defaultSize)
 		}
 
-		serverGroup := elementotasks.ServerGroup{
-			Name:           fi.PtrTo(ig.Name),
-			Lifecycle:      b.Lifecycle,
-			SSHKeys:        sshkeyTasks,
-			Network:        b.LinkToNetwork(),
-			Count:          int(igSize),
-			Location:       ig.Spec.Subnets[0],
-			Size:           ig.Spec.MachineType,
-			Image:          ig.Spec.Image,
-			Architecture:   determineArchitecture(ig),
-			EnableIPv4:     true,
-			EnableIPv6:     false,
-			UserData:       userData,
-			Labels:         labels,
-			RootVolumeSize: rootVolumeSize,
+		serverGroup := &elementotasks.ServerGroup{
+			Name:                        fi.PtrTo(ig.Name),
+			Lifecycle:                   b.Lifecycle,
+			SSHKeys:                     sshkeyTasks,
+			Network:                     network,
+			Count:                       serverCount,
+			ServerNames:                 names,
+			Location:                    ig.Spec.Subnets[0],
+			Size:                        ig.Spec.MachineType,
+			Image:                       ig.Spec.Image,
+			Architecture:                determineArchitecture(ig),
+			EnableIPv4:                  true,
+			EnableIPv6:                  false,
+			UserData:                    userData,
+			KubeEnv:                     bootConfig,
+			ExternalNodeIPs:             make(map[string]string),
+			Labels:                      labels,
+			RootVolumeSize:              rootVolumeSize,
+			DHCPReservationTasks:        make([]*elementotasks.DHCPReservation, 0, igSize),
+			KubernetesAuthService:       authService,
+			KubernetesAuthInstanceGroup: &elementotasks.KubernetesAuthInstanceGroup{Name: fi.PtrTo(ig.Name), AuthCluster: authCluster},
+		}
+		for _, serverName := range names {
+			if ip := b.externalNodeIPs[serverName]; ip != "" {
+				serverGroup.ExternalNodeIPs[serverName] = ip
+				continue
+			}
+			serverGroup.DHCPReservationTasks = append(serverGroup.DHCPReservationTasks, &elementotasks.DHCPReservation{
+				Name: fi.PtrTo(serverName),
+			})
+		}
+		if len(serverGroup.ExternalNodeIPs) > 0 && ig.Spec.Role == kops.InstanceGroupRoleControlPlane {
+			// Both etcd clusters must identify the same member slot for this group.
+			for _, member := range elementoEtcdMembersForInstanceGroup(b.Cluster.Spec.EtcdClusters, ig.Name) {
+				if serverGroup.EtcdMemberIndex != nil && *serverGroup.EtcdMemberIndex != member.index {
+					return fmt.Errorf("external control-plane group %q has inconsistent etcd member indices", ig.Name)
+				}
+				serverGroup.EtcdMemberIndex = fi.PtrTo(member.index)
+			}
+			if len(names) != 1 {
+				return fmt.Errorf("external control-plane group %q requires one node per etcd member", ig.Name)
+			}
+		}
+		if b.Cluster.PublishesDNSRecords() {
+			serverGroup.DNSZoneTask = dnsZoneTask
+			dnsRecordTasks, err := b.elementoDNSRecordTasksForInstanceGroup(ig, b.Lifecycle, dnsZoneTask)
+			if err != nil {
+				return err
+			}
+			serverGroup.DNSRecordTasks = dnsRecordTasks
 		}
 
-		c.AddTask(&serverGroup)
+		if ig.Spec.Role == kops.InstanceGroupRoleControlPlane && len(serverGroup.ExternalNodeIPs) == 0 {
+			atomosControlPlaneGroups = append(atomosControlPlaneGroups, serverGroup)
+		} else {
+			dependentProvisioningGroups = append(dependentProvisioningGroups, serverGroup)
+		}
+		c.AddTask(serverGroup)
+	}
+
+	if b.delayAtomosControlPlane && len(atomosControlPlaneGroups) > 0 && len(dependentProvisioningGroups) > 0 {
+		for _, group := range atomosControlPlaneGroups {
+			group.PostCreateDelay = atomosControlPlaneBootstrapDelay
+		}
+		for _, group := range dependentProvisioningGroups {
+			group.ProvisioningDependencies = append(group.ProvisioningDependencies, atomosControlPlaneGroups...)
+		}
 	}
 
 	return nil

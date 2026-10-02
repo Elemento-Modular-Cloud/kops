@@ -310,7 +310,7 @@ func (c *ApplyClusterCmd) Run(ctx context.Context) (*ApplyResults, error) {
 	if cluster.Spec.KubernetesVersion == "" {
 		return nil, fmt.Errorf("KubernetesVersion not set")
 	}
-	if cluster.Spec.DNSZone == "" && cluster.PublishesDNSRecords() {
+	if cluster.Spec.DNSZone == "" && cluster.PublishesDNSRecords() && cluster.GetCloudProvider() != kops.CloudProviderElemento {
 		return nil, fmt.Errorf("DNSZone not set")
 	}
 
@@ -503,11 +503,7 @@ func (c *ApplyClusterCmd) Run(ctx context.Context) (*ApplyResults, error) {
 
 	case kops.CloudProviderElemento:
 		{
-			if len(sshPublicKeys) == 0 {
-				return nil, fmt.Errorf("SSH public key must be specified when running with Elemento (create with `kops create secret --name %s sshpublickey admin -i ~/.ssh/id_rsa.pub`)", cluster.ObjectMeta.Name)
-			}
-
-			if len(sshPublicKeys) != 1 {
+			if len(sshPublicKeys) > 1 {
 				return nil, fmt.Errorf("exactly one 'admin' SSH public key can be specified when running with Elemento; please delete a key using `kops delete secret`")
 			}
 		}
@@ -529,7 +525,7 @@ func (c *ApplyClusterCmd) Run(ctx context.Context) (*ApplyResults, error) {
 	modelContext.SSHPublicKeys = sshPublicKeys
 	modelContext.Region = cloud.Region()
 
-	if cluster.PublishesDNSRecords() {
+	if cluster.PublishesDNSRecords() && cluster.GetCloudProvider() != kops.CloudProviderElemento {
 		err = validateDNS(cluster, cloud)
 		if err != nil {
 			return nil, err
@@ -737,7 +733,10 @@ func (c *ApplyClusterCmd) Run(ctx context.Context) (*ApplyResults, error) {
 				KopsModelContext: modelContext,
 			}
 			l.Builders = append(l.Builders,
+				&elementomodel.PlacementModelBuilder{ElementoModelContext: elementoModelContext, Lifecycle: clusterLifecycle, ConfigBase: configBase},
 				&elementomodel.NetworkModelBuilder{ElementoModelContext: elementoModelContext, Lifecycle: networkLifecycle},
+				&elementomodel.KubernetesAuthModelBuilder{ElementoModelContext: elementoModelContext, Lifecycle: clusterLifecycle},
+				&elementomodel.DHCPModelBuilder{ElementoModelContext: elementoModelContext, Lifecycle: networkLifecycle},
 				&elementomodel.DNSModelBuilder{ElementoModelContext: elementoModelContext, Lifecycle: networkLifecycle},
 				&elementomodel.ServerGroupModelBuilder{ElementoModelContext: elementoModelContext, BootstrapScriptBuilder: bootstrapScriptBuilder, Lifecycle: clusterLifecycle},
 			)
@@ -885,7 +884,7 @@ func (c *ApplyClusterCmd) Run(ctx context.Context) (*ApplyResults, error) {
 		return nil, fmt.Errorf("error running tasks: %v", err)
 	}
 
-	if !cluster.PublishesDNSRecords() {
+	if !cluster.PublishesDNSRecords() || cluster.GetCloudProvider() == kops.CloudProviderElemento {
 		shouldPrecreateDNS = false
 	}
 

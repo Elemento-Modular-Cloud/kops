@@ -45,15 +45,15 @@ const (
 type ElementoCloud interface {
 	fi.Cloud
 
-	Region() string
-	DNS() (dnsprovider.Interface, error)
 	NetworkClient() ecloud.NetworkClient
 	ServerClient() ecloud.ServerClient
 	SSHKeyClient() ecloud.SSHKeyClient
 	VolumeClient() ecloud.VolumeClient
 	NodeupClient(ctx context.Context) ecloud.NodeupClient
+	KubernetesAuthClient() *ecloud.KubernetesAuthClient
 
-	// TODO: Detect and add additional fields here
+	DnsClient() ecloud.DnsClient
+	DhcpClient() ecloud.DhcpClient
 }
 
 var _ fi.Cloud = &elementoCloudImplementation{}
@@ -152,7 +152,15 @@ func findServerGroups(c *elementoCloudImplementation, clusterName string) (map[s
 }
 
 func (c *elementoCloudImplementation) DNS() (dnsprovider.Interface, error) {
-	return nil, nil
+	return NewDNSProvider(c.Client.Dns, c.Client.Network, "")
+}
+
+func (c *elementoCloudImplementation) DnsClient() ecloud.DnsClient {
+	return c.Client.Dns
+}
+
+func (c *elementoCloudImplementation) DhcpClient() ecloud.DhcpClient {
+	return c.Client.Dhcp
 }
 
 func (c *elementoCloudImplementation) NetworkClient() ecloud.NetworkClient {
@@ -174,6 +182,10 @@ func (c *elementoCloudImplementation) VolumeClient() ecloud.VolumeClient {
 
 func (c *elementoCloudImplementation) NodeupClient(ctx context.Context) ecloud.NodeupClient {
 	return c.Client.Nodeup
+}
+
+func (c *elementoCloudImplementation) KubernetesAuthClient() *ecloud.KubernetesAuthClient {
+	return &c.Client.KubernetesAuth
 }
 
 func buildCloudInstanceGroup(ig *kops.InstanceGroup, sg []*ecloud.Server, nodeMap map[string]*v1.Node) (*cloudinstances.CloudInstanceGroup, error) {

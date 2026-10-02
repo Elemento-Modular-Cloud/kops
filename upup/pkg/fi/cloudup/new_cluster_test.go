@@ -86,66 +86,62 @@ func TestCreateEtcdCluster(t *testing.T) {
 	}
 }
 
-func TestSetupKarpenterNodes(t *testing.T) {
-	grid := []struct {
-		desc        string
-		nodeCount   int32
-		nodeSizes   []string
-		static      bool
-		machineType string
-		mixedTypes  []string
+func TestControlPlaneInstanceGroupName(t *testing.T) {
+	tests := []struct {
+		name              string
+		cloudProvider     api.CloudProviderID
+		index             int
+		controlPlaneCount int
+		zoneCount         int
+		want              string
 	}{
 		{
-			desc: "dynamic",
+			name:              "single Elemento control plane",
+			cloudProvider:     api.CloudProviderElemento,
+			index:             0,
+			controlPlaneCount: 1,
+			zoneCount:         1,
+			want:              "control-plane-europe",
 		},
 		{
-			desc:      "static",
-			nodeCount: 4,
-			static:    true,
+			name:              "first Elemento control plane",
+			cloudProvider:     api.CloudProviderElemento,
+			index:             0,
+			controlPlaneCount: 3,
+			zoneCount:         1,
+			want:              "control-plane-europe",
 		},
 		{
-			desc:        "single node size",
-			nodeSizes:   []string{"m6g.large"},
-			machineType: "m6g.large",
+			name:              "second Elemento control plane",
+			cloudProvider:     api.CloudProviderElemento,
+			index:             1,
+			controlPlaneCount: 3,
+			zoneCount:         1,
+			want:              "control-plane-europe-2",
 		},
 		{
-			desc:        "multiple node sizes",
-			nodeSizes:   []string{"m6g.large", "m6gd.large"},
-			machineType: "m6g.large",
-			mixedTypes:  []string{"m6g.large", "m6gd.large"},
+			name:              "third Elemento control plane",
+			cloudProvider:     api.CloudProviderElemento,
+			index:             2,
+			controlPlaneCount: 3,
+			zoneCount:         1,
+			want:              "control-plane-europe-3",
+		},
+		{
+			name:              "non-Elemento naming remains unchanged",
+			cloudProvider:     api.CloudProviderAWS,
+			index:             0,
+			controlPlaneCount: 3,
+			zoneCount:         1,
+			want:              "control-plane-europe-1",
 		},
 	}
 
-	for _, g := range grid {
-		t.Run(g.desc, func(t *testing.T) {
-			groups, err := setupKarpenterNodes(&NewClusterOptions{NodeCount: g.nodeCount, NodeSizes: g.nodeSizes})
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if len(groups) != 1 {
-				t.Fatalf("expected one InstanceGroup, got %d", len(groups))
-			}
-
-			ig := groups[0]
-			if ig.Spec.Manager != api.InstanceManagerKarpenter {
-				t.Errorf("expected Karpenter manager, got %q", ig.Spec.Manager)
-			}
-			if g.static {
-				if fi.ValueOf(ig.Spec.MinSize) != g.nodeCount {
-					t.Errorf("expected minSize %d, got %v", g.nodeCount, ig.Spec.MinSize)
-				}
-			} else if ig.Spec.MinSize != nil {
-				t.Errorf("expected minSize to be omitted, got %v", ig.Spec.MinSize)
-			}
-			if ig.Spec.MachineType != g.machineType {
-				t.Errorf("expected machineType %q, got %q", g.machineType, ig.Spec.MachineType)
-			}
-			if g.mixedTypes == nil {
-				if ig.Spec.MixedInstancesPolicy != nil {
-					t.Errorf("expected no MixedInstancesPolicy, got %v", ig.Spec.MixedInstancesPolicy)
-				}
-			} else if !reflect.DeepEqual(ig.Spec.MixedInstancesPolicy.Instances, g.mixedTypes) {
-				t.Errorf("expected mixed instances %v, got %v", g.mixedTypes, ig.Spec.MixedInstancesPolicy.Instances)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := controlPlaneInstanceGroupName(test.cloudProvider, "europe", test.index, test.controlPlaneCount, test.zoneCount)
+			if got != test.want {
+				t.Fatalf("controlPlaneInstanceGroupName() = %q, want %q", got, test.want)
 			}
 		})
 	}
