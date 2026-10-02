@@ -59,6 +59,8 @@ type ServerGroup struct {
 	KubeEnv         fi.Resource
 	ExternalNodeIPs map[string]string
 	EtcdMemberIndex *int
+	// ClusterPodCIDR is passed to external cloud-init for tailnet Pod SNAT.
+	ClusterPodCIDR string
 
 	Labels map[string]string
 
@@ -391,6 +393,7 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 			Labels:                 labels,
 			DNSIPAddress:           dnsIPAddress,
 			InternalIPAddress:      internalIPAddress,
+			ClusterPodCIDR:         e.ClusterPodCIDR,
 			KubernetesAuthTarget:   authTarget,
 			KubernetesAuthEndpoint: authEndpoint,
 			PostCreateDelay:        e.PostCreateDelay,

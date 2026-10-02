@@ -144,6 +144,7 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 			UserData:                    userData,
 			KubeEnv:                     bootConfig,
 			ExternalNodeIPs:             make(map[string]string),
+			ClusterPodCIDR:              b.Cluster.Spec.Networking.PodCIDR,
 			Labels:                      labels,
 			RootVolumeSize:              rootVolumeSize,
 			DHCPReservationTasks:        make([]*elementotasks.DHCPReservation, 0, igSize),

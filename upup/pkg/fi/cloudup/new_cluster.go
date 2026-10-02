@@ -401,6 +401,10 @@ func NewCluster(opt *NewClusterOptions, clientset simple.Clientset) (*NewCluster
 	if err != nil {
 		return nil, err
 	}
+	if cluster.GetCloudProvider() == api.CloudProviderElemento &&
+		cluster.Spec.Networking.Cilium != nil && cluster.Spec.Networking.PodCIDR == "" {
+		cluster.Spec.Networking.PodCIDR = "100.96.0.0/16"
+	}
 
 	bastions, err := setupTopology(opt, cluster, allZones)
 	if err != nil {
