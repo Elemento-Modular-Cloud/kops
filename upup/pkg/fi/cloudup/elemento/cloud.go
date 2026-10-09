@@ -47,6 +47,7 @@ type ElementoCloud interface {
 
 	NetworkClient() ecloud.NetworkClient
 	ServerClient() ecloud.ServerClient
+	MulticloudClient() *ecloud.MulticloudClient
 	SSHKeyClient() ecloud.SSHKeyClient
 	VolumeClient() ecloud.VolumeClient
 	NodeupClient(ctx context.Context) ecloud.NodeupClient
@@ -170,6 +171,10 @@ func (c *elementoCloudImplementation) NetworkClient() ecloud.NetworkClient {
 func (c *elementoCloudImplementation) ServerClient() ecloud.ServerClient {
 	klog.V(2).Infof("ECLOUD_DEBUG: Returning ServerClient instance")
 	return c.Client.Server
+}
+
+func (c *elementoCloudImplementation) MulticloudClient() *ecloud.MulticloudClient {
+	return &c.Client.Multicloud
 }
 
 func (c *elementoCloudImplementation) SSHKeyClient() ecloud.SSHKeyClient {

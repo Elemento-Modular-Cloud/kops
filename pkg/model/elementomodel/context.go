@@ -17,6 +17,7 @@ limitations under the License.
 package elementomodel
 
 import (
+	"github.com/Elemento-Modular-Cloud/ecloud-go/ecloud"
 	"k8s.io/kops/pkg/model"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
@@ -28,6 +29,8 @@ type ElementoModelContext struct {
 	// Populated from the validated plan, never from provider-specific IP env vars.
 	externalNodeIPs         map[string]string
 	delayAtomosControlPlane bool
+	multicloudPlan          *ecloud.MulticloudPlan
+	loadBalancerDNSRecords  []*elementotasks.DNSRecord
 }
 
 func (b *ElementoModelContext) LinkToNetwork() *elementotasks.Network {

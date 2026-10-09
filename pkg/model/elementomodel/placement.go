@@ -60,6 +60,7 @@ func (b *PlacementModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		return err
 	}
 	b.externalNodeIPs = make(map[string]string)
+	b.multicloudPlan = plan
 	// if enabled as env variable and it's set to true, wait a couple of minutes to allow a control-plane node
 	// on an AtomOS server to start its bootstrapping process
 	b.delayAtomosControlPlane = cfg.DelayAtomosControlPlane

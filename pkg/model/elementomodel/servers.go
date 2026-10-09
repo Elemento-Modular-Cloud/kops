@@ -179,6 +179,7 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 				return err
 			}
 			serverGroup.DNSRecordTasks = dnsRecordTasks
+			serverGroup.DNSRecordTasks = append(serverGroup.DNSRecordTasks, b.loadBalancerDNSRecords...)
 		}
 
 		if ig.Spec.Role == kops.InstanceGroupRoleControlPlane && len(serverGroup.ExternalNodeIPs) == 0 {
@@ -212,7 +213,8 @@ func determineArchitecture(ig *kops.InstanceGroup) string {
 	return "X86_64"
 }
 
-// debugUserDataResource is a wrapper that prints userData content when it's accessed
+// debugUserDataResource confirms that user data was rendered without exposing
+// bootstrap credentials embedded in it.
 type debugUserDataResource struct {
 	fi.Resource
 	instanceGroup string
@@ -225,14 +227,12 @@ func (d *debugUserDataResource) Open() (io.Reader, error) {
 		return reader, err
 	}
 
-	// Print the content only once when it's first accessed
+	// Bootstrap user data can contain credentials. Log only its size.
 	if !d.printed {
 		d.printed = true
 		content, readErr := fi.ResourceAsString(d.Resource)
 		if readErr == nil {
-			fmt.Printf("=== UserData for instance group %q ===\n", d.instanceGroup)
-			fmt.Printf("%s\n", content)
-			fmt.Printf("=== End UserData for %q ===\n", d.instanceGroup)
+			fmt.Printf("EKOPS: UserData for instance group %q rendered (%d bytes; content redacted)\n", d.instanceGroup, len(content))
 		}
 	}
 

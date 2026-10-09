@@ -133,16 +133,18 @@ func (_ *DNSZone) RenderElemento(t *elemento.ElementoAPITarget, actual, expected
 
 // +kops:fitask
 type DNSRecord struct {
-	Name            *string
-	Data            *string
-	DNSZone         *string
-	DNSZoneTask     *DNSZone
-	DHCPReservation *DHCPReservation
-	DependsOn       *DNSRecord
-	Type            *string
-	TTL             *int64
-	Lifecycle       fi.Lifecycle
-	Comment         *string
+	Name                  *string
+	Data                  *string
+	DNSZone               *string
+	DNSZoneTask           *DNSZone
+	ExternalLoadBalancer  *ExternalLoadBalancer
+	LoadBalancerPublicAPI bool
+	DHCPReservation       *DHCPReservation
+	DependsOn             *DNSRecord
+	Type                  *string
+	TTL                   *int64
+	Lifecycle             fi.Lifecycle
+	Comment               *string
 }
 
 var _ fi.CloudupTask = &DNSRecord{}
@@ -152,6 +154,9 @@ func (d *DNSRecord) GetDependencies(tasks map[string]fi.CloudupTask) []fi.Cloudu
 	var deps []fi.CloudupTask
 	if d.DNSZoneTask != nil {
 		deps = append(deps, d.DNSZoneTask)
+	}
+	if d.ExternalLoadBalancer != nil {
+		deps = append(deps, d.ExternalLoadBalancer)
 	}
 	if d.DHCPReservation != nil {
 		deps = append(deps, d.DHCPReservation)
@@ -181,16 +186,18 @@ func (d *DNSRecord) Find(c *fi.CloudupContext) (*DNSRecord, error) {
 	}
 
 	return &DNSRecord{
-		Name:            fi.PtrTo(record.Name),
-		Data:            fi.PtrTo(record.Value),
-		DNSZone:         d.DNSZone,
-		DNSZoneTask:     d.DNSZoneTask,
-		DHCPReservation: d.DHCPReservation,
-		DependsOn:       d.DependsOn,
-		Type:            fi.PtrTo(record.Type),
-		TTL:             fi.PtrTo(int64(record.TTL)),
-		Lifecycle:       d.Lifecycle,
-		Comment:         d.Comment,
+		Name:                  fi.PtrTo(record.Name),
+		Data:                  fi.PtrTo(record.Value),
+		DNSZone:               d.DNSZone,
+		DNSZoneTask:           d.DNSZoneTask,
+		ExternalLoadBalancer:  d.ExternalLoadBalancer,
+		LoadBalancerPublicAPI: d.LoadBalancerPublicAPI,
+		DHCPReservation:       d.DHCPReservation,
+		DependsOn:             d.DependsOn,
+		Type:                  fi.PtrTo(record.Type),
+		TTL:                   fi.PtrTo(int64(record.TTL)),
+		Lifecycle:             d.Lifecycle,
+		Comment:               d.Comment,
 	}, nil
 }
 
@@ -212,6 +219,9 @@ func (_ *DNSRecord) CheckChanges(actual, expected, changes *DNSRecord) error {
 		return fmt.Errorf("Elemento DNS currently supports only A records, got %q", fi.ValueOf(expected.Type))
 	}
 	if expected.Data == nil {
+		if expected.LoadBalancerPublicAPI && expected.ExternalLoadBalancer != nil {
+			return nil
+		}
 		if expected.DHCPReservation == nil {
 			return fi.RequiredField("Data")
 		}
@@ -227,6 +237,20 @@ func (_ *DNSRecord) RenderElemento(t *elemento.ElementoAPITarget, actual, expect
 	recordValue := fi.ValueOf(expected.Data)
 	if expected.DHCPReservation != nil {
 		recordValue = fi.ValueOf(expected.DHCPReservation.IPAddress)
+		expected.Data = fi.PtrTo(recordValue)
+	}
+	if expected.LoadBalancerPublicAPI {
+		if expected.ExternalLoadBalancer == nil || expected.ExternalLoadBalancer.Plan == nil {
+			return fmt.Errorf("Elemento public API DNS record requires an external load balancer plan")
+		}
+		result, err := t.Cloud.MulticloudClient().FindExternalLoadBalancer(context.TODO(), expected.ExternalLoadBalancer.Plan)
+		if err != nil {
+			return fmt.Errorf("getting external load balancer public IP: %w", err)
+		}
+		if result == nil || result.Server == nil || strings.TrimSpace(result.Server.PublicNet.IPv4) == "" {
+			return fmt.Errorf("external load balancer has no public IPv4 address")
+		}
+		recordValue = result.Server.PublicNet.IPv4
 		expected.Data = fi.PtrTo(recordValue)
 	}
 	if recordValue == "" {

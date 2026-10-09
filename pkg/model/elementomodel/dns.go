@@ -48,8 +48,58 @@ func (b *DNSModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		Lifecycle: b.Lifecycle,
 	}
 	c.EnsureTask(dnsZoneTask)
-
 	var previousDNSRecordTask *elementotasks.DNSRecord
+	if b.multicloudPlan != nil && b.multicloudPlan.LoadBalancer != nil {
+		loadBalancer := &elementotasks.ExternalLoadBalancer{
+			Name:        fi.PtrTo(b.multicloudPlan.LoadBalancer.Name),
+			Plan:        b.multicloudPlan,
+			DNSZoneTask: dnsZoneTask,
+			Lifecycle:   b.Lifecycle,
+		}
+		c.EnsureTask(loadBalancer)
+		loadBalancerRecords, err := b.multicloudPlan.LoadBalancerDNSRecords()
+		if err != nil {
+			return fmt.Errorf("building external load balancer DNS records: %w", err)
+		}
+		b.loadBalancerDNSRecords = make([]*elementotasks.DNSRecord, 0, len(loadBalancerRecords))
+		for _, record := range loadBalancerRecords {
+			task := &elementotasks.DNSRecord{
+				Name:                 fi.PtrTo(record.Name),
+				Data:                 fi.PtrTo(record.Value),
+				DNSZone:              fi.PtrTo(b.ClusterName()),
+				DNSZoneTask:          dnsZoneTask,
+				ExternalLoadBalancer: loadBalancer,
+				DependsOn:            previousDNSRecordTask,
+				Type:                 fi.PtrTo("A"),
+				TTL:                  fi.PtrTo(elementoDNSRecordTTL),
+				Lifecycle:            b.Lifecycle,
+			}
+			c.EnsureTask(task)
+			b.loadBalancerDNSRecords = append(b.loadBalancerDNSRecords, task)
+			previousDNSRecordTask = task
+		}
+		if b.multicloudPlan.LoadBalancer.PublicAPICIDRs != "" {
+			apiPublicName := b.Cluster.Spec.API.PublicName
+			if apiPublicName == "" {
+				apiPublicName = "api." + b.ClusterName()
+			}
+			task := &elementotasks.DNSRecord{
+				Name:                  fi.PtrTo(trimElementoDNSZoneSuffix(apiPublicName, b.ClusterName())),
+				DNSZone:               fi.PtrTo(b.ClusterName()),
+				DNSZoneTask:           dnsZoneTask,
+				ExternalLoadBalancer:  loadBalancer,
+				LoadBalancerPublicAPI: true,
+				DependsOn:             previousDNSRecordTask,
+				Type:                  fi.PtrTo("A"),
+				TTL:                   fi.PtrTo(elementoDNSRecordTTL),
+				Lifecycle:             b.Lifecycle,
+			}
+			c.EnsureTask(task)
+			b.loadBalancerDNSRecords = append(b.loadBalancerDNSRecords, task)
+			previousDNSRecordTask = task
+		}
+	}
+
 	for _, ig := range b.InstanceGroups {
 		dnsRecordTasks, err := b.elementoDNSRecordTasksForInstanceGroup(ig, b.Lifecycle, dnsZoneTask)
 		if err != nil {
@@ -113,17 +163,19 @@ func (b *ElementoModelContext) elementoDNSRecordTasksForInstanceGroup(ig *kops.I
 		}
 
 		if primaryAPIServer {
-			if !b.UseLoadBalancerForAPI() {
+			if !b.UseLoadBalancerForAPI() && (b.multicloudPlan == nil || b.multicloudPlan.LoadBalancer == nil || b.multicloudPlan.LoadBalancer.PublicAPICIDRs == "") {
 				apiPublicName := b.Cluster.Spec.API.PublicName
 				if apiPublicName == "" {
 					apiPublicName = "api." + clusterName
 				}
 				addRecord(apiPublicName, reservation)
 			}
-			if !b.UseLoadBalancerForInternalAPI() {
-				addRecord(b.Cluster.APIInternalName(), reservation)
+			if b.multicloudPlan == nil || b.multicloudPlan.LoadBalancer == nil {
+				if !b.UseLoadBalancerForInternalAPI() {
+					addRecord(b.Cluster.APIInternalName(), reservation)
+				}
+				addRecord("kops-controller.internal."+clusterName, reservation)
 			}
-			addRecord("kops-controller.internal."+clusterName, reservation)
 		}
 
 		for _, member := range elementoEtcdMembersForInstanceGroup(b.Cluster.Spec.EtcdClusters, ig.Name) {

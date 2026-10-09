@@ -84,7 +84,7 @@ func TestPlacementBuilderFailsBeforeAddingTasks(t *testing.T) {
 		message string
 	}{
 		{"counts", map[string]string{"ATOMOS_WORKERS": ""}, "count mismatch"},
-		{"adapter", map[string]string{"ATOMOS_WORKERS": "", "PROVIDERS": "google", "GOOGLE_WORKERS": "1", "GOOGLE_CONTROL_PLANES": "0"}, "no provisioning adapter"},
+		{"adapter", map[string]string{"ATOMOS_WORKERS": "", "PROVIDERS": "unsupported", "UNSUPPORTED_WORKERS": "1", "UNSUPPORTED_CONTROL_PLANES": "0"}, "no provisioning adapter"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			b, c := placementBuilderFixture(t)
@@ -119,6 +119,66 @@ func TestPlacementNetworkDependency(t *testing.T) {
 	edges := fi.FindTaskDependencies(tasks)
 	if len(edges["Network/test.k8s"]) != 1 || edges["Network/test.k8s"][0] != "ManagedFile/elemento-placement" {
 		t.Fatal(edges)
+	}
+}
+
+func TestExternalLoadBalancerDNSDependencies(t *testing.T) {
+	b, c := placementBuilderFixture(t)
+	t.Setenv("EXTERNAL_LOAD_BALANCER_PROVIDER", "google")
+	t.Setenv("EXTERNAL_LOAD_BALANCER_PUBLIC_API_CIDRS", "198.51.100.42/32")
+	if err := b.Build(c); err != nil {
+		t.Fatal(err)
+	}
+	dns := &DNSModelBuilder{ElementoModelContext: b.ElementoModelContext, Lifecycle: fi.LifecycleSync}
+	if err := dns.Build(c); err != nil {
+		t.Fatal(err)
+	}
+
+	var loadBalancer *elementotasks.ExternalLoadBalancer
+	var records []*elementotasks.DNSRecord
+	for _, task := range c.Tasks {
+		switch task := task.(type) {
+		case *elementotasks.ExternalLoadBalancer:
+			loadBalancer = task
+		case *elementotasks.DNSRecord:
+			if task.ExternalLoadBalancer != nil {
+				records = append(records, task)
+			}
+		}
+	}
+	if loadBalancer == nil || loadBalancer.Plan == nil || loadBalancer.Plan.LoadBalancer == nil {
+		t.Fatalf("external load balancer task was not built: %#v", loadBalancer)
+	}
+	if len(records) != 3 {
+		t.Fatalf("got %d load balancer DNS records, want 3", len(records))
+	}
+	seen := map[string]bool{}
+	for _, record := range records {
+		seen[fi.ValueOf(record.Name)] = true
+		if record.ExternalLoadBalancer != loadBalancer {
+			t.Fatalf("DNS record %q does not depend on the load balancer", fi.ValueOf(record.Name))
+		}
+	}
+	if !seen["api"] || !seen["api.internal"] || !seen["kops-controller.internal"] {
+		t.Fatalf("unexpected load balancer DNS records: %v", seen)
+	}
+	apiInternal := c.Tasks["DNSRecord/api.internal"].(*elementotasks.DNSRecord)
+	kopsControllerInternal := c.Tasks["DNSRecord/kops-controller.internal"].(*elementotasks.DNSRecord)
+	publicAPI := c.Tasks["DNSRecord/api"].(*elementotasks.DNSRecord)
+	if kopsControllerInternal.DependsOn != apiInternal || publicAPI.DependsOn != kopsControllerInternal {
+		t.Fatal("load balancer DNS records must be written in order")
+	}
+
+	controlPlane := b.InstanceGroups[0]
+	legacyRecords, err := b.elementoDNSRecordTasksForInstanceGroup(controlPlane, fi.LifecycleSync,
+		&elementotasks.DNSZone{Name: fi.PtrTo("test.k8s")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range legacyRecords {
+		if name := fi.ValueOf(record.Name); name == "api" || name == "api.internal" || name == "kops-controller.internal" {
+			t.Fatalf("legacy internal DNS record %q was still generated", name)
+		}
 	}
 }
 
