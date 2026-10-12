@@ -129,6 +129,6 @@ func (_ *ExternalLoadBalancer) RenderElemento(t *elemento.ElementoAPITarget, act
 	if result == nil || result.Server == nil {
 		return fmt.Errorf("external load balancer %q returned no server", fi.ValueOf(expected.Name))
 	}
-	fmt.Printf("EKOPS: External load balancer %q is running as %s\n", fi.ValueOf(expected.Name), result.Server.ID)
+	ecloud.Log("info", "ekops", "external load balancer VM is running", "operation", "create_lb", "node", fi.ValueOf(expected.Name), "vm_id", result.Server.ID, "tailnet_ip", result.Placement.InternalIP, "public_ip", result.Server.PublicNet.IPv4)
 	return nil
 }

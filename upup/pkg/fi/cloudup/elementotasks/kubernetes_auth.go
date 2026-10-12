@@ -157,7 +157,7 @@ func (*KubernetesAuthService) RenderElemento(t *elemento.ElementoAPITarget, actu
 
 	expected.NetworkUID = fi.PtrTo(networkUID)
 	expected.TailnetEndpoint = fi.PtrTo(strings.TrimRight(service.TailnetEndpoint, "/"))
-	fmt.Printf("EKOPS: Elemento Kubernetes authentication service is running at %s\n", fi.ValueOf(expected.TailnetEndpoint))
+	ecloud.Log("info", "ekops", "Kubernetes authentication service is running", "operation", "ensure_auth_service", "cluster", fi.ValueOf(expected.Name), "endpoint", fi.ValueOf(expected.TailnetEndpoint))
 	return nil
 }
 

@@ -22,7 +22,6 @@ import (
 	"strings"
 
 	"github.com/Elemento-Modular-Cloud/ecloud-go/ecloud"
-	"k8s.io/klog/v2"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
 )
@@ -68,18 +67,18 @@ func (z *DNSZone) Find(c *fi.CloudupContext) (*DNSZone, error) {
 	client := cloud.DnsClient()
 	zoneName := fi.ValueOf(z.Name)
 
-	fmt.Printf("EKOPS: Finding Elemento DNS zone %q\n", zoneName)
+	ecloud.Log("debug", "ekops", fmt.Sprintf("Finding Elemento DNS zone %q", zoneName))
 
 	dns, _, err := client.Get(context.TODO(), zoneName)
 	if err != nil {
 		if elemento.IsDNSMissing(err) {
-			fmt.Printf("EKOPS: Elemento DNS zone %q not found\n", zoneName)
+			ecloud.Log("debug", "ekops", fmt.Sprintf("Elemento DNS zone %q not found", zoneName))
 			return nil, nil
 		}
 		return nil, fmt.Errorf("getting Elemento DNS zone %q: %w", zoneName, err)
 	}
 	if dns == nil {
-		fmt.Printf("EKOPS: Elemento DNS zone %q not found\n", zoneName)
+		ecloud.Log("debug", "ekops", fmt.Sprintf("Elemento DNS zone %q not found", zoneName))
 		return nil, nil
 	}
 	dnsIPAddress := strings.TrimSpace(dns.IPAddress)
@@ -88,7 +87,7 @@ func (z *DNSZone) Find(c *fi.CloudupContext) (*DNSZone, error) {
 	}
 	z.IPAddress = fi.PtrTo(dnsIPAddress)
 
-	fmt.Printf("EKOPS: Elemento DNS zone %q already exists\n", zoneName)
+	ecloud.Log("debug", "ekops", fmt.Sprintf("Elemento DNS zone %q already exists", zoneName))
 	return &DNSZone{
 		Name:      fi.PtrTo(dns.ZoneName),
 		Network:   z.Network,
@@ -118,7 +117,7 @@ func (_ *DNSZone) RenderElemento(t *elemento.ElementoAPITarget, actual, expected
 		return fmt.Errorf("Elemento network %q has no UUID for DNS service", fi.ValueOf(expected.Network.Name))
 	}
 
-	fmt.Printf("EKOPS: Ensuring Elemento DNS zone %q\n", zoneName)
+	ecloud.Log("debug", "ekops", "ensuring DNS zone", "cluster", zoneName)
 	dnsService, err := ensureElementoDNSZone(context.TODO(), t.Cloud.DnsClient(), zoneName, networkUID)
 	if err != nil {
 		return err
@@ -127,7 +126,7 @@ func (_ *DNSZone) RenderElemento(t *elemento.ElementoAPITarget, actual, expected
 		return fmt.Errorf("Elemento DNS zone %q returned no service IP address", zoneName)
 	}
 	expected.IPAddress = fi.PtrTo(strings.TrimSpace(dnsService.IPAddress))
-	fmt.Printf("EKOPS: Elemento DNS zone %q ensured\n", zoneName)
+	ecloud.Log("info", "ekops", "DNS zone ensured", "operation", "ensure_dns_zone", "cluster", zoneName)
 	return nil
 }
 
@@ -268,7 +267,7 @@ func ensureElementoDNSZone(ctx context.Context, client ecloud.DnsClient, zoneNam
 	dnsService, _, err := client.Create(ctx, zoneName, networkUID)
 	if err != nil {
 		if elemento.IsDNSAlreadyExists(err) {
-			klog.V(2).Infof("Elemento DNS zone %q already exists", zoneName)
+			ecloud.Log("debug", "ekops", "DNS zone already exists", "cluster", zoneName)
 			dnsService, _, err = client.Get(ctx, zoneName)
 			if err != nil {
 				return nil, fmt.Errorf("getting existing Elemento DNS zone %q: %w", zoneName, err)
@@ -278,7 +277,7 @@ func ensureElementoDNSZone(ctx context.Context, client ecloud.DnsClient, zoneNam
 		return nil, fmt.Errorf("creating Elemento DNS zone %q: %w", zoneName, err)
 	}
 
-	klog.V(2).Infof("Created Elemento DNS zone %q", zoneName)
+	ecloud.Log("info", "ekops", "DNS zone created", "operation", "create_dns_zone", "cluster", zoneName)
 	return dnsService, nil
 }
 
@@ -286,12 +285,12 @@ func ensureElementoDNSRecord(ctx context.Context, client ecloud.DnsClient, zoneN
 	record, _, err := client.AddDnsRecord(ctx, zoneName, recordName, recordValue)
 	if err != nil {
 		if elemento.IsDNSAlreadyExists(err) {
-			klog.V(2).Infof("Elemento DNS record %q in zone %q already exists", recordName, zoneName)
+			ecloud.Log("debug", "ekops", "DNS record already exists", "cluster", zoneName, "record", recordName)
 			return nil
 		}
 		return fmt.Errorf("creating Elemento DNS record %q in zone %q: %w", recordName, zoneName, err)
 	}
 
-	klog.V(2).Infof("Created Elemento DNS record %q in zone %q as %q", recordName, zoneName, record.Name)
+	ecloud.Log("info", "ekops", "DNS record created", "operation", "create_dns_record", "cluster", zoneName, "record", recordName, "value", recordValue, "name", record.Name)
 	return nil
 }

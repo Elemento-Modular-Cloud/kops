@@ -138,7 +138,7 @@ func (_ *DHCPService) RenderElemento(t *elemento.ElementoAPITarget, actual, expe
 		return fmt.Errorf("ensuring Elemento DHCP service for network %q: %w", networkName, err)
 	}
 
-	fmt.Printf("EKOPS: Elemento DHCP service for network %q ensured\n", networkName)
+	ecloud.Log("info", "ekops", "DHCP service ensured", "operation", "ensure_dhcp", "network", networkName)
 	return nil
 }
 
@@ -256,8 +256,8 @@ func (_ *DHCPReservation) RenderElemento(t *elemento.ElementoAPITarget, actual, 
 
 	expected.MACAddress = fi.PtrTo(reservation.MACAddress)
 	expected.IPAddress = fi.PtrTo(reservation.IPAddress)
-	fmt.Printf("EKOPS: Reserved DHCP address %q for server %q with MAC %q\n",
-		reservation.IPAddress, fi.ValueOf(expected.Name), reservation.MACAddress)
+	ecloud.Log("debug", "ekops", fmt.Sprintf("Reserved DHCP address %q for server %q with MAC %q",
+		reservation.IPAddress, fi.ValueOf(expected.Name), reservation.MACAddress))
 	return nil
 }
 

@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"github.com/Elemento-Modular-Cloud/ecloud-go/ecloud"
-	"k8s.io/klog/v2"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
 )
@@ -134,18 +133,17 @@ func (v *ServerGroup) Find(c *fi.CloudupContext) (*ServerGroup, error) {
 	}
 	serverListOptions := ecloud.ServerListOpts{ListOpts: listOptions}
 
-	fmt.Printf("EKOPS: Finding servers for group %q with labelSelector: %s\n",
-		fi.ValueOf(v.Name), strings.Join(labelSelector, ","))
-	fmt.Printf("EKOPS: Calling client.List() with options: %+v\n", serverListOptions)
-	klog.V(2).Infof("EKOPS: Finding servers for group %q", fi.ValueOf(v.Name))
+	ecloud.Log("debug", "ekops", fmt.Sprintf("Finding servers for group %q with labelSelector: %s",
+		fi.ValueOf(v.Name), strings.Join(labelSelector, ",")))
+	ecloud.Log("debug", "ekops", fmt.Sprintf("Calling client.List() with options: %+v", serverListOptions))
 
 	servers, _, err := client.List(context.TODO(), serverListOptions)
 	if err != nil {
-		fmt.Printf("EKOPS: ERROR listing servers: %v\n", err)
+		ecloud.Log("error", "ekops", fmt.Sprintf("ERROR listing servers: %v", err))
 		return nil, err
 	}
 
-	fmt.Printf("EKOPS: Found %d existing servers for group %q\n", len(servers), fi.ValueOf(v.Name))
+	ecloud.Log("debug", "ekops", fmt.Sprintf("Found %d existing servers for group %q", len(servers), fi.ValueOf(v.Name)))
 
 	servers, err = v.matchingServers(servers, c.T.Cluster.Name)
 	if err != nil {
@@ -153,7 +151,7 @@ func (v *ServerGroup) Find(c *fi.CloudupContext) (*ServerGroup, error) {
 	}
 
 	if len(servers) == 0 {
-		fmt.Printf("EKOPS: No existing servers found for group %q\n", fi.ValueOf(v.Name))
+		ecloud.Log("debug", "ekops", fmt.Sprintf("No existing servers found for group %q", fi.ValueOf(v.Name)))
 		return nil, nil
 	}
 
@@ -250,15 +248,15 @@ func (*ServerGroup) CheckChanges(a, e, changes *ServerGroup) error {
 func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes *ServerGroup) error {
 	client := t.Cloud.ServerClient()
 
-	fmt.Printf("EKOPS: RenderElemento called for group %q\n", fi.ValueOf(e.Name))
+	ecloud.Log("debug", "ekops", fmt.Sprintf("RenderElemento called for group %q", fi.ValueOf(e.Name)))
 
 	if a != nil {
-		fmt.Printf("EKOPS: Found %d servers needing update\n", len(a.NeedUpdate))
+		ecloud.Log("debug", "ekops", fmt.Sprintf("Found %d servers needing update", len(a.NeedUpdate)))
 		// NOTE: Server update operations are not yet supported by Elemento API.
 		// Servers that need updates will need to be manually replaced or deleted.
 		// For now, we just log them and continue.
 		for _, serverName := range a.NeedUpdate {
-			fmt.Printf("EKOPS: Server %q needs update/replacement (manual intervention required)\n", serverName)
+			ecloud.Log("warn", "ekops", "server requires manual replacement", "node", serverName, "instance_group", fi.ValueOf(e.Name))
 		}
 		// TODO: Implement automatic replacement once Elemento API supports server updates or deletion
 	}
@@ -274,11 +272,11 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 	}
 	missingNames := missingServerNames(e.ServerNames, existingNames)
 
-	fmt.Printf("EKOPS: Server count analysis - Expected: %d, Actual: %d, Need to create: %d\n",
-		expectedCount, actualCount, expectedCount-actualCount)
+	ecloud.Log("debug", "ekops", fmt.Sprintf("Server count analysis - Expected: %d, Actual: %d, Need to create: %d",
+		expectedCount, actualCount, expectedCount-actualCount))
 
 	if len(missingNames) == 0 {
-		fmt.Printf("EKOPS: No new servers needed for group %q\n", fi.ValueOf(e.Name))
+		ecloud.Log("debug", "ekops", fmt.Sprintf("No new servers needed for group %q", fi.ValueOf(e.Name)))
 		return nil
 	}
 
@@ -343,8 +341,8 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 	}
 	userDataHash := safeBytesHash(userDataBytes)
 
-	fmt.Printf("=== EKOPS: About to create %d servers for group %q ===\n", expectedCount-actualCount, fi.ValueOf(e.Name))
-	fmt.Printf("EKOPS: UserData length: %d bytes, hash: %s\n", len(userData), userDataHash)
+	ecloud.Log("debug", "ekops", fmt.Sprintf("About to create %d servers for group %q", expectedCount-actualCount, fi.ValueOf(e.Name)))
+	ecloud.Log("debug", "ekops", fmt.Sprintf("UserData length: %d bytes, hash: %s", len(userData), userDataHash))
 
 	for _, name := range missingNames {
 		networkID := fi.ValueOf(e.Network.ID)
@@ -417,12 +415,12 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 		// Add the user-data hash label
 		opts.Labels[elemento.TagKubernetesInstanceUserData] = userDataHash
 
-		fmt.Printf("EKOPS: Creating server %q with options: Location=%s, Size=%s, Image=%s\n",
-			name, e.Location, e.Size, e.Image)
-		fmt.Printf("EKOPS: Using network %q with internal IP %q for server %q\n",
-			networkID, internalIPAddress, name)
+		ecloud.Log("debug", "ekops", fmt.Sprintf("Creating server %q with options: Location=%s, Size=%s, Image=%s",
+			name, e.Location, e.Size, e.Image))
+		ecloud.Log("debug", "ekops", fmt.Sprintf("Using network %q with internal IP %q for server %q",
+			networkID, internalIPAddress, name))
 
-		fmt.Printf("EKOPS: Calling client.Create() for server %q\n", name)
+		ecloud.Log("debug", "ekops", fmt.Sprintf("Calling client.Create() for server %q", name))
 
 		_, _, err = client.Create(context.TODO(), opts)
 		if err != nil {
@@ -430,10 +428,10 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 			if errors.As(err, &bindingErr) {
 				e.AuthenticationBindingError = bindingErr.Error()
 			}
-			fmt.Printf("EKOPS: ERROR creating server %q: %v\n", name, err)
+			ecloud.Log("error", "ekops", "server group provisioning failed", "operation", "create_vm", "node", name, "instance_group", fi.ValueOf(e.Name), "error", err.Error())
 			return err
 		}
-		fmt.Printf("EKOPS: Successfully created server %q\n", name)
+		ecloud.Log("debug", "ekops", "server group provisioning advanced", "node", name, "instance_group", fi.ValueOf(e.Name))
 	}
 
 	return nil

@@ -149,6 +149,7 @@ func (*Network) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes *Net
 	var network *ecloud.Network
 	if a == nil {
 		// Network doesn't exist, create it
+		ecloud.Log("info", "ekops", "creating cluster network", "operation", "create_network", "network", fi.ValueOf(e.Name), "cidr", e.IPRange)
 		_, ipRange, err := net.ParseCIDR(e.IPRange)
 		if err != nil {
 			return err
@@ -163,6 +164,7 @@ func (*Network) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes *Net
 			return err
 		}
 		e.ID = fi.PtrTo(network.ID)
+		ecloud.Log("info", "ekops", "cluster network created", "network", fi.ValueOf(e.Name), "network_id", network.ID)
 	} else {
 		// Network exists, get it
 		var err error

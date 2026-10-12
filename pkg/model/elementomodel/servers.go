@@ -18,6 +18,7 @@ package elementomodel
 
 import (
 	"fmt"
+	"github.com/Elemento-Modular-Cloud/ecloud-go/ecloud"
 	"io"
 	"time"
 
@@ -112,8 +113,8 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 
 		serverCount := int(igSize)
 
-		fmt.Printf("CREATING server group for instance group %q with size %d\n", ig.Name, serverCount)
-		fmt.Printf("--- End of UserData ---\n")
+		ecloud.Log("debug", "ekops", fmt.Sprintf("CREATING server group for instance group %q with size %d", ig.Name, serverCount))
+		ecloud.Log("debug", "ekops", fmt.Sprintf("--- End of UserData ---"))
 
 		// Determine root volume size
 		var rootVolumeSize *int32
@@ -232,7 +233,7 @@ func (d *debugUserDataResource) Open() (io.Reader, error) {
 		d.printed = true
 		content, readErr := fi.ResourceAsString(d.Resource)
 		if readErr == nil {
-			fmt.Printf("EKOPS: UserData for instance group %q rendered (%d bytes; content redacted)\n", d.instanceGroup, len(content))
+			ecloud.Log("debug", "ekops", fmt.Sprintf("UserData for instance group %q rendered (%d bytes; content redacted)", d.instanceGroup, len(content)))
 		}
 	}
 
