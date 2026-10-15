@@ -547,6 +547,8 @@ func (b *EtcdManagerBuilder) buildPod(etcdCluster kops.EtcdClusterSpec, instance
 			config.StaticConfig = string(b)
 
 		case kops.CloudProviderElemento:
+			// Elemento bootstrap prepares local storage outside native cloud volume
+			// discovery; peer discovery instead uses the static DNS mapping below.
 			config.VolumeProvider = "external"
 			config.BackupStore = "file:///mnt/disks/backups"
 			config.VolumeTag = []string{
@@ -656,6 +658,8 @@ func (b *EtcdManagerBuilder) buildPod(etcdCluster kops.EtcdClusterSpec, instance
 	return pod, nil
 }
 
+// Member order must match the nodeN.<etcd-cluster> DNS records provisioned by
+// Elemento. Etcd peers connect directly over the tailnet, never through the API LB.
 func buildElementoStaticConfig(clusterName string, etcdCluster kops.EtcdClusterSpec) (string, error) {
 	staticConfig := &StaticConfig{
 		EtcdVersion: etcdCluster.Version,

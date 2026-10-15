@@ -108,6 +108,8 @@ func New(CacheNodeidentityInfo bool, clusterName string, verifierOptions *elemen
 
 // IdentifyNode queries Elemento for the node identity information
 func (i *nodeIdentifier) IdentifyNode(ctx context.Context, node *corev1.Node) (*nodeidentity.Info, error) {
+	// The enrollment registry also knows external VMs that are not AtomOS
+	// servers. Retain the SDK lookup below for deployments without this endpoint.
 	if i.authServiceURL != "" {
 		return i.identifyNodeFromAuthService(ctx, node)
 	}
@@ -231,6 +233,8 @@ func (i *nodeIdentifier) identifyNodeFromAuthService(ctx context.Context, node *
 	if identity.ClusterName != i.clusterName || identity.NodeName != node.Name {
 		return nil, fmt.Errorf("Elemento auth service returned mismatched identity for node %q", node.Name)
 	}
+	// Kubernetes sees one Elemento provider even when the underlying VM runs
+	// on Google or Scaleway; physical placement does not change this identity.
 	if identity.Provider != "elemento" {
 		return nil, fmt.Errorf("Elemento auth service returned provider %q for node %q", identity.Provider, node.Name)
 	}

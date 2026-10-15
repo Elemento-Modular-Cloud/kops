@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package elementomodel translates kOps cluster and instance-group specs into
+// Elemento provisioning tasks. Builders share a validated multicloud plan;
+// elementotasks reconciles those resources through the ecloud-go SDK.
 package elementomodel
 
 import (
@@ -24,6 +27,8 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/elementotasks"
 )
 
+// ElementoModelContext carries planning results between builders. External
+// provider placement does not change the cluster's Kubernetes provider identity.
 type ElementoModelContext struct {
 	*model.KopsModelContext
 	// Populated from the validated plan, never from provider-specific IP env vars.
@@ -33,6 +38,8 @@ type ElementoModelContext struct {
 	loadBalancerDNSRecords  []*elementotasks.DNSRecord
 }
 
+// LinkToNetwork describes the same named task used by NetworkModelBuilder;
+// dependent tasks use it to obtain the provisioned Elemento network UUID.
 func (b *ElementoModelContext) LinkToNetwork() *elementotasks.Network {
 	name := b.ClusterName()
 	network := &elementotasks.Network{Name: &name}

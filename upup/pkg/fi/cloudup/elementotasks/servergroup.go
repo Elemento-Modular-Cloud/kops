@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package elementotasks implements SDK-backed reconciliation for Elemento.
+// Find discovers current resources, CheckChanges validates the delta, and
+// RenderElemento applies it once the fi executor has satisfied dependencies.
 package elementotasks
 
 import (
@@ -80,6 +83,9 @@ type ServerGroup struct {
 var _ fi.CloudupHasDependencies = &ServerGroup{}
 
 func (v *ServerGroup) GetDependencies(tasks map[string]fi.CloudupTask) []fi.CloudupTask {
+	// A VM needs its reserved identity, DNS records, and auth registration before
+	// bootstrap. Resource dependencies also delay rendering until PKI and kOps
+	// configuration files referenced by UserData and KubeEnv are available.
 	var deps []fi.CloudupTask
 
 	for _, sshKey := range v.SSHKeys {
@@ -117,6 +123,8 @@ func (v *ServerGroup) GetDependencies(tasks map[string]fi.CloudupTask) []fi.Clou
 }
 
 func (v *ServerGroup) Find(c *fi.CloudupContext) (*ServerGroup, error) {
+	// A failed enrollment binding can leave a real VM behind. Keep this task
+	// failed instead of adopting that VM as a successfully bootstrapped node.
 	if v.AuthenticationBindingError != "" {
 		return nil, errors.New(v.AuthenticationBindingError)
 	}
@@ -305,6 +313,9 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 		e.DNSZoneTask.IPAddress = fi.PtrTo(dnsIPAddress)
 	}
 
+	// Resolve generated resources only after their dependencies have completed.
+	// The SDK receives their contents directly, avoiding a bootstrap-time S3 read
+	// just to recover the node's kube_env on an external VM.
 	userData, err := fi.ResourceAsString(e.UserData)
 	if err != nil {
 		return err
@@ -316,6 +327,8 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 			return fmt.Errorf("reading role-specific kube_env: %w", err)
 		}
 	}
+	// The physical target serves provisioning API calls; TailnetEndpoint is the
+	// address control planes use at runtime to verify bootstrap tokens.
 	authTarget := ""
 	authEndpoint := ""
 	if e.KubernetesAuthService != nil {
@@ -348,6 +361,8 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 		networkID := fi.ValueOf(e.Network.ID)
 		internalIPAddress := e.ExternalNodeIPs[name]
 		var attachments []ecloud.ServerNetworkAttachment
+		// Only AtomOS nodes need a DHCP reservation and matching network MAC.
+		// External VMs keep their planned tailnet IP despite provider-private IPs.
 		if internalIPAddress == "" {
 			reservation := e.dhcpReservationForServerName(name)
 			if reservation == nil {
@@ -426,6 +441,8 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 
 		ecloud.Log("debug", "ekops", fmt.Sprintf("Calling client.Create() for server %q", name))
 
+		// The SDK resolves provider placement, creates storage/cloud-init and
+		// registers the VM. Successful creation does not imply Kubernetes readiness.
 		_, _, err = client.Create(context.TODO(), opts)
 		if err != nil {
 			var bindingErr *ecloud.KubernetesAuthBindingError
@@ -441,6 +458,8 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 	return nil
 }
 
+// Preserve the shebang when injecting AtomOS control-plane verifier settings.
+// Base64 protects shell quoting here; it does not encrypt the credential.
 func prependElementoAuthEnvironment(userData, authURL, verifierAPIKey string) string {
 	environment := fmt.Sprintf(
 		"export ELEMENTO_AUTH_URL=$(printf %%s %s | base64 -d)\nexport ELEMENTO_AUTH_VERIFIER_API_KEY=$(printf %%s %s | base64 -d)\n",

@@ -259,6 +259,8 @@ func (c *populateClusterSpec) run(ctx context.Context, clientset simple.Clientse
 		cluster.Spec.API.LoadBalancer.Class = kopsapi.LoadBalancerClassClassic
 	}
 
+	// Elemento tasks provision the DNS service and zone; they do not require an
+	// existing public hosted zone to be discovered through a native cloud API.
 	if cluster.Spec.DNSZone == "" && cluster.PublishesDNSRecords() && cluster.GetCloudProvider() != kopsapi.CloudProviderElemento {
 		dns, err := cloud.DNS()
 		if err != nil {
@@ -284,6 +286,8 @@ func (c *populateClusterSpec) run(ctx context.Context, clientset simple.Clientse
 		if cluster.Spec.DNSZone != "" && cluster.Spec.API.PublicName == "" {
 			cluster.Spec.API.PublicName = "api." + cluster.Name
 		}
+		// Leave Elemento record ownership with its provisioning tasks instead of
+		// automatically adding another DNS writer inside the cluster.
 		if cluster.Spec.ExternalDNS == nil && cluster.GetCloudProvider() != kopsapi.CloudProviderElemento {
 			cluster.Spec.ExternalDNS = &kopsapi.ExternalDNSConfig{
 				Provider: kopsapi.ExternalDNSProviderDNSController,

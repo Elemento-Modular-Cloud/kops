@@ -32,7 +32,8 @@ import (
 	"k8s.io/kops/upup/pkg/fi/fitasks"
 )
 
-// ServerGroupModelBuilder configures server objects
+// ServerGroupModelBuilder converts each instance group into a reconciliation
+// task, retaining kOps bootstrap resources and links to Elemento prerequisites.
 type ServerGroupModelBuilder struct {
 	*ElementoModelContext
 	Lifecycle              fi.Lifecycle
@@ -86,10 +87,14 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 		if err != nil {
 			return err
 		}
+		// These labels connect SDK resources to kOps ownership and bootstrap role,
+		// even when the physical VM is hosted by an external cloud provider.
 		labels[elemento.TagKubernetesClusterName] = b.ClusterName()
 		labels[elemento.TagKubernetesInstanceGroup] = ig.Name
 		labels[elemento.TagKubernetesInstanceRole] = string(ig.Spec.Role)
 
+		// Keep both artifacts: AtomOS consumes kOps user-data, while external-node
+		// bootstrap also needs the role-specific kube_env to run nodeup.
 		userData, bootConfig, err := b.BootstrapScriptBuilder.ResourceNodeUpWithBootConfig(c, ig)
 		if err != nil {
 			return err
@@ -103,7 +108,7 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 			})
 		}
 
-		// For debugging: wrap the userData to print it when it's ready
+		// Report rendering metadata without printing bootstrap credentials.
 		if userData != nil {
 			userData = &debugUserDataResource{
 				Resource:      userData,
@@ -153,6 +158,8 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 			KubernetesAuthInstanceGroup: &elementotasks.KubernetesAuthInstanceGroup{Name: fi.PtrTo(ig.Name), AuthCluster: authCluster},
 		}
 		for _, serverName := range names {
+			// External node IPs are reserved by placement; AtomOS addresses must
+			// instead come from DHCP reservations completed before VM registration.
 			if ip := b.externalNodeIPs[serverName]; ip != "" {
 				serverGroup.ExternalNodeIPs[serverName] = ip
 				continue
@@ -191,6 +198,9 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 		c.AddTask(serverGroup)
 	}
 
+	// The SDK waits after each AtomOS CP creation; these dependencies prevent
+	// other groups from overtaking that bootstrap window. This is a timing
+	// workaround, not a check that the API server or node is Ready.
 	if b.delayAtomosControlPlane && len(atomosControlPlaneGroups) > 0 && len(dependentProvisioningGroups) > 0 {
 		for _, group := range atomosControlPlaneGroups {
 			group.PostCreateDelay = atomosControlPlaneBootstrapDelay

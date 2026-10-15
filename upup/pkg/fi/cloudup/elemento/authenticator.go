@@ -40,6 +40,8 @@ func NewElementoAuthenticator() (bootstrap.Authenticator, error) {
 }
 
 func (h *elementoAuthenticator) CreateToken(body []byte) (string, error) {
+	// The prefix selects the Elemento verifier in kops-controller. This token
+	// authenticates bootstrap, not ordinary requests to the Kubernetes API.
 	token, err := readElementoBootstrapToken(ElementoBootstrapTokenFile)
 	if err != nil {
 		return "", err

@@ -69,6 +69,8 @@ func (z *DNSZone) Find(c *fi.CloudupContext) (*DNSZone, error) {
 
 	ecloud.Log("debug", "ekops", fmt.Sprintf("Finding Elemento DNS zone %q", zoneName))
 
+	// SDK Find maps an expected HTTP 404 to nil; kOps then schedules creation.
+	// Authentication, transport, and other API failures still fail this task.
 	dns, _, err := client.Find(context.TODO(), zoneName)
 	if err != nil {
 		return nil, fmt.Errorf("getting Elemento DNS zone %q: %w", zoneName, err)
@@ -232,6 +234,8 @@ func (_ *DNSRecord) RenderElemento(t *elemento.ElementoAPITarget, actual, expect
 		expected.Data = fi.PtrTo(recordValue)
 	}
 	if expected.LoadBalancerPublicAPI {
+		// Resolve the public address after LB creation rather than persisting a
+		// guessed or stale provider IP in the desired DNS record.
 		if expected.ExternalLoadBalancer == nil || expected.ExternalLoadBalancer.Plan == nil {
 			return fmt.Errorf("Elemento public API DNS record requires an external load balancer plan")
 		}

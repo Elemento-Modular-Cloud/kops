@@ -34,6 +34,8 @@ type KubernetesAuthModelBuilder struct {
 var _ fi.CloudupModelBuilder = &KubernetesAuthModelBuilder{}
 
 func (b *KubernetesAuthModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
+	// Provision the shared auth service on a physical AtomOS host, regardless
+	// of where Kubernetes nodes run. Its tailnet endpoint is resolved by the task.
 	target := ecloud.KubernetesServicesTarget()
 	tailnetCIDR := strings.TrimSpace(b.Cluster.Spec.Networking.NetworkCIDR)
 	if tailnetCIDR == "" {
@@ -48,6 +50,8 @@ func (b *KubernetesAuthModelBuilder) Build(c *fi.CloudupModelBuilderContext) err
 	}
 	c.AddTask(service)
 
+	// Register cluster and instance-group identities before the SDK requests
+	// individual node enrollments and one-time bootstrap tokens.
 	cluster := &elementotasks.KubernetesAuthCluster{
 		Name:         fi.PtrTo(b.ClusterName()),
 		Lifecycle:    b.Lifecycle,

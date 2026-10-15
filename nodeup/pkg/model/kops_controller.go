@@ -119,6 +119,8 @@ func (b *KopsControllerBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 	return nil
 }
 
+// Transfer bootstrap environment settings into protected host files mounted
+// read-only by the kops-controller Pod; the manifest contains paths, not the key.
 func (b *KopsControllerBuilder) buildElementoAuthFiles(c *fi.NodeupModelBuilderContext) error {
 	authServiceURL := strings.TrimSpace(os.Getenv("ELEMENTO_AUTH_URL"))
 	verifierAPIKey := strings.TrimSpace(os.Getenv("ELEMENTO_AUTH_VERIFIER_API_KEY"))

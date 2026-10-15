@@ -26,8 +26,9 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
 )
 
-// ExternalLoadBalancer is infrastructure outside Kubernetes. It must be
-// available before internal API DNS records and control-plane bootstrap.
+// ExternalLoadBalancer is infrastructure outside Kubernetes. Its VM must exist
+// before internal API DNS records and control-plane bootstrap. VM running state
+// does not guarantee that cloud-init, tailnet networking, or HAProxy is ready.
 type ExternalLoadBalancer struct {
 	Name        *string
 	Plan        *ecloud.MulticloudPlan

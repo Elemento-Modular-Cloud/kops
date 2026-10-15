@@ -189,7 +189,8 @@ func main() {
 			verifiers = append(verifiers, verifier)
 		}
 		if opt.Server.Provider.Elemento != nil {
-
+			// Delegate Elemento enrollment tokens to the auth service rather than
+			// relying on a native cloud instance-identity document.
 			verifier, err := elemento.NewElementoVerifier(opt.Server.Provider.Elemento)
 			if err != nil {
 				setupLog.Error(err, "unable to create verifier")
@@ -320,6 +321,8 @@ func addNodeController(ctx context.Context, mgr manager.Manager, vfsContext *vfs
 		}
 
 	case "elemento":
+		// Node reconciliation uses the same enrollment registry as bootstrap
+		// verification to resolve roles, labels and Elemento provider IDs.
 		identifier, err = nodeidentityelemento.New(opt.CacheNodeidentityInfo, opt.ClusterName, opt.Server.Provider.Elemento)
 		if err != nil {
 			return fmt.Errorf("error building identifier: %w", err)

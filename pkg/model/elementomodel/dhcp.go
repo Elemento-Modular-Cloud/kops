@@ -24,8 +24,8 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/elementotasks"
 )
 
-// DHCPModelBuilder creates the DHCP service and all node reservations before
-// any Elemento VM is registered.
+// DHCPModelBuilder creates reservations for AtomOS nodes before their DNS
+// records and VM registration. External nodes use the placement plan's IPs.
 type DHCPModelBuilder struct {
 	*ElementoModelContext
 	Lifecycle fi.Lifecycle
@@ -65,6 +65,8 @@ func (b *DHCPModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 				c.AddTask(service)
 				serviceAdded = true
 			}
+			// The reservation's MAC must also be attached to the VM, otherwise
+			// DHCP cannot hand the node the address already published in DNS.
 			macAddress, err := ecloud.GenerateElementoDHCPMACAddress()
 			if err != nil {
 				return fmt.Errorf("generating DHCP MAC address for server %q: %w", serverName, err)

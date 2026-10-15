@@ -53,6 +53,8 @@ func BaseURL() (*url.URL, error) {
 		return copyBaseURL(kopsBaseURL)
 	}
 
+	// Elemento deployments use this override for fork-specific bootstrap assets;
+	// the upstream release URL would not include the fork's integration changes.
 	baseURLString := os.Getenv("KOPS_BASE_URL")
 	var err error
 	if baseURLString == "" {

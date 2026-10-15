@@ -43,6 +43,8 @@ type ProtokubeBuilder struct {
 
 var _ fi.NodeupModelBuilder = &ProtokubeBuilder{}
 
+// Accept both directory-based asset names and the <name>-linux-<arch> filenames
+// used by Elemento releases, restricting architecture suffixes to the current arch.
 func kopsBinaryAssetPattern(name string) *regexp.Regexp {
 	return regexp.MustCompile(fmt.Sprintf(`(?:^|/)%s(?:-linux-%s)?$`, regexp.QuoteMeta(name), regexp.QuoteMeta(runtime.GOARCH)))
 }

@@ -401,6 +401,8 @@ func NewCluster(opt *NewClusterOptions, clientset simple.Clientset) (*NewCluster
 	if err != nil {
 		return nil, err
 	}
+	// External Elemento bootstrap needs the cluster Pod range before Cilium
+	// allocates per-node ranges, so persist a default when the user omitted it.
 	if cluster.GetCloudProvider() == api.CloudProviderElemento &&
 		cluster.Spec.Networking.Cilium != nil && cluster.Spec.Networking.PodCIDR == "" {
 		cluster.Spec.Networking.PodCIDR = "100.96.0.0/16"
@@ -1002,6 +1004,8 @@ func setupControlPlane(opt *NewClusterOptions, cluster *api.Cluster, zoneToSubne
 
 func controlPlaneInstanceGroupName(cloudProvider api.CloudProviderID, zone string, index, controlPlaneCount, zoneCount int) string {
 	name := zone
+	// Keep the original Elemento control-plane group name stable; additional
+	// groups use the ordinal naming below to avoid collisions within one zone.
 	if cloudProvider == api.CloudProviderElemento && index == 0 {
 		return "control-plane-" + name
 	}

@@ -716,6 +716,9 @@ func (c *ApplyClusterCmd) Run(ctx context.Context) (*ApplyResults, error) {
 			elementoModelContext := &elementomodel.ElementoModelContext{
 				KopsModelContext: modelContext,
 			}
+			// Placement runs first because the remaining builders share its node names,
+			// provider assignments, and reserved tailnet IPs. Builder order prepares
+			// the model; task dependencies control the actual provisioning order.
 			l.Builders = append(l.Builders,
 				&elementomodel.PlacementModelBuilder{ElementoModelContext: elementoModelContext, Lifecycle: clusterLifecycle, ConfigBase: configBase},
 				&elementomodel.NetworkModelBuilder{ElementoModelContext: elementoModelContext, Lifecycle: networkLifecycle},
@@ -837,6 +840,8 @@ func (c *ApplyClusterCmd) Run(ctx context.Context) (*ApplyResults, error) {
 		return nil, fmt.Errorf("error running tasks: %v", err)
 	}
 
+	// Elemento publishes DNS through its task graph, where records can depend on
+	// DHCP reservations or the external LB's assigned public IP.
 	if !cluster.PublishesDNSRecords() || cluster.GetCloudProvider() == kops.CloudProviderElemento {
 		shouldPrecreateDNS = false
 	}

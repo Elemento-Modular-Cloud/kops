@@ -89,6 +89,8 @@ func (i *Installation) buildEnvFile() *nodetasks.InstallFile {
 		envVars["GOSSIP_DNS_CONN_LIMIT"] = os.Getenv("GOSSIP_DNS_CONN_LIMIT")
 	}
 
+	// Preserve verification settings for subsequent nodeup systemd runs.
+	// The verifier key makes the environment file owner-readable only.
 	for _, name := range []string{"ELEMENTO_AUTH_URL", "ELEMENTO_AUTH_VERIFIER_API_KEY"} {
 		if value := os.Getenv(name); value != "" {
 			envVars[name] = value

@@ -387,6 +387,8 @@ func defaultMachineType(cloud fi.Cloud, cluster *kops.Cluster, ig *kops.Instance
 		}
 
 	case kops.CloudProviderElemento:
+		// These are Elemento size names, not native GCE or Scaleway machine types.
+		// The SDK resolves the resources for the selected provisioning target.
 		switch ig.Spec.Role {
 		case kops.InstanceGroupRoleControlPlane:
 			return defaultMasterMachineTypeElemento, nil

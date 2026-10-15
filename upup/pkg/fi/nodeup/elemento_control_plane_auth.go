@@ -63,6 +63,8 @@ type elementoControlPlaneBootstrapOptions struct {
 	HTTPClient     *http.Client
 }
 
+// Initial control planes verify enrollment directly with the auth service:
+// kops-controller may not exist yet to authenticate their bootstrap request.
 func verifyElementoControlPlaneBootstrap(ctx context.Context, bootConfig *nodeup.BootConfig, bootConfigBytes []byte) error {
 	if bootConfig.CloudProvider != api.CloudProviderElemento || bootConfig.InstanceGroupRole != api.InstanceGroupRoleControlPlane {
 		return nil
@@ -110,6 +112,8 @@ func verifyElementoControlPlaneBootstrapWithOptions(ctx context.Context, bootCon
 	if err != nil {
 		return err
 	}
+	// Reuse local verification on nodeup retries only while the node identity
+	// and boot configuration hash still match the saved receipt.
 	if found && receipt.matches(expected) {
 		klog.Infof("Using verified Elemento control-plane bootstrap receipt for node %q", expected.NodeName)
 		return nil
@@ -131,6 +135,8 @@ func verifyElementoControlPlaneBootstrapWithOptions(ctx context.Context, bootCon
 		return fmt.Errorf("verifying Elemento control-plane bootstrap enrollment: %w", err)
 	}
 
+	// An accepted token is insufficient if its enrollment belongs to another
+	// node, instance group, role or address; check these before saving the receipt.
 	if err := validateElementoControlPlaneIdentity(identity, expected); err != nil {
 		return err
 	}

@@ -127,6 +127,8 @@ func NewNodeUpConfigBuilder(cluster *kops.Cluster, assetBuilder *assets.AssetBui
 
 		// `docker load` our images when using a KOPS_BASE_URL, so we
 		// don't need to push/pull from a registry
+		// For Elemento releases this also supplies the kops-controller image
+		// containing the enrollment verifier alongside the custom nodeup assets.
 		if os.Getenv("KOPS_BASE_URL") != "" && isMaster {
 			for _, arch := range architectures.GetSupported() {
 				for _, name := range []string{"kops-utils-cp", "kops-controller", "dns-controller", "kube-apiserver-healthcheck"} {

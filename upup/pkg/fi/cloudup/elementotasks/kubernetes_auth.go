@@ -90,6 +90,8 @@ func (s *KubernetesAuthService) Find(c *fi.CloudupContext) (*KubernetesAuthServi
 		)
 	}
 
+	// Pass the discovered runtime endpoint to ServerGroup bootstrap; operators
+	// do not need to supply the service's address through ELEMENTO_AUTH_URL.
 	endpoint, err := kubernetesAuthTailnetEndpoint(status.TailnetIP, status.TailnetPort)
 	if err != nil {
 		return nil, err

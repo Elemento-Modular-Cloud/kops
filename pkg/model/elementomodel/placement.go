@@ -43,6 +43,8 @@ func (b *PlacementModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		return fmt.Errorf("config store is required for the Elemento placement plan")
 	}
 	var previous *ecloud.MulticloudPlan
+	// Reuse saved placement so a later update cannot silently move an existing
+	// node to another provider or assign its tailnet address to a different node.
 	data, err := b.ConfigBase.Join(placementPlanLocation).ReadFile(c.Context())
 	if err == nil {
 		previous = &ecloud.MulticloudPlan{}
@@ -52,6 +54,7 @@ func (b *PlacementModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("reading Elemento placement plan: %w", err)
 	}
+	// Validate the complete desired node set before any VM creation can start.
 	plan, err := ecloud.BuildMulticloudPlan(b.ClusterName(), cfg, nodes, previous)
 	if err != nil {
 		return err
@@ -61,8 +64,7 @@ func (b *PlacementModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	}
 	b.externalNodeIPs = make(map[string]string)
 	b.multicloudPlan = plan
-	// if enabled as env variable and it's set to true, wait a couple of minutes to allow a control-plane node
-	// on an AtomOS server to start its bootstrapping process
+	// ServerGroupModelBuilder turns this opt-in into SDK delays and dependencies.
 	b.delayAtomosControlPlane = cfg.DelayAtomosControlPlane
 	for _, node := range plan.Nodes {
 		if node.Infrastructure.Provider != "elemento" {
@@ -73,11 +75,15 @@ func (b *PlacementModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	if err != nil {
 		return err
 	}
+	// Network tasks depend on this write, making placement durable before
+	// provisioning starts. Only non-secret placement metadata belongs here.
 	c.AddTask(&fitasks.ManagedFile{
 		Name: fi.PtrTo("elemento-placement"), Lifecycle: b.Lifecycle,
 		Location: fi.PtrTo(placementPlanLocation), Contents: fi.NewBytesResource(data),
 		PublicACL: fi.PtrTo(false),
 	})
+	// SDK calls resolve a node's provider from this plan; kOps does not invoke
+	// Google or Scaleway provisioning APIs directly.
 	ecloud.SetMulticloudPlan(plan)
 	return nil
 }

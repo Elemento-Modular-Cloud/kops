@@ -41,7 +41,8 @@ const (
 	TagKubernetesNodeLabelPrefix     = "node-label.kops.k8s.io."
 )
 
-// ElementoCloud exposes all the interfaces required to operate on the Elemento cloud
+// ElementoCloud adapts kOps' cloud interface to ecloud-go clients. Provider
+// selection within the multicloud plan remains an SDK responsibility.
 type ElementoCloud interface {
 	fi.Cloud
 
@@ -67,12 +68,12 @@ type elementoCloudImplementation struct {
 }
 
 func NewElementoCloud(region string) (ElementoCloud, error) {
-	// Elemento does not use an access token, but is previously authenticated with
-	// the CLI and deamons, you must execute the Electros app to authenticate.
+	// The SDK uses the local Elemento daemon and CLI session for authentication;
+	// external-provider authentication and requests are also handled by the SDK.
 
 	klog.V(2).Infof("Creating ecloud client for region %s", region)
 
-	// Here is the entrypoint of the ecloud-go SDK, executed by building a new ecloud-client
+	// One SDK client backs the resource clients exposed to provisioning tasks.
 	client, err := ecloud.NewClient("kops-client", "0.1")
 
 	if err != nil {

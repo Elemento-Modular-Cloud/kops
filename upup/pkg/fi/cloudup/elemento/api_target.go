@@ -20,6 +20,8 @@ import (
 	"k8s.io/kops/upup/pkg/fi"
 )
 
+// ElementoAPITarget supplies the SDK-backed cloud adapter to RenderElemento
+// methods. The fi executor reconciles tasks and orders them by dependencies.
 type ElementoAPITarget struct {
 	Cloud ElementoCloud
 }
@@ -37,5 +39,6 @@ func (t *ElementoAPITarget) Finish(taskMap map[string]fi.CloudupTask) error {
 }
 
 func (t *ElementoAPITarget) DefaultCheckExisting() bool {
+	// Discover existing resources before applying deltas on repeated updates.
 	return true
 }

@@ -439,6 +439,8 @@ func (b *BootstrapChannelBuilder) buildAddons(c *fi.CloudupModelBuilderContext) 
 	}
 
 	if !b.Cluster.UsesNoneDNS() {
+		// Elemento manages bootstrap records through its own tasks, so omit the
+		// standard dns-controller addon. Explicit external-dns remains separate.
 		usesManagedDNSController := b.Cluster.GetCloudProvider() != kops.CloudProviderElemento
 		if b.Cluster.Spec.ExternalDNS == nil || b.Cluster.Spec.ExternalDNS.Provider == kops.ExternalDNSProviderDNSController {
 			if usesManagedDNSController {

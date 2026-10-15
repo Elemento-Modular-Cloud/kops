@@ -777,6 +777,8 @@ func (tf *TemplateFunctions) KopsControllerConfig() (string, error) {
 			}
 
 		case kops.CloudProviderElemento:
+			// These are paths inside the controller's secret mount. Nodeup writes
+			// the corresponding host files without embedding credentials here.
 			config.Server.Provider.Elemento = &elemento.ElementoVerifierOptions{
 				ClusterName:        tf.ClusterName(),
 				AuthServiceURLFile: elemento.ElementoAuthServiceURLFile,

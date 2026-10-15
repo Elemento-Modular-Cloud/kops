@@ -50,6 +50,9 @@ func (b *DNSModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	c.EnsureTask(dnsZoneTask)
 	var previousDNSRecordTask *elementotasks.DNSRecord
 	if b.multicloudPlan != nil && b.multicloudPlan.LoadBalancer != nil {
+		// The dedicated HAProxy VM is infrastructure, not a Kubernetes node.
+		// Its DNS records become prerequisites of ServerGroup tasks so bootstrap
+		// clients can resolve the shared API and kops-controller endpoints.
 		loadBalancer := &elementotasks.ExternalLoadBalancer{
 			Name:        fi.PtrTo(b.multicloudPlan.LoadBalancer.Name),
 			Plan:        b.multicloudPlan,
@@ -139,6 +142,8 @@ func (b *ElementoModelContext) elementoDNSRecordTasksForInstanceGroup(ig *kops.I
 			Lifecycle:       lifecycle,
 		}
 		if reservation != nil {
+			// External nodes already have a planned tailnet IP and must not wait
+			// for an AtomOS DHCP reservation that will never be created for them.
 			if ip := b.externalNodeIPs[fi.ValueOf(reservation.Name)]; ip != "" {
 				task.Data = fi.PtrTo(ip)
 				task.DHCPReservation = nil
@@ -162,6 +167,8 @@ func (b *ElementoModelContext) elementoDNSRecordTasksForInstanceGroup(ig *kops.I
 			continue
 		}
 
+		// Without an external LB, one deterministically selected control-plane
+		// group owns the shared API names; per-node records remain independent.
 		if primaryAPIServer {
 			if !b.UseLoadBalancerForAPI() && (b.multicloudPlan == nil || b.multicloudPlan.LoadBalancer == nil || b.multicloudPlan.LoadBalancer.PublicAPICIDRs == "") {
 				apiPublicName := b.Cluster.Spec.API.PublicName
@@ -178,6 +185,8 @@ func (b *ElementoModelContext) elementoDNSRecordTasksForInstanceGroup(ig *kops.I
 			}
 		}
 
+		// Etcd peers use member-specific records and communicate directly over
+		// the tailnet; they never share the API load balancer's backend pool.
 		for _, member := range elementoEtcdMembersForInstanceGroup(b.Cluster.Spec.EtcdClusters, ig.Name) {
 			addRecord(fmt.Sprintf("node%d.%s.%s", member.index, member.clusterName, clusterName), reservation)
 			addRecord(fmt.Sprintf("%s--%s--%d.internal.%s", clusterName, member.clusterName, member.index, clusterName), reservation)

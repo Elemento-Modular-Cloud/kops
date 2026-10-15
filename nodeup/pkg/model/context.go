@@ -619,6 +619,8 @@ func (c *NodeupModelContext) GetMetadataLocalIP(ctx context.Context) (string, er
 		}
 
 	case kops.CloudProviderElemento:
+		// Bootstrap writes the cluster-reachable tailnet IP here. Interface
+		// discovery could instead select a provider-private or Docker bridge IP.
 		return readElementoNodeIP(elementoNodeIPFilePath)
 
 	default:

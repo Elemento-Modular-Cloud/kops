@@ -266,7 +266,9 @@ type HetznerSpec struct{}
 type ScalewaySpec struct {
 }
 
-// ElementoSpec configures the Elemento cloud provider
+// ElementoSpec selects Elemento as the Kubernetes cloud provider, including when
+// individual VMs are provisioned on other clouds through the Elemento SDK.
+// Placement is resolved by the Elemento integration rather than native cloud specs.
 type ElementoSpec struct {}
 
 type KarpenterConfig struct {

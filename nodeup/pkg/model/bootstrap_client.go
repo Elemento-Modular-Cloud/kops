@@ -95,6 +95,8 @@ func (b BootstrapClientBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 		}
 		authenticator = a
 	case kops.CloudProviderElemento:
+		// Authenticate the initial nodeup request to kops-controller with the
+		// enrollment token, not the client certificate later used by kubelet.
 		a, err := elemento.NewElementoAuthenticator()
 		if err != nil {
 			return err

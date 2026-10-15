@@ -329,6 +329,8 @@ func (b *KubeletBuilder) buildSystemdEnvironmentFile(ctx context.Context, kubele
 	// We can always add this later if it is needed.
 	flags += " --cloud-config=" + InTreeCloudConfigFilePath
 
+	// For Elemento, publish the bootstrap-selected tailnet IP as the Node IP
+	// so other nodes can reach kubelet across cloud boundaries.
 	if b.UsesMetadataNodeIP() {
 		localIP, err := b.GetMetadataLocalIP(ctx)
 		if err != nil {

@@ -67,6 +67,8 @@ func (b *KubeAPIServerBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 		kubeAPIServer = *b.NodeupConfig.APIServerConfig.KubeAPIServer
 	}
 
+	// Elemento API backends must advertise their own tailnet IP, not a local
+	// provider address or the public frontend address of the load balancer.
 	if b.UsesMetadataAPIServerAddress() {
 		localIP, err := b.GetMetadataLocalIP(c.Context())
 		if err != nil {

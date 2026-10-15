@@ -61,6 +61,7 @@ func GuessCloudForPath(path string) (kops.CloudProviderID, error) {
 		if os.Getenv("HCLOUD_TOKEN") != "" {
 			return kops.CloudProviderHetzner, nil
 		}
+		// Elemento can use an S3-compatible state store without provisioning on AWS.
 		if os.Getenv("PROVIDER") == "elemento" {
 			return kops.CloudProviderElemento, nil
 		}
