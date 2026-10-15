@@ -69,11 +69,8 @@ func (d *DHCPService) String() string {
 func (d *DHCPService) Find(c *fi.CloudupContext) (*DHCPService, error) {
 	cloud := c.T.Cloud.(elemento.ElementoCloud)
 	client := cloud.DhcpClient()
-	dhcp, _, err := client.Get(context.TODO())
+	dhcp, _, err := client.Find(context.TODO())
 	if err != nil {
-		if isElementoDHCPMissing(err) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("getting Elemento DHCP service: %w", err)
 	}
 	if dhcp == nil {
@@ -188,16 +185,13 @@ func (d *DHCPReservation) String() string {
 func (d *DHCPReservation) Find(c *fi.CloudupContext) (*DHCPReservation, error) {
 	cloud := c.T.Cloud.(elemento.ElementoCloud)
 	client := cloud.DhcpClient()
-	reservation, _, err := client.GetReservation(
+	reservation, _, err := client.FindReservation(
 		context.TODO(),
 		fi.ValueOf(d.NetworkName),
 		fi.ValueOf(d.MACAddress),
 		fi.ValueOf(d.Name),
 	)
 	if err != nil {
-		if isElementoDHCPMissing(err) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("getting Elemento DHCP reservation %q: %w", fi.ValueOf(d.Name), err)
 	}
 	if reservation == nil {
@@ -259,15 +253,4 @@ func (_ *DHCPReservation) RenderElemento(t *elemento.ElementoAPITarget, actual, 
 	ecloud.Log("debug", "ekops", fmt.Sprintf("Reserved DHCP address %q for server %q with MAC %q",
 		reservation.IPAddress, fi.ValueOf(expected.Name), reservation.MACAddress))
 	return nil
-}
-
-func isElementoDHCPMissing(err error) bool {
-	if ecloud.IsError(err, ecloud.ErrorCodeNotFound) {
-		return true
-	}
-
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "dhcp service not found") ||
-		strings.Contains(message, "dhcp reservation not found") ||
-		strings.Contains(message, "api error: 404")
 }

@@ -382,6 +382,10 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 			Datacenter: &ecloud.Datacenter{
 				Location: e.Location,
 			},
+			// TODO: Forward e.Architecture from the InstanceGroup after normalizing
+			// kOps values to ecloud architecture names and validating image support.
+			// It is currently omitted: AtomOS size conversion defaults to X86_64,
+			// and external bootstrap supports only X86_64 (AMD64).
 			ServerType: &ecloud.ServerType{
 				Name: e.Size,
 			},

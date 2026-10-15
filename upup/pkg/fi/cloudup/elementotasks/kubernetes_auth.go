@@ -18,10 +18,8 @@ package elementotasks
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
-	"net/http"
 	"strings"
 
 	"github.com/Elemento-Modular-Cloud/ecloud-go/ecloud"
@@ -63,15 +61,11 @@ func (s *KubernetesAuthService) String() string { return fi.CloudupTaskAsString(
 
 func (s *KubernetesAuthService) Find(c *fi.CloudupContext) (*KubernetesAuthService, error) {
 	cloud := c.T.Cloud.(elemento.ElementoCloud)
-	status, _, err := cloud.KubernetesAuthClient().GetStatus(
+	status, _, err := cloud.KubernetesAuthClient().FindStatus(
 		context.TODO(),
 		ecloud.KubernetesAuthServiceStatusOpts{AtomOsTarget: s.AtomOSTarget},
 	)
 	if err != nil {
-		var apiErr *ecloud.APIError
-		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("getting Elemento Kubernetes authentication service: %w", err)
 	}
 	if status == nil {

@@ -69,12 +69,8 @@ func (z *DNSZone) Find(c *fi.CloudupContext) (*DNSZone, error) {
 
 	ecloud.Log("debug", "ekops", fmt.Sprintf("Finding Elemento DNS zone %q", zoneName))
 
-	dns, _, err := client.Get(context.TODO(), zoneName)
+	dns, _, err := client.Find(context.TODO(), zoneName)
 	if err != nil {
-		if elemento.IsDNSMissing(err) {
-			ecloud.Log("debug", "ekops", fmt.Sprintf("Elemento DNS zone %q not found", zoneName))
-			return nil, nil
-		}
 		return nil, fmt.Errorf("getting Elemento DNS zone %q: %w", zoneName, err)
 	}
 	if dns == nil {
@@ -173,11 +169,8 @@ func (d *DNSRecord) Find(c *fi.CloudupContext) (*DNSRecord, error) {
 		d.Data = d.DHCPReservation.IPAddress
 	}
 
-	record, _, err := client.GetDnsRecord(context.TODO(), fi.ValueOf(d.DNSZone), fi.ValueOf(d.Name), fi.ValueOf(d.Type))
+	record, _, err := client.FindDnsRecord(context.TODO(), fi.ValueOf(d.DNSZone), fi.ValueOf(d.Name), fi.ValueOf(d.Type))
 	if err != nil {
-		if elemento.IsDNSMissing(err) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("getting Elemento DNS record %q in zone %q: %w", fi.ValueOf(d.Name), fi.ValueOf(d.DNSZone), err)
 	}
 	if record == nil {

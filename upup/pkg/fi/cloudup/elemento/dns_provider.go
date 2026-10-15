@@ -31,7 +31,7 @@ type dnsClient interface {
 	AddDnsRecord(ctx context.Context, zoneName, recordName, recordValue string) (*ecloud.DnsRecord, *ecloud.Response, error)
 	Get(ctx context.Context, zoneName string) (*ecloud.Dns, *ecloud.Response, error)
 	ListDnsRecords(ctx context.Context, zoneName string) ([]*ecloud.DnsRecord, *ecloud.Response, error)
-	GetDnsRecord(ctx context.Context, zoneName, recordName, recordType string) (*ecloud.DnsRecord, *ecloud.Response, error)
+	FindDnsRecord(ctx context.Context, zoneName, recordName, recordType string) (*ecloud.DnsRecord, *ecloud.Response, error)
 }
 
 type dnsListClient interface {
@@ -212,11 +212,8 @@ func (r *dnsResourceRecordSets) List() ([]dnsprovider.ResourceRecordSet, error) 
 
 func (r *dnsResourceRecordSets) Get(name string) ([]dnsprovider.ResourceRecordSet, error) {
 	recordName := trimZoneSuffix(name, r.zone.Name())
-	record, _, err := r.client.GetDnsRecord(context.TODO(), r.zone.Name(), recordName, string(rrstype.A))
+	record, _, err := r.client.FindDnsRecord(context.TODO(), r.zone.Name(), recordName, string(rrstype.A))
 	if err != nil {
-		if IsDNSMissing(err) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("getting Elemento DNS record %q in zone %q: %w", recordName, r.zone.Name(), err)
 	}
 	if record == nil {
