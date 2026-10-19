@@ -18,7 +18,10 @@ package deployer
 
 import (
 	"reflect"
+	"slices"
 	"testing"
+
+	api "k8s.io/kops/pkg/apis/kops/v1alpha2"
 )
 
 func TestAppendIfUnset(t *testing.T) {
@@ -78,6 +81,198 @@ func TestAppendIfUnset(t *testing.T) {
 			actual := appendIfUnset(tc.args, tc.arg, tc.val)
 			if !reflect.DeepEqual(actual, tc.expected) {
 				t.Errorf("arguments didn't match: %v vs %v", actual, tc.expected)
+			}
+		})
+	}
+}
+
+func TestBuiltFromKopsRoot(t *testing.T) {
+	const root = "/home/prow/go/src/k8s.io/kops"
+	cases := []struct {
+		name       string
+		binaryPath string
+		kopsRoot   string
+		want       bool
+	}{
+		{"binary built under the checkout", root + "/.build/dist/linux/amd64/kops", root, true},
+		{"binary downloaded to a temp dir", "/tmp/kops.abc123", root, false},
+		{"sibling dir is not under the checkout", "/home/prow/go/src/k8s.io/kops-other/kops", root, false},
+		{"empty kops root", root + "/.build/dist/linux/amd64/kops", "", false},
+		{"empty binary path", "", root, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := builtFromKopsRoot(tc.binaryPath, tc.kopsRoot); got != tc.want {
+				t.Errorf("builtFromKopsRoot(%q, %q) = %v, want %v", tc.binaryPath, tc.kopsRoot, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLocalChannelArgs(t *testing.T) {
+	const kopsRoot = "/home/prow/go/src/k8s.io/kops"
+	base := "file://" + kopsRoot + "/channels/"
+	cases := []struct {
+		name     string
+		args     []string
+		expected []string
+	}{
+		{
+			name:     "rewrites shorthand in equals form",
+			args:     []string{"create", "cluster", "--channel=alpha", "--networking=cilium"},
+			expected: []string{"create", "cluster", "--channel=" + base + "alpha", "--networking=cilium"},
+		},
+		{
+			name:     "rewrites shorthand in space form",
+			args:     []string{"--channel", "stable"},
+			expected: []string{"--channel", base + "stable"},
+		},
+		{
+			name:     "leaves absolute channel URL unchanged",
+			args:     []string{"--channel=https://example.com/channels/alpha"},
+			expected: []string{"--channel=https://example.com/channels/alpha"},
+		},
+		{
+			name:     "leaves none unchanged",
+			args:     []string{"--channel=none"},
+			expected: []string{"--channel=none"},
+		},
+		{
+			name:     "absent channel defaults to alpha pointed at the checkout",
+			args:     []string{"create", "cluster", "--networking=cilium"},
+			expected: []string{"create", "cluster", "--networking=cilium", "--channel=" + base + "alpha"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			actual := localChannelArgs(slices.Clone(tc.args), kopsRoot)
+			if !reflect.DeepEqual(actual, tc.expected) {
+				t.Errorf("localChannelArgs() = %v, want %v", actual, tc.expected)
+			}
+		})
+	}
+}
+
+func TestProwJobLabel(t *testing.T) {
+	cases := []struct {
+		name          string
+		cloudProvider string
+		jobName       string
+		expected      string
+		expectedOK    bool
+	}{
+		{
+			name:          "empty job name omits label",
+			cloudProvider: "aws",
+			jobName:       "",
+			expectedOK:    false,
+		},
+		{
+			name:          "aws preserves slash and dots",
+			cloudProvider: "aws",
+			jobName:       "pull-kops-e2e-k8s-aws",
+			expected:      "prow.k8s.io/job=pull-kops-e2e-k8s-aws",
+			expectedOK:    true,
+		},
+		{
+			name:          "azure replaces slash with underscore",
+			cloudProvider: "azure",
+			jobName:       "pull-kops-e2e-k8s-azure",
+			expected:      "prow.k8s.io_job=pull-kops-e2e-k8s-azure",
+			expectedOK:    true,
+		},
+		{
+			name:          "gce normalizes key and value",
+			cloudProvider: "gce",
+			jobName:       "Pull-Kops-E2E-K8s-GCE",
+			expected:      "prow_k8s_io_job=pull-kops-e2e-k8s-gce",
+			expectedOK:    true,
+		},
+		{
+			name:          "gce truncates value to 63 chars",
+			cloudProvider: "gce",
+			jobName:       "pull-kops-e2e-kubernetes-aws-canary-very-long-suffix-that-exceeds-the-gce-label-limit",
+			expected:      "prow_k8s_io_job=" + "pull-kops-e2e-kubernetes-aws-canary-very-long-suffix-that-excee",
+			expectedOK:    true,
+		},
+		{
+			name:          "gce replaces invalid chars with dash",
+			cloudProvider: "gce",
+			jobName:       "job.name/with:invalid",
+			expected:      "prow_k8s_io_job=job-name-with-invalid",
+			expectedOK:    true,
+		},
+		{
+			name:          "digitalocean omits label",
+			cloudProvider: "digitalocean",
+			jobName:       "pull-kops-e2e-k8s-do",
+			expectedOK:    false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			actual, ok := prowJobLabel(tc.cloudProvider, tc.jobName)
+			if ok != tc.expectedOK {
+				t.Errorf("ok mismatch: got %v, want %v", ok, tc.expectedOK)
+			}
+			if actual != tc.expected {
+				t.Errorf("label mismatch: got %q, want %q", actual, tc.expected)
+			}
+		})
+	}
+}
+
+func TestAWSBastionFallbackOverrides(t *testing.T) {
+	cases := []struct {
+		name     string
+		ig       *api.InstanceGroup
+		expected []string
+	}{
+		{
+			name: "arm64 bastion gets t4g fallbacks",
+			ig:   &api.InstanceGroup{Spec: api.InstanceGroupSpec{Role: "Bastion", MachineType: "t4g.micro"}},
+			expected: []string{
+				"spec.mixedInstancesPolicy.instances=t4g.micro",
+				"spec.mixedInstancesPolicy.instances=t4g.small",
+				"spec.mixedInstancesPolicy.instances=t4g.medium",
+				"spec.mixedInstancesPolicy.onDemandAllocationStrategy=prioritized",
+			},
+		},
+		{
+			name: "amd64 bastion gets t3 fallbacks",
+			ig:   &api.InstanceGroup{Spec: api.InstanceGroupSpec{Role: "Bastion", MachineType: "t3.micro"}},
+			expected: []string{
+				"spec.mixedInstancesPolicy.instances=t3.micro",
+				"spec.mixedInstancesPolicy.instances=t3.small",
+				"spec.mixedInstancesPolicy.instances=t3.medium",
+				"spec.mixedInstancesPolicy.onDemandAllocationStrategy=prioritized",
+			},
+		},
+		{
+			name: "bastion with unknown machine type is left alone",
+			ig:   &api.InstanceGroup{Spec: api.InstanceGroupSpec{Role: "Bastion", MachineType: "c6g.large"}},
+		},
+		{
+			name: "bastion with existing mixed instances policy is left alone",
+			ig: &api.InstanceGroup{Spec: api.InstanceGroupSpec{
+				Role:                 "Bastion",
+				MachineType:          "t4g.micro",
+				MixedInstancesPolicy: &api.MixedInstancesPolicySpec{Instances: []string{"t4g.micro"}},
+			}},
+		},
+		{
+			name: "non-bastion is left alone",
+			ig:   &api.InstanceGroup{Spec: api.InstanceGroupSpec{Role: "Node", MachineType: "t3.micro"}},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			actual := awsBastionFallbackOverrides(tc.ig)
+			if !slices.Equal(actual, tc.expected) {
+				t.Errorf("got %v, want %v", actual, tc.expected)
 			}
 		})
 	}

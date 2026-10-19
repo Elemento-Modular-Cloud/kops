@@ -46,8 +46,8 @@ const atomosControlPlaneBootstrapDelay = 5 * time.Minute
 
 func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	network := b.LinkToNetwork()
-	authService := &elementotasks.KubernetesAuthService{Name: fi.PtrTo(b.ClusterName())}
-	authCluster := &elementotasks.KubernetesAuthCluster{Name: fi.PtrTo(b.ClusterName())}
+	authService := &elementotasks.KubernetesAuthService{Name: new(b.ClusterName())}
+	authCluster := &elementotasks.KubernetesAuthCluster{Name: new(b.ClusterName())}
 	var sshkeyTasks []*elementotasks.SSHKey
 	for _, sshkey := range b.SSHPublicKeys {
 		fingerprint, err := pki.ComputeOpenSSHKeyFingerprint(string(sshkey))
@@ -55,7 +55,7 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 			return err
 		}
 		t := &elementotasks.SSHKey{
-			Name:      fi.PtrTo(b.ClusterName() + "-" + fingerprint),
+			Name:      new(b.ClusterName() + "-" + fingerprint),
 			Lifecycle: b.Lifecycle,
 			PublicKey: string(sshkey),
 			Labels: map[string]string{
@@ -69,7 +69,7 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 	var dnsZoneTask *elementotasks.DNSZone
 	if b.Cluster.PublishesDNSRecords() {
 		dnsZoneTask = &elementotasks.DNSZone{
-			Name:      fi.PtrTo(b.ClusterName()),
+			Name:      new(b.ClusterName()),
 			Network:   network,
 			Lifecycle: b.Lifecycle,
 		}
@@ -101,9 +101,9 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 		}
 		if igSize == 0 {
 			c.AddTask(&fitasks.ManagedFile{
-				Name:      fi.PtrTo("kubeenv-" + ig.Name),
+				Name:      new("kubeenv-" + ig.Name),
 				Lifecycle: b.Lifecycle,
-				Location:  fi.PtrTo("igconfig/" + ig.Spec.Role.ToLowerString() + "/" + ig.Name + "/kube_env.yaml"),
+				Location:  new("igconfig/" + ig.Spec.Role.ToLowerString() + "/" + ig.Name + "/kube_env.yaml"),
 				Contents:  bootConfig,
 			})
 		}
@@ -131,11 +131,11 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 			if err != nil {
 				return err
 			}
-			rootVolumeSize = fi.PtrTo(defaultSize)
+			rootVolumeSize = new(defaultSize)
 		}
 
 		serverGroup := &elementotasks.ServerGroup{
-			Name:                        fi.PtrTo(ig.Name),
+			Name:                        new(ig.Name),
 			Lifecycle:                   b.Lifecycle,
 			SSHKeys:                     sshkeyTasks,
 			Network:                     network,
@@ -155,7 +155,7 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 			RootVolumeSize:              rootVolumeSize,
 			DHCPReservationTasks:        make([]*elementotasks.DHCPReservation, 0, igSize),
 			KubernetesAuthService:       authService,
-			KubernetesAuthInstanceGroup: &elementotasks.KubernetesAuthInstanceGroup{Name: fi.PtrTo(ig.Name), AuthCluster: authCluster},
+			KubernetesAuthInstanceGroup: &elementotasks.KubernetesAuthInstanceGroup{Name: new(ig.Name), AuthCluster: authCluster},
 		}
 		for _, serverName := range names {
 			// External node IPs are reserved by placement; AtomOS addresses must
@@ -165,7 +165,7 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 				continue
 			}
 			serverGroup.DHCPReservationTasks = append(serverGroup.DHCPReservationTasks, &elementotasks.DHCPReservation{
-				Name: fi.PtrTo(serverName),
+				Name: new(serverName),
 			})
 		}
 		if len(serverGroup.ExternalNodeIPs) > 0 && ig.Spec.Role == kops.InstanceGroupRoleControlPlane {
@@ -174,7 +174,7 @@ func (b *ServerGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error 
 				if serverGroup.EtcdMemberIndex != nil && *serverGroup.EtcdMemberIndex != member.index {
 					return fmt.Errorf("external control-plane group %q has inconsistent etcd member indices", ig.Name)
 				}
-				serverGroup.EtcdMemberIndex = fi.PtrTo(member.index)
+				serverGroup.EtcdMemberIndex = new(member.index)
 			}
 			if len(names) != 1 {
 				return fmt.Errorf("external control-plane group %q requires one node per etcd member", ig.Name)

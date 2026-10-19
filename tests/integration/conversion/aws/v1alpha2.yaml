@@ -29,10 +29,12 @@ spec:
       volumeAttachLimit: 65
     disableSecurityGroupIngress: true
     elbSecurityGroup: sg-elb
+    nlbSecurityGroupMode: Managed
     nodeIPFamilies:
     - ipv6
     spotinstOrientation: spot-orientation
     spotinstProduct: spot-product
+    useIPBasedNodeNames: true
   cloudProvider: aws
   configBase: memfs://clusters.example.com/minimal.example.com
   egressProxy:
@@ -70,7 +72,7 @@ spec:
   keyStore: memfs://clusters.example.com/keypairs.example.com
   kubernetesApiAccess:
   - 0.0.0.0/0
-  kubernetesVersion: v1.21.0
+  kubernetesVersion: v1.35.0
   masterKubelet:
     cpuCFSQuota: true
   masterPublicName: api.minimal.example.com
@@ -110,7 +112,7 @@ metadata:
   name: nodes
 spec:
   associatePublicIp: true
-  image: ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20220404
+  image: ubuntu/images/hvm-ssd-gp3/ubuntu-resolute-26.04-amd64-server-20220404
   machineType: t2.medium
   maxSize: 2
   minSize: 2
@@ -136,7 +138,7 @@ metadata:
   name: master-us-test-1a
 spec:
   associatePublicIp: true
-  image: ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20220404
+  image: ubuntu/images/hvm-ssd-gp3/ubuntu-resolute-26.04-amd64-server-20220404
   machineType: m3.medium
   maxSize: 1
   minSize: 1

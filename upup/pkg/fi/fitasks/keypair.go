@@ -17,6 +17,7 @@ limitations under the License.
 package fitasks
 
 import (
+	"context"
 	"crypto/x509/pkix"
 	"fmt"
 	"sort"
@@ -44,8 +45,6 @@ type Keypair struct {
 	Issuer string `json:"issuer"`
 	// Type the type of certificate i.e. CA, server, client etc
 	Type string `json:"type"`
-	// LegacyFormat is whether the keypair is stored in a legacy format.
-	LegacyFormat bool `json:"oldFormat"`
 
 	certificates *fi.CloudupTaskDependentResource
 	keyset       *fi.Keyset
@@ -62,7 +61,7 @@ func (e *Keypair) CheckExisting(c *fi.CloudupContext) bool {
 	return true
 }
 
-var _ fi.CompareWithID = &Keypair{}
+var _ fi.CompareWithID = (*Keypair)(nil)
 
 func (e *Keypair) CompareWithID() *string {
 	return &e.Subject
@@ -102,7 +101,6 @@ func (e *Keypair) Find(c *fi.CloudupContext) (*Keypair, error) {
 		Subject:        pki.PkixNameToString(&cert.Subject),
 		Issuer:         pki.PkixNameToString(&cert.Certificate.Issuer),
 		Type:           pki.BuildTypeDescription(cert.Certificate),
-		LegacyFormat:   keyset.LegacyFormat,
 	}
 
 	actual.Signer = &Keypair{Subject: pki.PkixNameToString(&cert.Certificate.Issuer)}
@@ -152,7 +150,7 @@ func (_ *Keypair) CheckChanges(a, e, changes *Keypair) error {
 
 func (_ *Keypair) ShouldCreate(a, e, changes *Keypair) (bool, error) {
 	// Don't reissue a CA just because the Subject or AlternateNames changed
-	if a != nil && e.Type == "ca" && changes.Type == "" && !a.LegacyFormat {
+	if a != nil && e.Type == "ca" && changes.Type == "" {
 		e.Subject = a.Subject
 		return false, nil
 	}
@@ -168,7 +166,6 @@ func (_ *Keypair) Render(c *fi.CloudupContext, a, e, changes *Keypair) error {
 		return fi.RequiredField("Name")
 	}
 
-	changeStoredFormat := false
 	createCertificate := false
 	if a == nil {
 		createCertificate = true
@@ -187,8 +184,6 @@ func (_ *Keypair) Render(c *fi.CloudupContext, a, e, changes *Keypair) error {
 		} else if changes.Type != "" {
 			createCertificate = true
 			klog.Infof("creating certificate %q as Type has changed (actual=%v, expected=%v)", name, a.Type, e.Type)
-		} else if a.LegacyFormat {
-			changeStoredFormat = true
 		} else {
 			klog.Warningf("Ignoring changes in key: %v", fi.DebugAsJsonString(changes))
 		}
@@ -196,36 +191,6 @@ func (_ *Keypair) Render(c *fi.CloudupContext, a, e, changes *Keypair) error {
 
 	if createCertificate {
 		klog.V(2).Infof("Creating PKI keypair %q", name)
-
-		keyset, err := c.T.Keystore.FindKeyset(ctx, name)
-		if err != nil {
-			return err
-		}
-		if keyset == nil {
-			keyset = &fi.Keyset{
-				Items: map[string]*fi.KeysetItem{},
-			}
-		}
-
-		// We always reuse the private key if it exists,
-		// if we change keys we often have to regenerate e.g. the service accounts
-		// TODO: Eventually rotate keys / don't always reuse?
-		var privateKey *pki.PrivateKey
-		if keyset.Primary != nil {
-			privateKey = keyset.Primary.PrivateKey
-		}
-		if privateKey == nil {
-			klog.V(2).Infof("Creating privateKey %q", name)
-		}
-
-		signer := fi.CertificateIDCA
-		if e.Signer != nil {
-			signer = fi.ValueOf(e.Signer.Name)
-		}
-
-		klog.Infof("Issuing new certificate: %q", *e.Name)
-
-		serial := pki.BuildPKISerial(time.Now().UnixNano())
 
 		subjectPkix, err := parsePkixName(e.Subject)
 		if err != nil {
@@ -236,32 +201,21 @@ func (_ *Keypair) Render(c *fi.CloudupContext, a, e, changes *Keypair) error {
 			return fmt.Errorf("subject name was empty for SSL keypair %q", *e.Name)
 		}
 
+		signer := fi.CertificateIDCA
+		if e.Signer != nil {
+			signer = fi.ValueOf(e.Signer.Name)
+		}
+
 		req := pki.IssueCertRequest{
 			Signer:         signer,
 			Type:           e.Type,
 			Subject:        *subjectPkix,
 			AlternateNames: e.AlternateNames,
-			PrivateKey:     privateKey,
-			Serial:         serial,
-		}
-		cert, privateKey, _, err := pki.IssueCert(ctx, &req, fi.NewPKIKeystoreAdapter(c.T.Keystore))
-		if err != nil {
-			return err
 		}
 
-		serialString := cert.Certificate.SerialNumber.String()
-		ki := &fi.KeysetItem{
-			Id:          serialString,
-			Certificate: cert,
-			PrivateKey:  privateKey,
-		}
-
-		keyset.LegacyFormat = false
-		keyset.Items[ki.Id] = ki
-		keyset.Primary = ki
-		err = c.T.Keystore.StoreKeyset(ctx, name, keyset)
+		keyset, err := CreateKeyset(ctx, c.T.Keystore, name, req)
 		if err != nil {
-			return err
+			return fmt.Errorf("error creating certificate: %v", err)
 		}
 
 		if err := e.setResources(keyset); err != nil {
@@ -275,32 +229,67 @@ func (_ *Keypair) Render(c *fi.CloudupContext, a, e, changes *Keypair) error {
 			return fmt.Errorf("unable to find created certificate %q: %w", name, err)
 		}
 
-		klog.V(8).Infof("created certificate with cn=%s", cert.Subject.CommonName)
+		klog.V(8).Infof("created certificate with subject %v", subjectPkix)
 	}
 
 	// TODO: Check correct subject / flags
 
-	if changeStoredFormat {
-		// We fetch and reinsert the same keypair, forcing an update to our preferred format
-		// TODO: We're assuming that we want to save in the preferred format
-		keyset, err := c.T.Keystore.FindKeyset(ctx, name)
-		if err != nil {
-			return err
-		}
-		if keyset == nil {
-			return fmt.Errorf("keyset %q not found", name)
-		}
+	return nil
 
-		keyset.LegacyFormat = false
-		err = c.T.Keystore.StoreKeyset(ctx, name, keyset)
-		if err != nil {
-			return err
-		}
+}
 
-		klog.Infof("updated Keypair %q to new format", name)
+func CreateKeyset(ctx context.Context, keystore fi.Keystore, name string, req pki.IssueCertRequest) (*fi.Keyset, error) {
+	keyset, err := keystore.FindKeyset(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if keyset == nil {
+		keyset = &fi.Keyset{
+			Items: map[string]*fi.KeysetItem{},
+		}
 	}
 
-	return nil
+	if req.Serial == nil {
+		serial := pki.BuildPKISerial(time.Now().UnixNano())
+		req.Serial = serial
+	}
+
+	// We always reuse the private key if it exists,
+	// if we change keys we often have to regenerate e.g. the service accounts
+	// TODO: Eventually rotate keys / don't always reuse?
+	var privateKey *pki.PrivateKey
+	if keyset.Primary != nil {
+		privateKey = keyset.Primary.PrivateKey
+	}
+	if privateKey == nil {
+		klog.V(2).Infof("Creating privateKey %q", name)
+	}
+
+	req.PrivateKey = privateKey
+
+	klog.Infof("Issuing new certificate: %q", name)
+
+	cert, privateKey, _, err := pki.IssueCert(ctx, &req, fi.NewPKIKeystoreAdapter(keystore))
+	if err != nil {
+		return nil, err
+	}
+
+	serialString := cert.Certificate.SerialNumber.String()
+	ki := &fi.KeysetItem{
+		Id:          serialString,
+		Certificate: cert,
+		PrivateKey:  privateKey,
+	}
+
+	keyset.Items[ki.Id] = ki
+	keyset.Primary = ki
+
+	err = keystore.StoreKeyset(ctx, name, keyset)
+	if err != nil {
+		return nil, err
+	}
+
+	return keyset, nil
 }
 
 func parsePkixName(s string) (*pkix.Name, error) {

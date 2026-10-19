@@ -72,11 +72,12 @@ func waitLoadbalancerActiveProvisioningStatus(client *gophercloud.ServiceClient,
 			return false, err
 		}
 		provisioningStatus = loadbalancer.ProvisioningStatus
-		if loadbalancer.ProvisioningStatus == activeStatus {
+		switch loadbalancer.ProvisioningStatus {
+		case activeStatus:
 			return true, nil
-		} else if loadbalancer.ProvisioningStatus == errorStatus {
+		case errorStatus:
 			return true, fmt.Errorf("loadbalancer has gone into ERROR state")
-		} else {
+		default:
 			klog.Infof("Waiting for Loadbalancer to be ACTIVE...")
 			return false, nil
 		}
@@ -102,7 +103,7 @@ func (e *LB) GetDependencies(tasks map[string]fi.CloudupTask) []fi.CloudupTask {
 	return deps
 }
 
-var _ fi.CompareWithID = &LB{}
+var _ fi.CompareWithID = (*LB)(nil)
 
 func (s *LB) CompareWithID() *string {
 	return s.ID
@@ -115,24 +116,20 @@ func NewLBTaskFromCloud(cloud openstack.OpenstackCloud, lifecycle fi.Lifecycle, 
 		return nil, err
 	}
 
-	secGroup := true
-	if find != nil && find.SecurityGroup == nil {
-		secGroup = false
-	}
-
+	secGroup := find == nil || find.SecurityGroup != nil
 	actual := &LB{
-		ID:        fi.PtrTo(lb.ID),
-		Name:      fi.PtrTo(lb.Name),
+		ID:        new(lb.ID),
+		Name:      new(lb.Name),
 		Lifecycle: lifecycle,
-		PortID:    fi.PtrTo(lb.VipPortID),
-		Subnet:    fi.PtrTo(sub.Name),
-		VipSubnet: fi.PtrTo(lb.VipSubnetID),
-		Provider:  fi.PtrTo(lb.Provider),
-		FlavorID:  fi.PtrTo(lb.FlavorID),
+		PortID:    new(lb.VipPortID),
+		Subnet:    new(sub.Name),
+		VipSubnet: new(lb.VipSubnetID),
+		Provider:  new(lb.Provider),
+		FlavorID:  new(lb.FlavorID),
 	}
 
 	if secGroup {
-		sg, err := getSecurityGroupByName(&SecurityGroup{Name: fi.PtrTo(lb.Name)}, osCloud)
+		sg, err := getSecurityGroupByName(&SecurityGroup{Name: new(lb.Name)}, osCloud)
 		if err != nil {
 			return nil, err
 		}
@@ -219,11 +216,11 @@ func (_ *LB) RenderOpenstack(t *openstack.OpenstackAPITarget, a, e, changes *LB)
 		if err != nil {
 			return fmt.Errorf("error creating LB: %v", err)
 		}
-		e.ID = fi.PtrTo(lb.ID)
-		e.PortID = fi.PtrTo(lb.VipPortID)
-		e.VipSubnet = fi.PtrTo(lb.VipSubnetID)
-		e.Provider = fi.PtrTo(lb.Provider)
-		e.FlavorID = fi.PtrTo(lb.FlavorID)
+		e.ID = new(lb.ID)
+		e.PortID = new(lb.VipPortID)
+		e.VipSubnet = new(lb.VipSubnetID)
+		e.Provider = new(lb.Provider)
+		e.FlavorID = new(lb.FlavorID)
 
 		if e.SecurityGroup != nil {
 			opts := ports.UpdateOpts{

@@ -18,6 +18,7 @@ package vfs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -31,9 +32,9 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
-	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	smithyendpoints "github.com/aws/smithy-go/endpoints"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"k8s.io/klog/v2"
 )
 
@@ -84,42 +85,39 @@ func (*ResolverV2) ResolveEndpoint(ctx context.Context, params s3.EndpointParame
 	return s3.NewDefaultEndpointResolverV2().ResolveEndpoint(ctx, params)
 }
 
-func (s *S3Context) getClient(ctx context.Context, region string) (*s3.Client, error) {
+func (s *S3Context) getClient(ctx context.Context, region string, optFn func(*s3.Options)) (*s3.Client, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	s3Client := s.clients[region]
-	if s3Client == nil {
-		_, span := tracer.Start(ctx, "S3Context::getClient")
-		defer span.End()
-
-		var config aws.Config
-		var err error
-		endpoint := os.Getenv("S3_ENDPOINT")
-		if endpoint == "" {
-			config, err = awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
-			if err != nil {
-				return nil, fmt.Errorf("error loading AWS config: %v", err)
-			}
-		} else {
-			// Use customized S3 storage
-			klog.V(2).Infof("Found S3_ENDPOINT=%q, using as non-AWS S3 backend", endpoint)
-			config, err = getCustomS3Config(ctx, region)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		s3Client = s3.NewFromConfig(config, func(o *s3.Options) {
-			if endpoint != "" {
-				o.BaseEndpoint = aws.String(endpoint)
-				o.UsePathStyle = true
-			} else {
-				o.EndpointResolverV2 = &ResolverV2{}
-			}
-		})
-		s.clients[region] = s3Client
+	if s3Client := s.clients[region]; s3Client != nil {
+		return s3Client, nil
 	}
+
+	// Client configuration is determined by region and process-wide environment.
+	// The first request for a region creates the shared client for that region.
+	_, span := tracer.Start(ctx, "S3Context::getClient")
+	defer span.End()
+
+	var config aws.Config
+	var err error
+	endpoint := os.Getenv("S3_ENDPOINT")
+	if endpoint == "" {
+		config, err = awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
+		if err != nil {
+			return nil, fmt.Errorf("error loading AWS config: %v", err)
+		}
+	} else {
+		// Use customized S3 storage
+		klog.V(2).Infof("Found S3_ENDPOINT=%q, using as non-AWS S3 backend", endpoint)
+		config, err = getCustomS3Config(ctx, region)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	s3Client := s3.NewFromConfig(config, optFn)
+
+	s.clients[region] = s3Client
 
 	return s3Client, nil
 }
@@ -192,29 +190,26 @@ func (s *S3Context) getDetailsForBucket(ctx context.Context, bucket string) (*S3
 		klog.V(2).Infof("defaulting region to %q", awsRegion)
 	}
 
-	request := &s3.GetBucketLocationInput{
-		Bucket: &bucket,
-	}
-	var response *s3.GetBucketLocationOutput
-
-	s3Client, err := s.getClient(ctx, awsRegion)
+	s3Client, err := s.getClient(ctx, awsRegion, func(o *s3.Options) {
+		o.EndpointResolverV2 = &ResolverV2{}
+	})
 	if err != nil {
 		return bucketDetails, fmt.Errorf("error connecting to S3: %s", err)
 	}
 	// Attempt one GetBucketLocation call the "normal" way (i.e. as the bucket owner)
-	response, err = s3Client.GetBucketLocation(ctx, request)
-
-	// and fallback to brute-forcing if it fails
-	if err != nil {
-		klog.V(2).Infof("unable to get bucket location from region %q; scanning all regions: %v", awsRegion, err)
-		response, err = bruteforceBucketLocation(ctx, awsRegion, request)
-	}
+	response, err := s3Client.GetBucketLocation(ctx, &s3.GetBucketLocationInput{
+		Bucket: &bucket,
+	})
 
 	if err != nil {
-		return bucketDetails, err
-	}
-
-	if len(response.LocationConstraint) == 0 {
+		// GetBucketLocation only works for the bucket owner from any region, or from the bucket's
+		// region. Fall back to HeadBucket, which works cross-account and cross-region.
+		klog.V(2).Infof("unable to get bucket location from region %q; falling back to HeadBucket: %v", awsRegion, err)
+		bucketDetails.region, err = bucketLocationViaHead(ctx, s3Client, bucket)
+		if err != nil {
+			return bucketDetails, err
+		}
+	} else if len(response.LocationConstraint) == 0 {
 		// US Classic does not return a region
 		bucketDetails.region = "us-east-1"
 	} else {
@@ -234,7 +229,7 @@ func (s *S3Context) getDetailsForBucket(ctx context.Context, bucket string) (*S3
 	return bucketDetails, nil
 }
 
-func (b *S3BucketDetails) hasServerSideEncryptionByDefault(ctx context.Context) bool {
+func (b *S3BucketDetails) hasServerSideEncryptionByDefault(ctx context.Context, optFn func(*s3.Options)) bool {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
 
@@ -250,7 +245,7 @@ func (b *S3BucketDetails) hasServerSideEncryptionByDefault(ctx context.Context) 
 	// We only make one attempt to find the SSE policy (even if there's an error)
 	b.applyServerSideEncryptionByDefault = &applyServerSideEncryptionByDefault
 
-	client, err := b.context.getClient(ctx, b.region)
+	client, err := b.context.getClient(ctx, b.region, optFn)
 	if err != nil {
 		klog.Warningf("Unable to read bucket encryption policy for %q in region %q: will encrypt using AES256", b.name, b.region)
 		return false
@@ -286,57 +281,32 @@ func (b *S3BucketDetails) hasServerSideEncryptionByDefault(ctx context.Context) 
 	return applyServerSideEncryptionByDefault
 }
 
-/*
-Amazon's S3 API provides the GetBucketLocation call to determine the region in which a bucket is located.
-This call can however only be used globally by the owner of the bucket, as mentioned on the documentation page.
-
-For S3 buckets that are shared across multiple AWS accounts using bucket policies the call will only work if it is sent
-to the correct region in the first place.
-
-This method will attempt to "bruteforce" the bucket location by sending a request to every available region and picking
-out the first result.
-
-See also: https://docs.aws.amazon.com/goto/WebAPI/s3-2006-03-01/GetBucketLocationRequest
-*/
-func bruteforceBucketLocation(ctx context.Context, region string, request *s3.GetBucketLocationInput) (*s3.GetBucketLocationOutput, error) {
-	ctx, span := tracer.Start(ctx, "bruteforceBucketLocation")
+// bucketLocationViaHead resolves the region for a bucket using HeadBucket.
+// GetBucketLocation does not work for cross-account buckets queried from a different region.
+// HeadBucket can be called against any region in the partition: on success the response carries
+// BucketRegion, and on a cross-region failure (e.g. 301 PermanentRedirect) S3 still sets the
+// x-amz-bucket-region response header, which we recover from the wrapped response error.
+func bucketLocationViaHead(ctx context.Context, s3Client *s3.Client, bucket string) (string, error) {
+	ctx, span := tracer.Start(ctx, "bucketLocationViaHead")
 	defer span.End()
 
-	config, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
-	if err != nil {
-		return nil, fmt.Errorf("creating aws config: %w", err)
-	}
-	//config, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(*config.Region), awsconfig.WithSharedCredentialsFiles())
-
-	regions, err := ec2.NewFromConfig(config).DescribeRegions(ctx, &ec2.DescribeRegionsInput{})
-	if err != nil {
-		return nil, fmt.Errorf("listing AWS regions: %w", err)
-	}
-
-	klog.V(2).Infof("Querying S3 for bucket location for %s", *request.Bucket)
-
-	out := make(chan *s3.GetBucketLocationOutput, len(regions.Regions))
-	for _, region := range regions.Regions {
-		go func(regionName string) {
-			config, err = awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(regionName))
-			if err == nil {
-				klog.V(8).Infof("Doing GetBucketLocation in %q", regionName)
-				s3Client := s3.NewFromConfig(config)
-				result, bucketError := s3Client.GetBucketLocation(ctx, request)
-				if bucketError == nil {
-					klog.V(8).Infof("GetBucketLocation succeeded in %q", regionName)
-					out <- result
-				}
-			}
-		}(*region.RegionName)
+	out, err := s3Client.HeadBucket(ctx, &s3.HeadBucketInput{
+		Bucket: aws.String(bucket),
+	})
+	if err == nil {
+		if out.BucketRegion != nil && *out.BucketRegion != "" {
+			return *out.BucketRegion, nil
+		}
+		return "", fmt.Errorf("HeadBucket on %q did not return a bucket region", bucket)
 	}
 
-	select {
-	case bucketLocation := <-out:
-		return bucketLocation, nil
-	case <-time.After(5 * time.Second):
-		return nil, fmt.Errorf("Could not retrieve location for AWS bucket %s", *request.Bucket)
+	var respErr *smithyhttp.ResponseError
+	if errors.As(err, &respErr) && respErr.Response != nil && respErr.Response.Response != nil {
+		if bucketRegion := respErr.Response.Header.Get("x-amz-bucket-region"); bucketRegion != "" {
+			return bucketRegion, nil
+		}
 	}
+	return "", fmt.Errorf("getting location for bucket %q: %w", bucket, err)
 }
 
 // isRunningOnEC2 determines if we could be running on EC2.

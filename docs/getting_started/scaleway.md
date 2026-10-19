@@ -77,7 +77,7 @@ export S3_SECRET_ACCESS_KEY="my-secret-key" # where <my-secret-key> is the S3 AP
 kops create cluster --cloud=scaleway --name=my.cluster --zones=fr-par-1 --dns=none --yes
 # This creates a cluster with the Scaleway DNS (on a domain name that you own and have registered with Scaleway) in zone pl-waw-1
 kops create cluster --cloud=scaleway --name=mycluster.mydomain.com --zones=pl-waw-1 --yes 
-# This creates a cluster with the gossip DNS in zone nl-ams-2. This is not recommended since the no-DNS option is available because it is more secure.
+# This also creates a cluster with no DNS in zone nl-ams-2, since new clusters default to the no-DNS option.
 kops create cluster --cloud=scaleway --name=mycluster.k8s.local --zones=nl-ams-2 --yes
 ```
 These basic commands create a cluster with default parameters:
@@ -129,7 +129,7 @@ NB: keep in mind that every new call to kOps with the flags `--target=terraform 
 
 ## For clusters with load-balancers
 
-This concerns clusters using no DNS and gossip DNS. For these types of cluster, a small trick is needed because kOps doesn't know the IPs of the load-balancer at the time of writing the instances' cloud-init configuration, so we will have to run an update, then a rolling-update.
+This concerns None-DNS clusters. For these types of cluster, a small trick is needed because kOps doesn't know the IPs of the load-balancer at the time of writing the instances' cloud-init configuration, so we will have to run an update, then a rolling-update.
 
 ### Creating a valid cluster
 
@@ -160,7 +160,7 @@ for SERVER in "${TF_SERVERS[@]}"; do
   # We remove the stale instance from the state
   terraform state rm scaleway_instance_server.$SERVER
   # We fetch its new ID
-  NEW_SERVER_ID=$(scw instance server list zone=$ZONE name=$SERVER -o template="{{ .ID }}")
+  NEW_SERVER_ID=$(scw instance server list zone=$ZONE name=$SERVER -o template="{% raw %}{{ .ID }}{% endraw %}")
   if [ "$NEW_SERVER_ID" == "" ]; then
     echo "could not find new ID of the server $SERVER"
   fi

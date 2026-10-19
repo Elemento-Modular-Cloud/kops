@@ -23,6 +23,8 @@ import (
 	v1 "k8s.io/api/core/v1"
 
 	"k8s.io/kops/pkg/apis/kops"
+	"k8s.io/kops/pkg/featureflag"
+	"k8s.io/kops/pkg/wellknownports"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/loader"
 
@@ -49,7 +51,7 @@ func (b *KubeAPIServerOptionsBuilder) BuildOptions(cluster *kops.Cluster) error 
 		if count == 0 {
 			return fmt.Errorf("no instance groups found")
 		}
-		c.APIServerCount = fi.PtrTo(int32(count))
+		c.APIServerCount = new(int32(count))
 	}
 
 	// @question: should the question every be able to set this?
@@ -60,7 +62,7 @@ func (b *KubeAPIServerOptionsBuilder) BuildOptions(cluster *kops.Cluster) error 
 		if err != nil {
 			return err
 		}
-		c.StorageBackend = fi.PtrTo(fmt.Sprintf("etcd%d", sem.Major))
+		c.StorageBackend = new(fmt.Sprintf("etcd%d", sem.Major))
 	}
 
 	if c.KubeletPreferredAddressTypes == nil {
@@ -74,17 +76,17 @@ func (b *KubeAPIServerOptionsBuilder) BuildOptions(cluster *kops.Cluster) error 
 
 	if clusterSpec.Authentication != nil {
 		if clusterSpec.Authentication.Kopeio != nil {
-			c.AuthenticationTokenWebhookConfigFile = fi.PtrTo("/etc/kubernetes/authn.config")
+			c.AuthenticationTokenWebhookConfigFile = new("/etc/kubernetes/authn.config")
 		}
 	}
 
 	if clusterSpec.Authorization == nil || clusterSpec.Authorization.IsEmpty() {
-		// Do nothing - use the default as defined by the apiserver
-		// (this won't happen anyway because of our default logic)
+		// Do nothing - use the default as defined by the apiserver.
+		// In practice unreachable: defaulting sets RBAC when authorization is omitted.
 	} else if clusterSpec.Authorization.AlwaysAllow != nil {
-		clusterSpec.KubeAPIServer.AuthorizationMode = fi.PtrTo("AlwaysAllow")
+		clusterSpec.KubeAPIServer.AuthorizationMode = new("AlwaysAllow")
 	} else if clusterSpec.Authorization.RBAC != nil {
-		clusterSpec.KubeAPIServer.AuthorizationMode = fi.PtrTo("Node,RBAC")
+		clusterSpec.KubeAPIServer.AuthorizationMode = new("Node,RBAC")
 	}
 
 	if err := b.configureAggregation(clusterSpec); err != nil {
@@ -98,32 +100,7 @@ func (b *KubeAPIServerOptionsBuilder) BuildOptions(cluster *kops.Cluster) error 
 	c.Image = image
 
 	if b.controlPlaneKubernetesVersion.IsLT("1.33") {
-		switch cluster.GetCloudProvider() {
-		case kops.CloudProviderAWS:
-			c.CloudProvider = "aws"
-		case kops.CloudProviderGCE:
-			c.CloudProvider = "gce"
-		case kops.CloudProviderDO:
-			c.CloudProvider = "external"
-		case kops.CloudProviderHetzner:
-			c.CloudProvider = "external"
-		case kops.CloudProviderOpenstack:
-			c.CloudProvider = "openstack"
-		case kops.CloudProviderAzure:
-			c.CloudProvider = "azure"
-		case kops.CloudProviderScaleway:
-			c.CloudProvider = "external"
-		case kops.CloudProviderElemento:
-			c.CloudProvider = "external"
-		case kops.CloudProviderMetal:
-			c.CloudProvider = "external"
-		default:
-			return fmt.Errorf("unknown cloudprovider %q", cluster.GetCloudProvider())
-		}
-
-		if clusterSpec.ExternalCloudControllerManager != nil {
-			c.CloudProvider = "external"
-		}
+		c.CloudProvider = "external"
 	}
 
 	c.LogLevel = 2
@@ -135,7 +112,7 @@ func (b *KubeAPIServerOptionsBuilder) BuildOptions(cluster *kops.Cluster) error 
 		c.BindAddress = "0.0.0.0"
 	}
 
-	c.AllowPrivileged = fi.PtrTo(true)
+	c.AllowPrivileged = new(true)
 	c.ServiceClusterIPRange = clusterSpec.Networking.ServiceClusterIPRange
 	c.EtcdServers = nil
 	c.EtcdServersOverrides = nil
@@ -143,33 +120,44 @@ func (b *KubeAPIServerOptionsBuilder) BuildOptions(cluster *kops.Cluster) error 
 	for _, etcdCluster := range clusterSpec.EtcdClusters {
 		switch etcdCluster.Name {
 		case "main":
-			c.EtcdServers = append(c.EtcdServers, "https://127.0.0.1:4001")
+			c.EtcdServers = append(c.EtcdServers, fmt.Sprintf("https://127.0.0.1:%d", wellknownports.EtcdMainClientPort))
 		case "events":
-			c.EtcdServersOverrides = append(c.EtcdServersOverrides, "/events#https://127.0.0.1:4002")
+			// Use HTTP for events etcd when EtcdEventsHTTP feature flag is enabled
+			scheme := "https"
+			if featureflag.EtcdEventsHTTP.Enabled() {
+				scheme = "http"
+			}
+			c.EtcdServersOverrides = append(c.EtcdServersOverrides, fmt.Sprintf("/events#%s://127.0.0.1:%d", scheme, wellknownports.EtcdEventsClientPort))
+		case "leases":
+			scheme := "https"
+			if featureflag.EtcdEventsHTTP.Enabled() {
+				scheme = "http"
+			}
+			c.EtcdServersOverrides = append(c.EtcdServersOverrides, fmt.Sprintf("coordination.k8s.io/leases#%s://127.0.0.1:%d", scheme, wellknownports.EtcdLeasesClientPort))
 		}
 	}
 
-	// TODO: We can probably rewrite these more clearly in descending order
 	// Based on recommendations from:
-	// https://kubernetes.io/docs/admin/admission-controllers/#is-there-a-recommended-set-of-admission-controllers-to-use
+	// https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/
 	{
 		c.EnableAdmissionPlugins = []string{
-			"NamespaceLifecycle",
-			"LimitRanger",
-			"ServiceAccount",
-			//"PersistentVolumeLabel",
 			"DefaultStorageClass",
 			"DefaultTolerationSeconds",
+			"LimitRanger",
 			"MutatingAdmissionWebhook",
-			"ValidatingAdmissionWebhook",
+			"NamespaceLifecycle",
 			"NodeRestriction",
 			"ResourceQuota",
+			"RuntimeClass",
+			"ServiceAccount",
+			"ValidatingAdmissionPolicy",
+			"ValidatingAdmissionWebhook",
 		}
 		c.EnableAdmissionPlugins = append(c.EnableAdmissionPlugins, c.AppendAdmissionPlugins...)
 	}
 
 	// We make sure to disable AnonymousAuth
-	c.AnonymousAuth = fi.PtrTo(false)
+	c.AnonymousAuth = new(false)
 
 	// We query via the kube-apiserver-healthcheck proxy, which listens on port 3990
 	c.InsecureBindAddress = ""
@@ -179,22 +167,7 @@ func (b *KubeAPIServerOptionsBuilder) BuildOptions(cluster *kops.Cluster) error 
 	metricsServer := clusterSpec.MetricsServer
 	if metricsServer != nil && fi.ValueOf(metricsServer.Enabled) {
 		if c.EnableAggregatorRouting == nil {
-			c.EnableAggregatorRouting = fi.PtrTo(true)
-		}
-	}
-
-	if c.FeatureGates == nil {
-		c.FeatureGates = make(map[string]string)
-	}
-
-	if clusterSpec.CloudProvider.AWS != nil {
-
-		if _, found := c.FeatureGates["InTreePluginAWSUnregister"]; !found && b.ControlPlaneKubernetesVersion().IsLT("1.31") {
-			c.FeatureGates["InTreePluginAWSUnregister"] = "true"
-		}
-
-		if _, found := c.FeatureGates["CSIMigrationAWS"]; !found && b.ControlPlaneKubernetesVersion().IsLT("1.27") {
-			c.FeatureGates["CSIMigrationAWS"] = "true"
+			c.EnableAggregatorRouting = new(true)
 		}
 	}
 

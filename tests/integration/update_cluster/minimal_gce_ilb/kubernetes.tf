@@ -58,6 +58,14 @@ resource "aws_s3_object" "kops-version-txt" {
   server_side_encryption = "AES256"
 }
 
+resource "aws_s3_object" "manifests-channels-kops-channels" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_object_manifests-channels-kops-channels_content")
+  key                    = "tests/minimal-gce-ilb.example.com/manifests/channels/kops-channels.yaml"
+  provider               = aws.files
+  server_side_encryption = "AES256"
+}
+
 resource "aws_s3_object" "manifests-etcdmanager-events-master-us-test1-a" {
   bucket                 = "testingBucket"
   content                = file("${path.module}/data/aws_s3_object_manifests-etcdmanager-events-master-us-test1-a_content")
@@ -177,16 +185,6 @@ resource "google_compute_address" "api-us-test1-minimal-gce-ilb-example-com" {
   subnetwork   = google_compute_subnetwork.us-test1-minimal-gce-ilb-example-com.name
 }
 
-resource "google_compute_backend_service" "api-minimal-gce-ilb-example-com" {
-  backend {
-    group = google_compute_instance_group_manager.a-master-us-test1-a-minimal-gce-ilb-example-com.instance_group
-  }
-  health_checks         = [google_compute_health_check.api-minimal-gce-ilb-example-com.id]
-  load_balancing_scheme = "INTERNAL_SELF_MANAGED"
-  name                  = "api-minimal-gce-ilb-example-com"
-  protocol              = "TCP"
-}
-
 resource "google_compute_disk" "a-etcd-events-minimal-gce-ilb-example-com" {
   labels = {
     "k8s-io-cluster-name" = "minimal-gce-ilb-example-com"
@@ -243,7 +241,7 @@ resource "google_compute_firewall" "lb-health-checks-minimal-gce-ilb-example-com
   name          = "lb-health-checks-minimal-gce-ilb-example-com"
   network       = google_compute_network.minimal-gce-ilb-example-com.name
   source_ranges = ["35.191.0.0/16", "130.211.0.0/22", "209.85.204.0/22", "209.85.152.0/22"]
-  target_tags   = ["minimal-gce-ilb-example-com-k8s-io-role-control-plane"]
+  target_tags   = ["minimal-gce-ilb-example-com-k8s-io-role-control-plane", "minimal-gce-ilb-example-com-k8s-io-role-etcd"]
 }
 
 resource "google_compute_firewall" "master-to-master-minimal-gce-ilb-example-com" {
@@ -268,8 +266,8 @@ resource "google_compute_firewall" "master-to-master-minimal-gce-ilb-example-com
   disabled    = false
   name        = "master-to-master-minimal-gce-ilb-example-com"
   network     = google_compute_network.minimal-gce-ilb-example-com.name
-  source_tags = ["minimal-gce-ilb-example-com-k8s-io-role-control-plane", "minimal-gce-ilb-example-com-k8s-io-role-master"]
-  target_tags = ["minimal-gce-ilb-example-com-k8s-io-role-control-plane", "minimal-gce-ilb-example-com-k8s-io-role-master"]
+  source_tags = ["minimal-gce-ilb-example-com-k8s-io-role-control-plane", "minimal-gce-ilb-example-com-k8s-io-role-etcd", "minimal-gce-ilb-example-com-k8s-io-role-scheduler", "minimal-gce-ilb-example-com-k8s-io-role-kubecontrollermanager", "minimal-gce-ilb-example-com-k8s-io-role-master"]
+  target_tags = ["minimal-gce-ilb-example-com-k8s-io-role-control-plane", "minimal-gce-ilb-example-com-k8s-io-role-etcd", "minimal-gce-ilb-example-com-k8s-io-role-scheduler", "minimal-gce-ilb-example-com-k8s-io-role-kubecontrollermanager", "minimal-gce-ilb-example-com-k8s-io-role-master"]
 }
 
 resource "google_compute_firewall" "master-to-node-minimal-gce-ilb-example-com" {
@@ -309,6 +307,30 @@ resource "google_compute_firewall" "node-to-master-minimal-gce-ilb-example-com" 
   }
   allow {
     ports    = ["3988"]
+    protocol = "tcp"
+  }
+  allow {
+    ports    = ["10257"]
+    protocol = "tcp"
+  }
+  allow {
+    ports    = ["10259"]
+    protocol = "tcp"
+  }
+  allow {
+    ports    = ["10249"]
+    protocol = "tcp"
+  }
+  allow {
+    ports    = ["2382"]
+    protocol = "tcp"
+  }
+  allow {
+    ports    = ["2384"]
+    protocol = "tcp"
+  }
+  allow {
+    ports    = ["9100"]
     protocol = "tcp"
   }
   disabled    = false
@@ -385,7 +407,7 @@ resource "google_compute_firewall" "ssh-external-to-master-ipv6-minimal-gce-ilb-
   name          = "ssh-external-to-master-ipv6-minimal-gce-ilb-example-com"
   network       = google_compute_network.minimal-gce-ilb-example-com.name
   source_ranges = ["::/0"]
-  target_tags   = ["minimal-gce-ilb-example-com-k8s-io-role-control-plane", "minimal-gce-ilb-example-com-k8s-io-role-master"]
+  target_tags   = ["minimal-gce-ilb-example-com-k8s-io-role-control-plane", "minimal-gce-ilb-example-com-k8s-io-role-etcd", "minimal-gce-ilb-example-com-k8s-io-role-scheduler", "minimal-gce-ilb-example-com-k8s-io-role-kubecontrollermanager", "minimal-gce-ilb-example-com-k8s-io-role-master"]
 }
 
 resource "google_compute_firewall" "ssh-external-to-master-minimal-gce-ilb-example-com" {
@@ -397,7 +419,7 @@ resource "google_compute_firewall" "ssh-external-to-master-minimal-gce-ilb-examp
   name          = "ssh-external-to-master-minimal-gce-ilb-example-com"
   network       = google_compute_network.minimal-gce-ilb-example-com.name
   source_ranges = ["0.0.0.0/0"]
-  target_tags   = ["minimal-gce-ilb-example-com-k8s-io-role-control-plane", "minimal-gce-ilb-example-com-k8s-io-role-master"]
+  target_tags   = ["minimal-gce-ilb-example-com-k8s-io-role-control-plane", "minimal-gce-ilb-example-com-k8s-io-role-etcd", "minimal-gce-ilb-example-com-k8s-io-role-scheduler", "minimal-gce-ilb-example-com-k8s-io-role-kubecontrollermanager", "minimal-gce-ilb-example-com-k8s-io-role-master"]
 }
 
 resource "google_compute_firewall" "ssh-external-to-node-ipv6-minimal-gce-ilb-example-com" {
@@ -425,7 +447,7 @@ resource "google_compute_firewall" "ssh-external-to-node-minimal-gce-ilb-example
 }
 
 resource "google_compute_forwarding_rule" "api-us-test1-minimal-gce-ilb-example-com" {
-  backend_service = google_compute_backend_service.api-minimal-gce-ilb-example-com.id
+  backend_service = google_compute_region_backend_service.api-minimal-gce-ilb-example-com.id
   ip_address      = google_compute_address.api-us-test1-minimal-gce-ilb-example-com.address
   ip_protocol     = "TCP"
   labels = {
@@ -439,18 +461,18 @@ resource "google_compute_forwarding_rule" "api-us-test1-minimal-gce-ilb-example-
   subnetwork            = google_compute_subnetwork.us-test1-minimal-gce-ilb-example-com.name
 }
 
-resource "google_compute_health_check" "api-minimal-gce-ilb-example-com" {
-  name = "api-minimal-gce-ilb-example-com"
-  tcp_health_check {
-    port = 443
-  }
-}
-
 resource "google_compute_instance_group_manager" "a-master-us-test1-a-minimal-gce-ilb-example-com" {
-  base_instance_name             = "master-us-test1-a"
+  base_instance_name = "master-us-test1-a"
+  lifecycle {
+    ignore_changes = [target_size]
+  }
   list_managed_instances_results = "PAGINATED"
   name                           = "a-master-us-test1-a-minimal-gce-ilb-example-com"
   target_size                    = 1
+  update_policy {
+    minimal_action = "REPLACE"
+    type           = "OPPORTUNISTIC"
+  }
   version {
     instance_template = google_compute_instance_template.master-us-test1-a-minimal-gce-ilb-example-com.self_link
   }
@@ -458,36 +480,63 @@ resource "google_compute_instance_group_manager" "a-master-us-test1-a-minimal-gc
 }
 
 resource "google_compute_instance_group_manager" "a-nodes-minimal-gce-ilb-example-com" {
-  base_instance_name             = "nodes"
+  base_instance_name = "nodes"
+  lifecycle {
+    ignore_changes = [target_size]
+  }
   list_managed_instances_results = "PAGINATED"
   name                           = "a-nodes-minimal-gce-ilb-example-com"
-  target_size                    = 2
+  target_size                    = 1
+  update_policy {
+    minimal_action = "REPLACE"
+    type           = "OPPORTUNISTIC"
+  }
   version {
     instance_template = google_compute_instance_template.nodes-minimal-gce-ilb-example-com.self_link
   }
   zone = "us-test1-a"
 }
 
+resource "google_compute_instance_group_manager" "b-nodes-minimal-gce-ilb-example-com" {
+  base_instance_name = "nodes"
+  lifecycle {
+    ignore_changes = [target_size]
+  }
+  list_managed_instances_results = "PAGINATED"
+  name                           = "b-nodes-minimal-gce-ilb-example-com"
+  target_size                    = 1
+  update_policy {
+    minimal_action = "REPLACE"
+    type           = "OPPORTUNISTIC"
+  }
+  version {
+    instance_template = google_compute_instance_template.nodes-minimal-gce-ilb-example-com.self_link
+  }
+  zone = "us-test1-b"
+}
+
 resource "google_compute_instance_template" "master-us-test1-a-minimal-gce-ilb-example-com" {
   can_ip_forward = true
   disk {
-    auto_delete  = true
-    boot         = true
-    device_name  = "persistent-disks-0"
-    disk_name    = ""
-    disk_size_gb = 64
-    disk_type    = "pd-standard"
-    interface    = ""
-    mode         = "READ_WRITE"
-    source       = ""
-    source_image = "https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/ubuntu-2004-focal-v20221018"
-    type         = "PERSISTENT"
+    auto_delete            = true
+    boot                   = true
+    device_name            = "persistent-disks-0"
+    disk_name              = ""
+    disk_size_gb           = 64
+    disk_type              = "pd-standard"
+    interface              = ""
+    mode                   = "READ_WRITE"
+    provisioned_iops       = 0
+    provisioned_throughput = 0
+    source                 = ""
+    source_image           = "https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/ubuntu-2604-resolute-amd64-v20221018"
+    type                   = "PERSISTENT"
   }
   labels = {
     "k8s-io-cluster-name"       = "minimal-gce-ilb-example-com"
     "k8s-io-instance-group"     = "master-us-test1-a"
-    "k8s-io-role-control-plane" = ""
-    "k8s-io-role-master"        = ""
+    "k8s-io-role-control-plane" = "control-plane"
+    "k8s-io-role-master"        = "master"
   }
   lifecycle {
     create_before_destroy = true
@@ -496,7 +545,7 @@ resource "google_compute_instance_template" "master-us-test1-a-minimal-gce-ilb-e
   metadata = {
     "cluster-name"                    = "minimal-gce-ilb.example.com"
     "kops-k8s-io-instance-group-name" = "master-us-test1-a"
-    "ssh-keys"                        = "admin: ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQCtWu40XQo8dczLsCq0OWV+hxm9uV3WxeH9Kgh4sMzQxNtoU1pvW0XdjpkBesRKGoolfWeCLXWxpyQb1IaiMkKoz7MdhQ/6UKjMjP66aFWWp3pwD0uj0HuJ7tq4gKHKRYGTaZIRWpzUiANBrjugVgA+Sd7E/mYwc/DMXkIyRZbvhQ=="
+    "ssh-keys"                        = "ubuntu: ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQCtWu40XQo8dczLsCq0OWV+hxm9uV3WxeH9Kgh4sMzQxNtoU1pvW0XdjpkBesRKGoolfWeCLXWxpyQb1IaiMkKoz7MdhQ/6UKjMjP66aFWWp3pwD0uj0HuJ7tq4gKHKRYGTaZIRWpzUiANBrjugVgA+Sd7E/mYwc/DMXkIyRZbvhQ=="
     "user-data"                       = file("${path.module}/data/google_compute_instance_template_master-us-test1-a-minimal-gce-ilb-example-com_metadata_user-data")
   }
   name_prefix = "master-us-test1-a-minimal-k0i8ah-"
@@ -521,22 +570,24 @@ resource "google_compute_instance_template" "master-us-test1-a-minimal-gce-ilb-e
 resource "google_compute_instance_template" "nodes-minimal-gce-ilb-example-com" {
   can_ip_forward = true
   disk {
-    auto_delete  = true
-    boot         = true
-    device_name  = "persistent-disks-0"
-    disk_name    = ""
-    disk_size_gb = 128
-    disk_type    = "pd-standard"
-    interface    = ""
-    mode         = "READ_WRITE"
-    source       = ""
-    source_image = "https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/ubuntu-2004-focal-v20221018"
-    type         = "PERSISTENT"
+    auto_delete            = true
+    boot                   = true
+    device_name            = "persistent-disks-0"
+    disk_name              = ""
+    disk_size_gb           = 128
+    disk_type              = "pd-standard"
+    interface              = ""
+    mode                   = "READ_WRITE"
+    provisioned_iops       = 0
+    provisioned_throughput = 0
+    source                 = ""
+    source_image           = "https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/ubuntu-2604-resolute-amd64-v20221018"
+    type                   = "PERSISTENT"
   }
   labels = {
     "k8s-io-cluster-name"   = "minimal-gce-ilb-example-com"
     "k8s-io-instance-group" = "nodes"
-    "k8s-io-role-node"      = ""
+    "k8s-io-role-node"      = "node"
   }
   lifecycle {
     create_before_destroy = true
@@ -546,7 +597,7 @@ resource "google_compute_instance_template" "nodes-minimal-gce-ilb-example-com" 
     "cluster-name"                    = "minimal-gce-ilb.example.com"
     "kops-k8s-io-instance-group-name" = "nodes"
     "kube-env"                        = "AUTOSCALER_ENV_VARS: os_distribution=ubuntu;arch=amd64;os=linux"
-    "ssh-keys"                        = "admin: ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQCtWu40XQo8dczLsCq0OWV+hxm9uV3WxeH9Kgh4sMzQxNtoU1pvW0XdjpkBesRKGoolfWeCLXWxpyQb1IaiMkKoz7MdhQ/6UKjMjP66aFWWp3pwD0uj0HuJ7tq4gKHKRYGTaZIRWpzUiANBrjugVgA+Sd7E/mYwc/DMXkIyRZbvhQ=="
+    "ssh-keys"                        = "ubuntu: ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQCtWu40XQo8dczLsCq0OWV+hxm9uV3WxeH9Kgh4sMzQxNtoU1pvW0XdjpkBesRKGoolfWeCLXWxpyQb1IaiMkKoz7MdhQ/6UKjMjP66aFWWp3pwD0uj0HuJ7tq4gKHKRYGTaZIRWpzUiANBrjugVgA+Sd7E/mYwc/DMXkIyRZbvhQ=="
     "user-data"                       = file("${path.module}/data/google_compute_instance_template_nodes-minimal-gce-ilb-example-com_metadata_user-data")
   }
   name_prefix = "nodes-minimal-gce-ilb-exa-mk47iu-"
@@ -571,6 +622,24 @@ resource "google_compute_instance_template" "nodes-minimal-gce-ilb-example-com" 
 resource "google_compute_network" "minimal-gce-ilb-example-com" {
   auto_create_subnetworks = false
   name                    = "minimal-gce-ilb-example-com"
+}
+
+resource "google_compute_region_backend_service" "api-minimal-gce-ilb-example-com" {
+  backend {
+    balancing_mode = "CONNECTION"
+    group          = google_compute_instance_group_manager.a-master-us-test1-a-minimal-gce-ilb-example-com.instance_group
+  }
+  health_checks         = [google_compute_region_health_check.api-minimal-gce-ilb-example-com.id]
+  load_balancing_scheme = "INTERNAL"
+  name                  = "api-minimal-gce-ilb-example-com"
+  protocol              = "TCP"
+}
+
+resource "google_compute_region_health_check" "api-minimal-gce-ilb-example-com" {
+  name = "api-minimal-gce-ilb-example-com"
+  tcp_health_check {
+    port = 443
+  }
 }
 
 resource "google_compute_router" "nat-minimal-gce-ilb-example-com" {
@@ -604,11 +673,11 @@ terraform {
     aws = {
       "configuration_aliases" = [aws.files]
       "source"                = "hashicorp/aws"
-      "version"               = ">= 5.0.0"
+      "version"               = ">= 6.57.1"
     }
     google = {
       "source"  = "hashicorp/google"
-      "version" = ">= 5.11.0"
+      "version" = ">= 6.8.0"
     }
   }
 }

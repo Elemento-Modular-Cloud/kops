@@ -27,11 +27,13 @@ import (
 	"k8s.io/kops/pkg/apis/nodeup"
 	"k8s.io/kops/pkg/assets"
 	"k8s.io/kops/pkg/model/resources"
+	"k8s.io/kops/pkg/nodemodel/wellknownassets"
 	"k8s.io/kops/pkg/wellknownservices"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/fitasks"
 	"k8s.io/kops/upup/pkg/fi/utils"
 	"k8s.io/kops/util/pkg/architectures"
+	"k8s.io/kops/util/pkg/vfs"
 )
 
 type NodeUpConfigBuilder interface {
@@ -68,6 +70,9 @@ type BootstrapScript struct {
 
 	// bootConfig contains the small configuration written to kube_env.yaml.
 	bootConfig fi.CloudupTaskDependentResource
+
+	// nodeupScript contains the nodeup bootstrap script, for use with Karpenter.
+	nodeupScript fi.CloudupTaskDependentResource
 }
 
 var (
@@ -77,7 +82,7 @@ var (
 )
 
 // kubeEnv returns the boot config for the instance group
-func (b *BootstrapScript) kubeEnv(ig *kops.InstanceGroup, c *fi.CloudupContext) (*nodeup.BootConfig, error) {
+func (b *BootstrapScript) kubeEnv(cluster *kops.Cluster, ig *kops.InstanceGroup, c *fi.CloudupContext) (*nodeup.BootConfig, error) {
 	wellKnownAddresses := make(WellKnownAddresses)
 
 	for _, hasAddress := range b.hasAddressTasks {
@@ -130,34 +135,83 @@ func (b *BootstrapScript) kubeEnv(ig *kops.InstanceGroup, c *fi.CloudupContext) 
 	}
 	b.bootConfig.Resource = fi.NewBytesResource(bootConfigData)
 
+	if ig.Spec.Manager == kops.InstanceManagerKarpenter {
+		assetBuilder := assets.NewAssetBuilder(vfs.NewVFSContext(), cluster.Spec.Assets, false)
+		nodeUpAssets := make(map[architectures.Architecture]*assets.MirroredAsset)
+		for _, arch := range architectures.GetSupported() {
+			asset, err := wellknownassets.NodeUpAsset(assetBuilder, arch)
+			if err != nil {
+				return nil, err
+			}
+			nodeUpAssets[arch] = asset
+		}
+
+		var nodeupScript resources.NodeUpScript
+		nodeupScript.NodeUpAssets = nodeUpAssets
+		nodeupScript.BootConfig = bootConfig
+
+		nodeupScript.WithEnvironmentVariables(cluster, ig)
+		nodeupScript.WithProxyEnv(cluster)
+		nodeupScript.WithSysctls()
+
+		nodeupScript.CompressUserData = fi.ValueOf(ig.Spec.CompressUserData)
+
+		nodeupScript.CloudProvider = string(cluster.GetCloudProvider())
+
+		if err := nodeupScript.ResolveS3Region(c.Context(), vfs.Context); err != nil {
+			return nil, err
+		}
+
+		scriptResource, err := nodeupScript.Build()
+		if err != nil {
+			return nil, err
+		}
+		scriptData, err := fi.ResourceAsBytes(scriptResource)
+		if err != nil {
+			return nil, err
+		}
+		b.nodeupScript.Resource = fi.NewBytesResource(scriptData)
+	}
+
 	return bootConfig, nil
 }
 
 func KeypairNamesForInstanceGroup(cluster *kops.Cluster, ig *kops.InstanceGroup) []string {
 	keypairs := []string{"kubernetes-ca"}
 
-	// Add keypairs for default etcd clusters (main and events, not cilium)
-	if ig.IsControlPlane() {
+	// Add keypairs for default etcd clusters (main, events, and leases, not cilium)
+	if ig.RunsEtcd() {
 		for _, etcdCluster := range cluster.Spec.EtcdClusters {
 			k := etcdCluster.Name
-			if k != "events" && k != "main" {
+			if k != "events" && k != "main" && k != "leases" {
 				// Likely cilium
 				continue
 			}
 			keypairs = append(keypairs, "etcd-manager-ca-"+k, "etcd-peers-ca-"+k)
-			// The client ca certificate is shared between events and main etcd clusters
+			// The client ca certificate is shared between events, main, and leases etcd clusters
 			keypairs = append(keypairs, "etcd-clients-ca")
 		}
 	}
 
-	if ig.HasAPIServer() {
+	// Add keypair for discovery service CA if enabled
+	if ig.IsControlPlane() {
+		if cluster.Spec.ServiceAccountIssuerDiscovery != nil &&
+			cluster.Spec.ServiceAccountIssuerDiscovery.DiscoveryService != nil &&
+			cluster.Spec.ServiceAccountIssuerDiscovery.DiscoveryService.URL != "" {
+			keypairs = append(keypairs, fi.DiscoveryCAID)
+		}
+	}
+
+	if ig.RunsAPIServer() {
 		keypairs = append(keypairs, "apiserver-aggregator-ca", "service-account", "etcd-clients-ca")
+	} else if ig.RunsKubeControllerManager() {
+		keypairs = append(keypairs, "service-account")
 	}
 
 	// Add keypairs for cilium etcd clusters (not the default etcd clusters)
 	for _, etcdCluster := range cluster.Spec.EtcdClusters {
 		k := etcdCluster.Name
-		if k == "events" || k == "main" {
+		if k == "events" || k == "main" || k == "leases" {
 			// Not cilium
 			continue
 		}
@@ -191,13 +245,13 @@ func (b *BootstrapScriptBuilder) ResourceNodeUpWithBootConfig(c *fi.CloudupModel
 		}
 	}
 
-	caTasks := map[string]*fitasks.Keypair{}
+	keypairTasks := map[string]*fitasks.Keypair{}
 	for _, keypair := range keypairNames {
 		caTaskObject, found := c.Tasks["Keypair/"+keypair]
 		if !found {
 			return nil, nil, fmt.Errorf("keypair/%s task not found", keypair)
 		}
-		caTasks[keypair] = caTaskObject.(*fitasks.Keypair)
+		keypairTasks[keypair] = caTaskObject.(*fitasks.Keypair)
 	}
 
 	task := &BootstrapScript{
@@ -206,19 +260,28 @@ func (b *BootstrapScriptBuilder) ResourceNodeUpWithBootConfig(c *fi.CloudupModel
 		cluster:   b.Cluster,
 		ig:        ig,
 		builder:   b,
-		caTasks:   caTasks,
+		caTasks:   keypairTasks,
 	}
 	task.resource.Task = task
 	task.nodeupConfig.Task = task
 	task.bootConfig.Task = task
+	task.nodeupScript.Task = task
 	c.AddTask(task)
 
 	c.AddTask(&fitasks.ManagedFile{
-		Name:      fi.PtrTo("nodeupconfig-" + ig.Name),
+		Name:      new("nodeupconfig-" + ig.Name),
 		Lifecycle: b.Lifecycle,
-		Location:  fi.PtrTo("igconfig/" + ig.Spec.Role.ToLowerString() + "/" + ig.Name + "/nodeupconfig.yaml"),
+		Location:  new("igconfig/" + ig.Spec.Role.ToLowerString() + "/" + ig.Name + "/nodeupconfig.yaml"),
 		Contents:  &task.nodeupConfig,
 	})
+	if ig.Spec.Manager == kops.InstanceManagerKarpenter {
+		c.AddTask(&fitasks.ManagedFile{
+			Name:      new("nodeupscript-" + ig.Name),
+			Lifecycle: b.Lifecycle,
+			Location:  new("igconfig/" + ig.Spec.Role.ToLowerString() + "/" + ig.Name + "/nodeupscript.sh"),
+			Contents:  &task.nodeupScript,
+		})
+	}
 	return &task.resource, &task.bootConfig, nil
 }
 
@@ -248,7 +311,7 @@ func (b *BootstrapScript) Run(c *fi.CloudupContext) error {
 		return nil
 	}
 
-	bootConfig, err := b.kubeEnv(b.ig, c)
+	bootConfig, err := b.kubeEnv(b.cluster, b.ig, c)
 	if err != nil {
 		return err
 	}
@@ -264,6 +327,10 @@ func (b *BootstrapScript) Run(c *fi.CloudupContext) error {
 	nodeupScript.CompressUserData = fi.ValueOf(b.ig.Spec.CompressUserData)
 
 	nodeupScript.CloudProvider = string(c.T.Cluster.GetCloudProvider())
+
+	if err := nodeupScript.ResolveS3Region(c.Context(), vfs.Context); err != nil {
+		return err
+	}
 
 	nodeupScriptResource, err := nodeupScript.Build()
 	if err != nil {

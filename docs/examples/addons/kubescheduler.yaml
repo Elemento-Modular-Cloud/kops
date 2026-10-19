@@ -1,6 +1,11 @@
-# This is an example "addon" object to provide additional/custom kube-scheduler configuration
-apiVersion: kubescheduler.config.k8s.io/v1beta2
+# This is an example "addon" object to provide custom kube-scheduler configuration.
+# Use with: kops create -f kubescheduler.yaml
+# Note: clientConnection.kubeconfig is managed by kOps and must not be set.
+apiVersion: kubescheduler.config.k8s.io/v1
 kind: KubeSchedulerConfiguration
-clientConnection:
-  burst: 100
-  qps: 3.1
+profiles:
+  - schedulerName: default-scheduler
+    plugins:
+      score:
+        disabled:
+          - name: NodeResourcesBalancedAllocation

@@ -17,7 +17,7 @@ func TestSingleZoneNamesAcrossGroupsAndFilteredUpdates(t *testing.T) {
 	cp3 := newControlPlaneInstanceGroup("control-plane-europe-3")
 	w1 := newControlPlaneInstanceGroup("workers-a")
 	w1.Spec.Role = kops.InstanceGroupRoleNode
-	w1.Spec.MinSize = fi.PtrTo(int32(2))
+	w1.Spec.MinSize = new(int32(2))
 	w2 := newControlPlaneInstanceGroup("workers-b")
 	w2.Spec.Role = kops.InstanceGroupRoleNode
 	b.AllInstanceGroups = []*kops.InstanceGroup{cp3, w2, cp2, w1, cp1}
@@ -37,7 +37,7 @@ func TestSingleZoneNamesAcrossGroupsAndFilteredUpdates(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(names, want[cp2.Name]) {
 		t.Fatalf("filtered names = %v, %v", names, err)
 	}
-	records, err := b.elementoDNSRecordTasksForInstanceGroup(cp2, fi.LifecycleSync, &elementotasks.DNSZone{Name: fi.PtrTo("test.k8s")})
+	records, err := b.elementoDNSRecordTasksForInstanceGroup(cp2, fi.LifecycleSync, &elementotasks.DNSZone{Name: new("test.k8s")})
 	if err != nil {
 		t.Fatal(err)
 	}

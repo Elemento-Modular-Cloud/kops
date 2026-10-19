@@ -61,7 +61,8 @@ type ClusterSpec struct {
 	// The CloudProvider to use (aws or gce)
 	// +k8s:conversion-gen=false
 	LegacyCloudProvider string `json:"cloudProvider,omitempty"`
-	// GossipConfig for the cluster assuming the use of gossip DNS
+	// GossipConfig has no effect and must not be set; gossip DNS support was removed in kOps 1.37.
+	// Deprecated: remove this field from the cluster spec.
 	GossipConfig *GossipConfig `json:"gossipConfig,omitempty"`
 	// ContainerRuntime was removed.
 	ContainerRuntime string `json:"containerRuntime,omitempty"`
@@ -113,7 +114,8 @@ type ClusterSpec struct {
 	// Note that DNSZone can either by the host name of the zone (containing dots),
 	// or can be an identifier for the zone.
 	DNSZone string `json:"dnsZone,omitempty"`
-	// DNSControllerGossipConfig for the cluster assuming the use of gossip DNS
+	// DNSControllerGossipConfig has no effect and must not be set; gossip DNS support was removed in kOps 1.37.
+	// Deprecated: remove this field from the cluster spec.
 	DNSControllerGossipConfig *DNSControllerGossipConfig `json:"dnsControllerGossipConfig,omitempty"`
 	// AdditionalSANs adds additional Subject Alternate Names to apiserver cert that kops generates
 	// +k8s:conversion-gen=false
@@ -267,6 +269,7 @@ type KarpenterConfig struct {
 	LogEncoding   string             `json:"logEncoding,omitempty"`
 	LogLevel      string             `json:"logLevel,omitempty"`
 	Image         string             `json:"image,omitempty"`
+	FeatureGates  string             `json:"featureGates,omitempty"`
 	MemoryLimit   *resource.Quantity `json:"memoryLimit,omitempty"`
 	MemoryRequest *resource.Quantity `json:"memoryRequest,omitempty"`
 	CPURequest    *resource.Quantity `json:"cpuRequest,omitempty"`
@@ -276,10 +279,18 @@ type KarpenterConfig struct {
 type ServiceAccountIssuerDiscoveryConfig struct {
 	// DiscoveryStore is the VFS path to where OIDC Issuer Discovery metadata is stored.
 	DiscoveryStore string `json:"discoveryStore,omitempty"`
+	// DiscoveryService configures discovery using a hosted discovery service.
+	DiscoveryService *DiscoveryServiceOptions `json:"discoveryService,omitempty"`
 	// EnableAWSOIDCProvider will provision an AWS OIDC provider that trusts the ServiceAccount Issuer
 	EnableAWSOIDCProvider bool `json:"enableAWSOIDCProvider,omitempty"`
 	// AdditionalAudiences adds user defined audiences to the provisioned AWS OIDC provider
 	AdditionalAudiences []string `json:"additionalAudiences,omitempty"`
+}
+
+// DiscoveryServiceOptions configures a hosted discovery service.
+type DiscoveryServiceOptions struct {
+	// URL is the base URL of the discovery service, including universe ID if applicable.
+	URL string `json:"url,omitempty"`
 }
 
 // ServiceAccountExternalPermissions grants a ServiceAccount permissions to external resources.
@@ -480,7 +491,7 @@ const (
 	LoadBalancerTypeInternal LoadBalancerType = "Internal"
 )
 
-// LoadBalancerClass string describes LoadBalancer classes (classic, network)
+// LoadBalancerClass string describes LoadBalancer classes (network)
 type LoadBalancerClass string
 
 const (
@@ -489,7 +500,8 @@ const (
 )
 
 type AccessLogSpec struct {
-	// Interval is publishing interval in minutes. This parameter is only used with classic load balancer.
+	// Interval is unused
+	// +k8s:conversion-gen=false
 	Interval int `json:"interval,omitempty"`
 	// Bucket is S3 bucket name to store the logs in
 	Bucket *string `json:"bucket,omitempty"`
@@ -498,7 +510,6 @@ type AccessLogSpec struct {
 }
 
 var SupportedLoadBalancerClasses = []string{
-	string(LoadBalancerClassClassic),
 	string(LoadBalancerClassNetwork),
 }
 
@@ -514,11 +525,12 @@ type LoadBalancerSubnetSpec struct {
 
 // LoadBalancerAccessSpec provides configuration details related to API LoadBalancer and its access
 type LoadBalancerAccessSpec struct {
-	// LoadBalancerClass specifies the class of load balancer to create: Classic, Network
+	// LoadBalancerClass specifies the class of load balancer to create: Network
 	Class LoadBalancerClass `json:"class,omitempty"`
 	// Type of load balancer to create may Public or Internal.
 	Type LoadBalancerType `json:"type,omitempty"`
-	// IdleTimeoutSeconds sets the timeout of the api loadbalancer.
+	// IdleTimeoutSeconds is unused
+	// +k8s:conversion-gen=false
 	IdleTimeoutSeconds *int64 `json:"idleTimeoutSeconds,omitempty"`
 	// SecurityGroupOverride overrides the default Kops created SG for the load balancer.
 	SecurityGroupOverride *string `json:"securityGroupOverride,omitempty"`
@@ -578,6 +590,9 @@ type KubeDNSConfig struct {
 	MemoryLimit *resource.Quantity `json:"memoryLimit,omitempty"`
 	// NodeLocalDNS specifies the configuration for the node-local-dns addon
 	NodeLocalDNS *NodeLocalDNSConfig `json:"nodeLocalDNS,omitempty"`
+	// PodAnnotations makes possible to add additional annotations to CoreDNS Pods.
+	// Default: none
+	PodAnnotations map[string]string `json:"podAnnotations,omitempty"`
 }
 
 // NodeLocalDNSConfig are options of the node-local-dns
@@ -624,6 +639,9 @@ type ExternalDNSConfig struct {
 	// 'dns-controller' will use kOps DNS Controller.
 	// 'external-dns' will use kubernetes-sigs/external-dns.
 	Provider ExternalDNSProvider `json:"provider,omitempty"`
+	// PriorityClassName overrides the priorityClassName on the dns-controller pod.
+	// Defaults to "system-cluster-critical" when unset.
+	PriorityClassName *string `json:"priorityClassName,omitempty"`
 }
 
 // EtcdProviderType describes etcd cluster provisioning types (Standalone, Manager)
@@ -636,7 +654,7 @@ const (
 
 // EtcdClusterSpec is the etcd cluster specification
 type EtcdClusterSpec struct {
-	// Name is the name of the etcd cluster (main, events etc)
+	// Name is the name of the etcd cluster (main, events, leases etc)
 	Name string `json:"name,omitempty"`
 	// Provider is the provider used to run etcd: Manager, Legacy.
 	// Defaults to Manager.
@@ -692,6 +710,8 @@ type EtcdManagerSpec struct {
 	DiscoveryPollInterval *metav1.Duration `json:"discoveryPollInterval,omitempty"`
 	// ListenMetricsURLs is the list of URLs to listen on that will respond to both the /metrics and /health endpoints
 	ListenMetricsURLs []string `json:"listenMetricsURLs,omitempty"`
+	// ListenClientHTTPURLs is the list of URLs to listen on for HTTP-only client traffic
+	ListenClientHTTPURLs []string `json:"listenClientHTTPURLs,omitempty"`
 	// LogLevel allows the klog library verbose log level to be set for etcd-manager. The default is 6.
 	// https://github.com/google/glog#verbose-logging
 	LogLevel *int32 `json:"logLevel,omitempty"`
@@ -894,4 +914,8 @@ type WarmPoolSpec struct {
 	// EnableLifecycleHook determines if an ASG lifecycle hook will be added ensuring that nodeup runs to completion.
 	// Note that the metadata API must be protected from arbitrary Pods when this is enabled.
 	EnableLifecycleHook bool `json:"enableLifecycleHook,omitempty"`
+	// LifecycleHookTimeout is the timeout for the ASG lifecycle hook in seconds.
+	LifecycleHookTimeout *int32 `json:"lifecycleHookTimeout,omitempty"`
+	// AdditionalImages is a list of additional container images to pull into the warm pool instances.
+	AdditionalImages []string `json:"additionalImages,omitempty"`
 }

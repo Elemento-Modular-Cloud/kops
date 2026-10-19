@@ -38,35 +38,33 @@ import (
 // Default Machine types for various types of instance group machine
 const (
 	defaultNodeMachineTypeGCE      = "e2-medium"
-	defaultNodeMachineTypeDO       = "s-2vcpu-4gb"
+	defaultNodeMachineTypeDO       = "s-2vcpu-4gb-amd"
 	defaultNodeMachineTypeAzure    = "Standard_B2s"
-	defaultNodeMachineTypeHetzner  = "cx22"
+	defaultNodeMachineTypeHetzner  = "cx23"
 	defaultNodeMachineTypeScaleway = "DEV1-M"
+	defaultNodeMachineTypeLinode   = "g6-standard-2"
 	defaultNodeMachineTypeElemento = "neon"
 
 	defaultBastionMachineTypeGCE     = "e2-micro"
 	defaultBastionMachineTypeAzure   = "Standard_B2s"
-	defaultBastionMachineTypeHetzner = "cx11"
+	defaultBastionMachineTypeHetzner = "cx23"
+	defaultBastionMachineTypeLinode  = "g6-standard-1"
 
 	defaultMasterMachineTypeGCE      = "e2-medium"
-	defaultMasterMachineTypeDO       = "s-2vcpu-4gb"
+	defaultMasterMachineTypeDO       = "s-2vcpu-4gb-amd"
 	defaultMasterMachineTypeAzure    = "Standard_B2s"
-	defaultMasterMachineTypeHetzner  = "cx22"
+	defaultMasterMachineTypeHetzner  = "cx23"
 	defaultMasterMachineTypeScaleway = "DEV1-M"
+	defaultMasterMachineTypeLinode   = "g6-standard-2"
 	defaultMasterMachineTypeElemento = "neon"
 
-	defaultDOImageFocal       = "ubuntu-20-04-x64"
-	defaultHetznerImageFocal  = "ubuntu-20.04"
-	defaultScalewayImageFocal = "ubuntu_focal"
-	defaultElementoImageFocal  = "ubuntu-20-04"
-	defaultDOImageJammy       = "ubuntu-22-04-x64"
-	defaultHetznerImageJammy  = "ubuntu-22.04"
-	defaultScalewayImageJammy = "ubuntu_jammy"
-	defaultElementoImageJammy  = "ubuntu-22-04"
 	defaultDOImageNoble       = "ubuntu-24-04-x64"
 	defaultHetznerImageNoble  = "ubuntu-24.04"
 	defaultScalewayImageNoble = "ubuntu_noble"
-	defaultElementoImageNoble  = "ubuntu-24-04"
+	defaultLinodeImageNoble   = "linode/ubuntu24.04"
+	defaultElementoImageFocal = "ubuntu-20-04"
+	defaultElementoImageJammy = "ubuntu-22-04"
+	defaultElementoImageNoble = "ubuntu-24-04"
 )
 
 // TODO: this hardcoded list can be replaced with DescribeInstanceTypes' DedicatedHostsSupported field
@@ -84,6 +82,7 @@ func PopulateInstanceGroupSpec(cluster *kops.Cluster, input *kops.InstanceGroup,
 	klog.V(2).Infof("Populating instance group spec for %q", input.GetName())
 
 	var err error
+	// TODO: Pass in `cloud` to shift validation to ValidateInstanceGroup
 	err = validation.ValidateInstanceGroup(input, nil, false).ToAggregate()
 	if err != nil {
 		return nil, fmt.Errorf("failed validating input specs: %w", err)
@@ -104,12 +103,12 @@ func PopulateInstanceGroupSpec(cluster *kops.Cluster, input *kops.InstanceGroup,
 
 		}
 		if ig.Spec.MinSize == nil {
-			ig.Spec.MinSize = fi.PtrTo(int32(1))
+			ig.Spec.MinSize = new(int32(1))
 		}
 		if ig.Spec.MaxSize == nil {
-			ig.Spec.MaxSize = fi.PtrTo(int32(1))
+			ig.Spec.MaxSize = new(int32(1))
 		}
-	} else if ig.Spec.Role == kops.InstanceGroupRoleBastion {
+	} else if ig.Spec.Role.HasBastion() {
 		if ig.Spec.MachineType == "" {
 			ig.Spec.MachineType, err = defaultMachineType(cloud, cluster, ig)
 			if err != nil {
@@ -117,14 +116,24 @@ func PopulateInstanceGroupSpec(cluster *kops.Cluster, input *kops.InstanceGroup,
 			}
 		}
 		if ig.Spec.MinSize == nil {
-			ig.Spec.MinSize = fi.PtrTo(int32(1))
+			ig.Spec.MinSize = new(int32(1))
 		}
 		if ig.Spec.MaxSize == nil {
-			ig.Spec.MaxSize = fi.PtrTo(int32(1))
+			ig.Spec.MaxSize = new(int32(1))
 		}
 	} else {
 		if ig.IsAPIServerOnly() && !featureflag.APIServerNodes.Enabled() {
 			return nil, fmt.Errorf("apiserver nodes requires the APIServerNodes feature flag to be enabled")
+		}
+		if !featureflag.ExperimentalRoles.Enabled() {
+			switch {
+			case ig.Spec.Role.HasEtcd():
+				return nil, fmt.Errorf("etcd nodes requires the ExperimentalNodes feature flag to be enabled")
+			case ig.Spec.Role.HasScheduler():
+				return nil, fmt.Errorf("scheduler nodes requires the ExperimentalNodes feature flag to be enabled")
+			case ig.Spec.Role.HasKubeControllerManager():
+				return nil, fmt.Errorf("kube-controller-manager nodes requires the ExperimentalNodes feature flag to be enabled")
+			}
 		}
 		if ig.Spec.MachineType == "" {
 			ig.Spec.MachineType, err = defaultMachineType(cloud, cluster, ig)
@@ -132,11 +141,13 @@ func PopulateInstanceGroupSpec(cluster *kops.Cluster, input *kops.InstanceGroup,
 				return nil, fmt.Errorf("error assigning default machine type for nodes: %v", err)
 			}
 		}
-		if ig.Spec.MinSize == nil {
-			ig.Spec.MinSize = fi.PtrTo(int32(2))
-		}
-		if ig.Spec.MaxSize == nil {
-			ig.Spec.MaxSize = fi.PtrTo(int32(2))
+		if ig.Spec.Manager != kops.InstanceManagerKarpenter {
+			if ig.Spec.MinSize == nil {
+				ig.Spec.MinSize = new(int32(2))
+			}
+			if ig.Spec.MaxSize == nil {
+				ig.Spec.MaxSize = new(int32(2))
+			}
 		}
 	}
 
@@ -197,14 +208,8 @@ func PopulateInstanceGroupSpec(cluster *kops.Cluster, input *kops.InstanceGroup,
 	}
 
 	hasGPU := false
-	clusterNvidia := false
-	if cluster.Spec.Containerd != nil && cluster.Spec.Containerd.NvidiaGPU != nil && fi.ValueOf(cluster.Spec.Containerd.NvidiaGPU.Enabled) {
-		clusterNvidia = true
-	}
-	igNvidia := false
-	if ig.Spec.Containerd != nil && ig.Spec.Containerd.NvidiaGPU != nil && fi.ValueOf(ig.Spec.Containerd.NvidiaGPU.Enabled) {
-		igNvidia = true
-	}
+	clusterNvidia := cluster.Spec.Containerd != nil && cluster.Spec.Containerd.NvidiaGPU != nil && fi.ValueOf(cluster.Spec.Containerd.NvidiaGPU.Enabled)
+	igNvidia := ig.Spec.Containerd != nil && ig.Spec.Containerd.NvidiaGPU != nil && fi.ValueOf(ig.Spec.Containerd.NvidiaGPU.Enabled)
 
 	switch cluster.GetCloudProvider() {
 	case kops.CloudProviderAWS:
@@ -237,6 +242,14 @@ func PopulateInstanceGroupSpec(cluster *kops.Cluster, input *kops.InstanceGroup,
 		}
 	}
 
+	// Label nodes that have gVisor enabled so the RuntimeClass nodeSelector works.
+	if ig.HasGVisor() {
+		if ig.Spec.NodeLabels == nil {
+			ig.Spec.NodeLabels = make(map[string]string)
+		}
+		ig.Spec.NodeLabels["kops.k8s.io/gvisor"] = "1"
+	}
+
 	if ig.Spec.Manager == "" {
 		ig.Spec.Manager = kops.InstanceManagerCloudGroup
 	}
@@ -255,7 +268,7 @@ func PopulateInstanceGroupSpec(cluster *kops.Cluster, input *kops.InstanceGroup,
 		}
 		// A few settings in Kubelet override those in ControlPlaneKubelet. I'm not sure why.
 		if cluster.Spec.Kubelet != nil && cluster.Spec.Kubelet.AnonymousAuth != nil && !*cluster.Spec.Kubelet.AnonymousAuth {
-			igKubeletConfig.AnonymousAuth = fi.PtrTo(false)
+			igKubeletConfig.AnonymousAuth = new(false)
 		}
 	} else {
 		if cluster.Spec.Kubelet != nil {
@@ -297,12 +310,29 @@ func PopulateInstanceGroupSpec(cluster *kops.Cluster, input *kops.InstanceGroup,
 			// (Even though the value is empty, we still expect <Key>=<Value>:<Effect>)
 			taints.Insert(nodelabels.RoleLabelAPIServer16 + "=:" + string(v1.TaintEffectNoSchedule))
 		}
+		if ig.IsEtcdOnly() {
+			// (Even though the value is empty, we still expect <Key>=<Value>:<Effect>)
+			taints.Insert(nodelabels.RoleLabelEtcd + "=:" + string(v1.TaintEffectNoSchedule))
+		}
+		if ig.IsKubeControllerManagerOnly() {
+			// (Even though the value is empty, we still expect <Key>=<Value>:<Effect>)
+			taints.Insert(nodelabels.RoleLabelKubeControllerManager + "=:" + string(v1.TaintEffectNoSchedule))
+		}
+		if ig.IsSchedulerOnly() {
+			// (Even though the value is empty, we still expect <Key>=<Value>:<Effect>)
+			taints.Insert(nodelabels.RoleLabelScheduler + "=:" + string(v1.TaintEffectNoSchedule))
+		}
+		if ig.Spec.Manager == kops.InstanceManagerKarpenter {
+			// Karpenter v1 expects its nodes to register with this taint as a race guard; it removes the taint once
+			// the NodeClaim is synced. The empty value still requires the <Key>=<Value>:<Effect> form.
+			taints.Insert("karpenter.sh/unregistered=:" + string(v1.TaintEffectNoExecute))
+		}
 	}
 
 	igKubeletConfig.Taints = taints.List()
 
 	if useSecureKubelet {
-		igKubeletConfig.AnonymousAuth = fi.PtrTo(false)
+		igKubeletConfig.AnonymousAuth = new(false)
 	}
 
 	ig.Spec.Kubelet = igKubeletConfig
@@ -325,36 +355,36 @@ func defaultMachineType(cloud fi.Cloud, cluster *kops.Cluster, ig *kops.Instance
 		return instanceType, nil
 
 	case kops.CloudProviderGCE:
-		switch ig.Spec.Role {
-		case kops.InstanceGroupRoleControlPlane:
+		switch {
+		case ig.Spec.Role.IsControlPlaneType():
 			return defaultMasterMachineTypeGCE, nil
 
-		case kops.InstanceGroupRoleNode:
+		case ig.Spec.Role.HasNode():
 			return defaultNodeMachineTypeGCE, nil
 
-		case kops.InstanceGroupRoleBastion:
+		case ig.Spec.Role.HasBastion():
 			return defaultBastionMachineTypeGCE, nil
 		}
 
 	case kops.CloudProviderDO:
-		switch ig.Spec.Role {
-		case kops.InstanceGroupRoleControlPlane:
+		switch {
+		case ig.Spec.Role.IsControlPlaneType():
 			return defaultMasterMachineTypeDO, nil
 
-		case kops.InstanceGroupRoleNode:
+		case ig.Spec.Role.HasNode():
 			return defaultNodeMachineTypeDO, nil
 
 		}
 
 	case kops.CloudProviderHetzner:
-		switch ig.Spec.Role {
-		case kops.InstanceGroupRoleControlPlane:
+		switch {
+		case ig.Spec.Role.IsControlPlaneType():
 			return defaultMasterMachineTypeHetzner, nil
 
-		case kops.InstanceGroupRoleNode:
+		case ig.Spec.Role.HasNode():
 			return defaultNodeMachineTypeHetzner, nil
 
-		case kops.InstanceGroupRoleBastion:
+		case ig.Spec.Role.HasBastion():
 			return defaultBastionMachineTypeHetzner, nil
 		}
 
@@ -366,24 +396,36 @@ func defaultMachineType(cloud fi.Cloud, cluster *kops.Cluster, ig *kops.Instance
 		return instanceType, nil
 
 	case kops.CloudProviderAzure:
-		switch ig.Spec.Role {
-		case kops.InstanceGroupRoleControlPlane:
+		switch {
+		case ig.Spec.Role.IsControlPlaneType():
 			return defaultMasterMachineTypeAzure, nil
 
-		case kops.InstanceGroupRoleNode:
+		case ig.Spec.Role.HasNode():
 			return defaultNodeMachineTypeAzure, nil
 
-		case kops.InstanceGroupRoleBastion:
+		case ig.Spec.Role.HasBastion():
 			return defaultBastionMachineTypeAzure, nil
 		}
 
 	case kops.CloudProviderScaleway:
-		switch ig.Spec.Role {
-		case kops.InstanceGroupRoleControlPlane:
+		switch {
+		case ig.Spec.Role.IsControlPlaneType():
 			return defaultMasterMachineTypeScaleway, nil
 
-		case kops.InstanceGroupRoleNode:
+		case ig.Spec.Role.HasNode():
 			return defaultNodeMachineTypeScaleway, nil
+		}
+
+	case kops.CloudProviderLinode:
+		switch {
+		case ig.Spec.Role.IsControlPlaneType():
+			return defaultMasterMachineTypeLinode, nil
+
+		case ig.Spec.Role.HasNode():
+			return defaultNodeMachineTypeLinode, nil
+
+		case ig.Spec.Role.HasBastion():
+			return defaultBastionMachineTypeLinode, nil
 		}
 
 	case kops.CloudProviderElemento:

@@ -20,7 +20,7 @@ locals {
   subnet_utility-us-test-1a_id      = aws_subnet.utility-us-test-1a-private-shared-ip-example-com.id
   vpc_cidr_block                    = data.aws_vpc.private-shared-ip-example-com.cidr_block
   vpc_id                            = "vpc-12345678"
-  vpc_ipv6_cidr_block               = data.aws_vpc.private-shared-ip-example-com.ipv6_cidr_block
+  vpc_ipv6_cidr_block               = element(concat([for a in data.aws_vpc.private-shared-ip-example-com.ipv6_cidr_block_associations : a.ipv6_cidr_block if a.state == "associated"], [""]), 0)
   vpc_ipv6_cidr_length              = local.vpc_ipv6_cidr_block == "" ? null : tonumber(regex(".*/(\\d+)", local.vpc_ipv6_cidr_block)[0])
 }
 
@@ -109,7 +109,7 @@ output "vpc_id" {
 }
 
 output "vpc_ipv6_cidr_block" {
-  value = data.aws_vpc.private-shared-ip-example-com.ipv6_cidr_block
+  value = element(concat([for a in data.aws_vpc.private-shared-ip-example-com.ipv6_cidr_block_associations : a.ipv6_cidr_block if a.state == "associated"], [""]), 0)
 }
 
 output "vpc_ipv6_cidr_length" {
@@ -177,7 +177,6 @@ resource "aws_autoscaling_group" "master-us-test-1a-masters-private-shared-ip-ex
     id      = aws_launch_template.master-us-test-1a-masters-private-shared-ip-example-com.id
     version = aws_launch_template.master-us-test-1a-masters-private-shared-ip-example-com.latest_version
   }
-  load_balancers        = [aws_elb.api-private-shared-ip-example-com.id]
   max_instance_lifetime = 0
   max_size              = 1
   metrics_granularity   = "1Minute"
@@ -234,6 +233,7 @@ resource "aws_autoscaling_group" "master-us-test-1a-masters-private-shared-ip-ex
     propagate_at_launch = true
     value               = "owned"
   }
+  target_group_arns   = [aws_lb_target_group.tcp-private-shared-ip-exa-g7j47a.id]
   vpc_zone_identifier = [aws_subnet.us-test-1a-private-shared-ip-example-com.id]
 }
 
@@ -405,34 +405,6 @@ resource "aws_ebs_volume" "us-test-1a-etcd-main-private-shared-ip-example-com" {
   type       = "gp3"
 }
 
-resource "aws_elb" "api-private-shared-ip-example-com" {
-  connection_draining         = true
-  connection_draining_timeout = 300
-  cross_zone_load_balancing   = false
-  health_check {
-    healthy_threshold   = 2
-    interval            = 10
-    target              = "SSL:443"
-    timeout             = 5
-    unhealthy_threshold = 2
-  }
-  idle_timeout = 300
-  listener {
-    instance_port     = 443
-    instance_protocol = "TCP"
-    lb_port           = 443
-    lb_protocol       = "TCP"
-  }
-  name            = "api-private-shared-ip-exa-ohatqj"
-  security_groups = [aws_security_group.api-elb-private-shared-ip-example-com.id]
-  subnets         = [aws_subnet.utility-us-test-1a-private-shared-ip-example-com.id]
-  tags = {
-    "KubernetesCluster"                                   = "private-shared-ip.example.com"
-    "Name"                                                = "api.private-shared-ip.example.com"
-    "kubernetes.io/cluster/private-shared-ip.example.com" = "owned"
-  }
-}
-
 resource "aws_iam_instance_profile" "bastions-private-shared-ip-example-com" {
   name = "bastions.private-shared-ip.example.com"
   role = aws_iam_role.bastions-private-shared-ip-example-com.name
@@ -493,22 +465,10 @@ resource "aws_iam_role" "nodes-private-shared-ip-example-com" {
   }
 }
 
-resource "aws_iam_role_policy" "bastions-private-shared-ip-example-com" {
-  name   = "bastions.private-shared-ip.example.com"
-  policy = file("${path.module}/data/aws_iam_role_policy_bastions.private-shared-ip.example.com_policy")
-  role   = aws_iam_role.bastions-private-shared-ip-example-com.name
-}
-
 resource "aws_iam_role_policy" "masters-private-shared-ip-example-com" {
   name   = "masters.private-shared-ip.example.com"
   policy = file("${path.module}/data/aws_iam_role_policy_masters.private-shared-ip.example.com_policy")
   role   = aws_iam_role.masters-private-shared-ip-example-com.name
-}
-
-resource "aws_iam_role_policy" "nodes-private-shared-ip-example-com" {
-  name   = "nodes.private-shared-ip.example.com"
-  policy = file("${path.module}/data/aws_iam_role_policy_nodes.private-shared-ip.example.com_policy")
-  role   = aws_iam_role.nodes-private-shared-ip-example-com.name
 }
 
 resource "aws_key_pair" "kubernetes-private-shared-ip-example-com-c4a6ed9aa889b9e2c39cd663eb9c7157" {
@@ -571,6 +531,17 @@ resource "aws_launch_template" "bastion-private-shared-ip-example-com" {
   }
   tag_specifications {
     resource_type = "volume"
+    tags = {
+      "KubernetesCluster"                                   = "private-shared-ip.example.com"
+      "Name"                                                = "bastion.private-shared-ip.example.com"
+      "aws-node-termination-handler/managed"                = ""
+      "k8s.io/role/bastion"                                 = "1"
+      "kops.k8s.io/instancegroup"                           = "bastion"
+      "kubernetes.io/cluster/private-shared-ip.example.com" = "owned"
+    }
+  }
+  tag_specifications {
+    resource_type = "network-interface"
     tags = {
       "KubernetesCluster"                                   = "private-shared-ip.example.com"
       "Name"                                                = "bastion.private-shared-ip.example.com"
@@ -661,6 +632,21 @@ resource "aws_launch_template" "master-us-test-1a-masters-private-shared-ip-exam
       "kubernetes.io/cluster/private-shared-ip.example.com"                                                   = "owned"
     }
   }
+  tag_specifications {
+    resource_type = "network-interface"
+    tags = {
+      "KubernetesCluster"                                                                                     = "private-shared-ip.example.com"
+      "Name"                                                                                                  = "master-us-test-1a.masters.private-shared-ip.example.com"
+      "aws-node-termination-handler/managed"                                                                  = ""
+      "k8s.io/cluster-autoscaler/node-template/label/kops.k8s.io/kops-controller-pki"                         = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node-role.kubernetes.io/control-plane"                   = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node.kubernetes.io/exclude-from-external-load-balancers" = ""
+      "k8s.io/role/control-plane"                                                                             = "1"
+      "k8s.io/role/master"                                                                                    = "1"
+      "kops.k8s.io/instancegroup"                                                                             = "master-us-test-1a"
+      "kubernetes.io/cluster/private-shared-ip.example.com"                                                   = "owned"
+    }
+  }
   tags = {
     "KubernetesCluster"                                                                                     = "private-shared-ip.example.com"
     "Name"                                                                                                  = "master-us-test-1a.masters.private-shared-ip.example.com"
@@ -737,6 +723,18 @@ resource "aws_launch_template" "nodes-private-shared-ip-example-com" {
       "kubernetes.io/cluster/private-shared-ip.example.com"                        = "owned"
     }
   }
+  tag_specifications {
+    resource_type = "network-interface"
+    tags = {
+      "KubernetesCluster"                                                          = "private-shared-ip.example.com"
+      "Name"                                                                       = "nodes.private-shared-ip.example.com"
+      "aws-node-termination-handler/managed"                                       = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node-role.kubernetes.io/node" = ""
+      "k8s.io/role/node"                                                           = "1"
+      "kops.k8s.io/instancegroup"                                                  = "nodes"
+      "kubernetes.io/cluster/private-shared-ip.example.com"                        = "owned"
+    }
+  }
   tags = {
     "KubernetesCluster"                                                          = "private-shared-ip.example.com"
     "Name"                                                                       = "nodes.private-shared-ip.example.com"
@@ -747,6 +745,22 @@ resource "aws_launch_template" "nodes-private-shared-ip-example-com" {
     "kubernetes.io/cluster/private-shared-ip.example.com"                        = "owned"
   }
   user_data = filebase64("${path.module}/data/aws_launch_template_nodes.private-shared-ip.example.com_user_data")
+}
+
+resource "aws_lb" "api-private-shared-ip-example-com" {
+  enable_cross_zone_load_balancing = false
+  internal                         = false
+  load_balancer_type               = "network"
+  name                             = "api-private-shared-ip-exa-ohatqj"
+  security_groups                  = [aws_security_group.api-elb-private-shared-ip-example-com.id]
+  subnet_mapping {
+    subnet_id = aws_subnet.utility-us-test-1a-private-shared-ip-example-com.id
+  }
+  tags = {
+    "KubernetesCluster"                                   = "private-shared-ip.example.com"
+    "Name"                                                = "api.private-shared-ip.example.com"
+    "kubernetes.io/cluster/private-shared-ip.example.com" = "owned"
+  }
 }
 
 resource "aws_lb" "bastion-private-shared-ip-example-com" {
@@ -763,6 +777,16 @@ resource "aws_lb" "bastion-private-shared-ip-example-com" {
     "Name"                                                = "bastion.private-shared-ip.example.com"
     "kubernetes.io/cluster/private-shared-ip.example.com" = "owned"
   }
+}
+
+resource "aws_lb_listener" "api-private-shared-ip-example-com-443" {
+  default_action {
+    target_group_arn = aws_lb_target_group.tcp-private-shared-ip-exa-g7j47a.id
+    type             = "forward"
+  }
+  load_balancer_arn = aws_lb.api-private-shared-ip-example-com.id
+  port              = 443
+  protocol          = "TCP"
 }
 
 resource "aws_lb_listener" "bastion-private-shared-ip-example-com-22" {
@@ -790,6 +814,26 @@ resource "aws_lb_target_group" "bastion-private-shared-ip-eepmph" {
   tags = {
     "KubernetesCluster"                                   = "private-shared-ip.example.com"
     "Name"                                                = "bastion-private-shared-ip-eepmph"
+    "kubernetes.io/cluster/private-shared-ip.example.com" = "owned"
+  }
+  vpc_id = "vpc-12345678"
+}
+
+resource "aws_lb_target_group" "tcp-private-shared-ip-exa-g7j47a" {
+  connection_termination = "true"
+  deregistration_delay   = "30"
+  health_check {
+    healthy_threshold   = 2
+    interval            = 10
+    protocol            = "TCP"
+    unhealthy_threshold = 2
+  }
+  name     = "tcp-private-shared-ip-exa-g7j47a"
+  port     = 443
+  protocol = "TCP"
+  tags = {
+    "KubernetesCluster"                                   = "private-shared-ip.example.com"
+    "Name"                                                = "tcp-private-shared-ip-exa-g7j47a"
     "kubernetes.io/cluster/private-shared-ip.example.com" = "owned"
   }
   vpc_id = "vpc-12345678"
@@ -826,8 +870,8 @@ resource "aws_route" "route-private-us-test-1a-0-0-0-0--0" {
 resource "aws_route53_record" "api-private-shared-ip-example-com" {
   alias {
     evaluate_target_health = false
-    name                   = aws_elb.api-private-shared-ip-example-com.dns_name
-    zone_id                = aws_elb.api-private-shared-ip-example-com.zone_id
+    name                   = aws_lb.api-private-shared-ip-example-com.dns_name
+    zone_id                = aws_lb.api-private-shared-ip-example-com.zone_id
   }
   name    = "api.private-shared-ip.example.com"
   type    = "A"
@@ -837,8 +881,8 @@ resource "aws_route53_record" "api-private-shared-ip-example-com" {
 resource "aws_route53_record" "api-private-shared-ip-example-com-AAAA" {
   alias {
     evaluate_target_health = false
-    name                   = aws_elb.api-private-shared-ip-example-com.dns_name
-    zone_id                = aws_elb.api-private-shared-ip-example-com.zone_id
+    name                   = aws_lb.api-private-shared-ip-example-com.dns_name
+    zone_id                = aws_lb.api-private-shared-ip-example-com.zone_id
   }
   name    = "api.private-shared-ip.example.com"
   type    = "AAAA"
@@ -903,6 +947,14 @@ resource "aws_s3_object" "kops-version-txt" {
   bucket                 = "testingBucket"
   content                = file("${path.module}/data/aws_s3_object_kops-version.txt_content")
   key                    = "clusters.example.com/private-shared-ip.example.com/kops-version.txt"
+  provider               = aws.files
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_object" "manifests-channels-kops-channels" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_object_manifests-channels-kops-channels_content")
+  key                    = "clusters.example.com/private-shared-ip.example.com/manifests/channels/kops-channels.yaml"
   provider               = aws.files
   server_side_encryption = "AES256"
 }
@@ -1412,7 +1464,7 @@ terraform {
     aws = {
       "configuration_aliases" = [aws.files]
       "source"                = "hashicorp/aws"
-      "version"               = ">= 5.0.0"
+      "version"               = ">= 6.57.1"
     }
   }
 }

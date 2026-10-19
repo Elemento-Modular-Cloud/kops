@@ -20,11 +20,13 @@ import (
 	"context"
 	"fmt"
 
-	"google.golang.org/api/storage/v1"
+	"cloud.google.com/go/iam"
+	"cloud.google.com/go/iam/apiv1/iampb"
 	"k8s.io/klog/v2"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce"
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraform"
+	"k8s.io/kops/upup/pkg/fi/cloudup/terraformWriter"
 )
 
 // StorageBucketIAM represents an IAM rule on a google cloud storage bucket
@@ -33,12 +35,12 @@ type StorageBucketIAM struct {
 	Name      *string
 	Lifecycle fi.Lifecycle
 
-	Bucket *string
-	Member *string
-	Role   *string
+	Bucket               *string
+	MemberServiceAccount *ServiceAccount
+	Role                 *string
 }
 
-var _ fi.CompareWithID = &StorageBucketIAM{}
+var _ fi.CompareWithID = (*StorageBucketIAM)(nil)
 
 func (e *StorageBucketIAM) CompareWithID() *string {
 	return e.Name
@@ -50,11 +52,11 @@ func (e *StorageBucketIAM) Find(c *fi.CloudupContext) (*StorageBucketIAM, error)
 	cloud := c.T.Cloud.(gce.GCECloud)
 
 	bucket := fi.ValueOf(e.Bucket)
-	member := fi.ValueOf(e.Member)
+	member := "serviceAccount:" + fi.ValueOf(e.MemberServiceAccount.Email)
 	role := fi.ValueOf(e.Role)
 
 	klog.V(2).Infof("Checking GCS bucket IAM for gs://%s for %s", bucket, member)
-	policy, err := cloud.Storage().Buckets.GetIamPolicy(bucket).Context(ctx).Do()
+	policy, err := cloud.Storage().Bucket(bucket).IAM().V3().Policy(ctx)
 	if err != nil {
 		if gce.IsNotFound(err) {
 			return nil, nil
@@ -69,7 +71,7 @@ func (e *StorageBucketIAM) Find(c *fi.CloudupContext) (*StorageBucketIAM, error)
 
 	actual := &StorageBucketIAM{}
 	actual.Bucket = e.Bucket
-	actual.Member = e.Member
+	actual.MemberServiceAccount = e.MemberServiceAccount
 	actual.Role = e.Role
 
 	// Ignore "system" fields
@@ -87,7 +89,10 @@ func (_ *StorageBucketIAM) CheckChanges(a, e, changes *StorageBucketIAM) error {
 	if fi.ValueOf(e.Bucket) == "" {
 		return fi.RequiredField("Bucket")
 	}
-	if fi.ValueOf(e.Member) == "" {
+	if e.MemberServiceAccount == nil {
+		return fi.RequiredField("MemberServiceAccount")
+	}
+	if fi.ValueOf(e.MemberServiceAccount.Email) == "" {
 		return fi.RequiredField("Member")
 	}
 	if fi.ValueOf(e.Role) == "" {
@@ -100,12 +105,12 @@ func (_ *StorageBucketIAM) RenderGCE(t *gce.GCEAPITarget, a, e, changes *Storage
 	ctx := context.TODO()
 
 	bucket := fi.ValueOf(e.Bucket)
-	member := fi.ValueOf(e.Member)
+	member := "serviceAccount:" + fi.ValueOf(e.MemberServiceAccount.Email)
 	role := fi.ValueOf(e.Role)
 
 	klog.V(2).Infof("Creating GCS bucket IAM for gs://%s for %s as %s", bucket, member, role)
 
-	policy, err := t.Cloud.Storage().Buckets.GetIamPolicy(bucket).Context(ctx).Do()
+	policy, err := t.Cloud.Storage().Bucket(bucket).IAM().V3().Policy(ctx)
 	if err != nil {
 		return fmt.Errorf("error creating IAM policy for bucket gs://%s: %w", bucket, err)
 	}
@@ -117,7 +122,7 @@ func (_ *StorageBucketIAM) RenderGCE(t *gce.GCEAPITarget, a, e, changes *Storage
 		return nil
 	}
 
-	if _, err := t.Cloud.Storage().Buckets.SetIamPolicy(bucket, policy).Context(ctx).Do(); err != nil {
+	if err := t.Cloud.Storage().Bucket(bucket).IAM().V3().SetPolicy(ctx, policy); err != nil {
 		return fmt.Errorf("error updating GCS bucket IAM for gs://%s: %v", bucket, err)
 	}
 
@@ -126,22 +131,26 @@ func (_ *StorageBucketIAM) RenderGCE(t *gce.GCEAPITarget, a, e, changes *Storage
 
 // terraformStorageBucketIAM is the model for a terraform google_storage_bucket_iam_member rule
 type terraformStorageBucketIAM struct {
-	Bucket string `cty:"bucket"`
-	Role   string `cty:"role"`
-	Member string `cty:"member"`
+	Bucket string                   `cty:"bucket"`
+	Role   string                   `cty:"role"`
+	Member *terraformWriter.Literal `cty:"member"`
 }
 
 func (_ *StorageBucketIAM) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *StorageBucketIAM) error {
 	tf := &terraformStorageBucketIAM{
 		Bucket: fi.ValueOf(e.Bucket),
 		Role:   fi.ValueOf(e.Role),
-		Member: fi.ValueOf(e.Member),
+		Member: e.MemberServiceAccount.TerraformLink_Member(),
 	}
 
-	return t.RenderResource("google_storage_bucket_iam_member", *e.Name, tf)
+	if err := t.RenderResource("google_storage_bucket_iam_member", *e.Name, tf); err != nil {
+		return err
+	}
+
+	return nil
 }
 
-func patchPolicy(policy *storage.Policy, wantMember string, wantRole string) bool {
+func patchPolicy(policy *iam.Policy3, wantMember string, wantRole string) bool {
 	for _, binding := range policy.Bindings {
 		if binding.Condition != nil {
 			continue
@@ -165,7 +174,7 @@ func patchPolicy(policy *storage.Policy, wantMember string, wantRole string) boo
 		}
 	}
 
-	policy.Bindings = append(policy.Bindings, &storage.PolicyBindings{
+	policy.Bindings = append(policy.Bindings, &iampb.Binding{
 		Members: []string{wantMember},
 		Role:    wantRole,
 	})

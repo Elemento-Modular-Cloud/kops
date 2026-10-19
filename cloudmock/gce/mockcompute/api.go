@@ -37,6 +37,7 @@ type MockClient struct {
 	addressClient          *addressClient
 	firewallClient         *firewallClient
 	routerClient           *routerClient
+	instanceClient         *instanceClient
 
 	instanceTemplateClient     *instanceTemplateClient
 	instanceGroupManagerClient *instanceGroupManagerClient
@@ -49,6 +50,8 @@ var _ gce.ComputeClient = &MockClient{}
 
 // NewMockClient creates a new mock client.
 func NewMockClient(project string) *MockClient {
+	instanceClient := newInstanceClient()
+
 	return &MockClient{
 		projectClient: newProjectClient(project),
 		zoneClient:    newZoneClient(project),
@@ -63,9 +66,10 @@ func NewMockClient(project string) *MockClient {
 		addressClient:          newAddressClient(),
 		firewallClient:         newFirewallClient(),
 		routerClient:           newRouterClient(),
+		instanceClient:         instanceClient,
 
 		instanceTemplateClient:     newInstanceTemplateClient(),
-		instanceGroupManagerClient: newInstanceGroupManagerClient(),
+		instanceGroupManagerClient: newInstanceGroupManagerClient(instanceClient),
 		targetPoolClient:           newTargetPoolClient(),
 
 		diskClient: newDiskClient(),
@@ -158,8 +162,7 @@ func (c *MockClient) Routers() gce.RouterClient {
 }
 
 func (c *MockClient) Instances() gce.InstanceClient {
-	// Not implemented.
-	return nil
+	return c.instanceClient
 }
 
 func (c *MockClient) InstanceTemplates() gce.InstanceTemplateClient {
@@ -168,6 +171,17 @@ func (c *MockClient) InstanceTemplates() gce.InstanceTemplateClient {
 
 func (c *MockClient) InstanceGroupManagers() gce.InstanceGroupManagerClient {
 	return c.instanceGroupManagerClient
+}
+
+// SetInstanceGroupManagerErrors installs the canned ListErrors response for one
+// managed instance group.
+func (c *MockClient) SetInstanceGroupManagerErrors(project, zone, name string, errs []*compute.InstanceManagedByIgmError) {
+	c.instanceGroupManagerClient.SetErrors(project, zone, name, errs)
+}
+
+// SetManagedInstance installs the managed instance a group reports for name.
+func (c *MockClient) SetManagedInstance(project, zone, name string, mi *compute.ManagedInstance) {
+	c.instanceGroupManagerClient.SetManagedInstance(project, zone, name, mi)
 }
 
 func (c *MockClient) TargetPools() gce.TargetPoolClient {

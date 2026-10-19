@@ -15,5 +15,7 @@ The following experimental features are currently available:
 * `+SpotinstOceanTemplate` - Enables the use of Spot Ocean object as a template for Virtual Node Groups
 * `+SpotinstHybrid` - Toggles between hybrid and full instance group implementations
 * `-SpotinstController` - Toggles the installation of the Spot controller addon off
-* `+SkipEtcdVersionCheck` - Bypasses the check that etcd-manager is using a supported etcd version
+* `+EtcdEventsHTTP` - Enables HTTP (non-TLS) for the events etcd cluster, matching GCE scale test patterns
 * `+APIServerNodes` - Enables support for dedicated API server nodes
+* `+ExperimentalRoles` - Not fully implemented. Enable support for dedicated Etcd, Scheduler, CloudControllerManager and KubeControllerManager nodes. 
+* `-SELinuxMount` - Disables CSI driver SELinux mount support (`CSIDriver.spec.seLinuxMount` and its host mounts) for clusters that set `spec.containerd.selinuxEnabled: true`. Enabled by default.

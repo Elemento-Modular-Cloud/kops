@@ -109,29 +109,35 @@ func Convert_v1alpha2_ClusterSpec_To_kops_ClusterSpec(in *ClusterSpec, out *kops
 			kube.OIDCRequiredClaim != nil ||
 			kube.OIDCUsernameClaim != nil ||
 			kube.OIDCUsernamePrefix != nil {
-			if out.Authentication == nil {
-				out.Authentication = &kops.AuthenticationSpec{}
+			// Build the settings before publishing them. The generated conversion
+			// copies the OIDC pointer straight across, so out.Authentication.OIDC can
+			// still be the caller's struct; writing into it would mutate the input,
+			// and returning an error partway would leave it half rewritten.
+			oidc := &kops.OIDCAuthenticationSpec{
+				ClientID:       kube.OIDCClientID,
+				GroupsPrefix:   kube.OIDCGroupsPrefix,
+				IssuerURL:      kube.OIDCIssuerURL,
+				UsernameClaim:  kube.OIDCUsernameClaim,
+				UsernamePrefix: kube.OIDCUsernamePrefix,
 			}
-			if out.Authentication.OIDC == nil {
-				out.Authentication.OIDC = &kops.OIDCAuthenticationSpec{}
-			}
-
-			oidc := out.Authentication.OIDC
-			oidc.ClientID = kube.OIDCClientID
 			if kube.OIDCGroupsClaim != nil {
 				oidc.GroupsClaims = strings.Split(*kube.OIDCGroupsClaim, ",")
 			}
-			oidc.GroupsPrefix = kube.OIDCGroupsPrefix
-			oidc.IssuerURL = kube.OIDCIssuerURL
 			if kube.OIDCRequiredClaim != nil {
 				oidc.RequiredClaims = make(map[string]string, len(kube.OIDCRequiredClaim))
-				for _, claim := range kube.OIDCRequiredClaim {
-					split := strings.SplitN(claim, "=", 2)
-					oidc.RequiredClaims[split[0]] = split[1]
+				for i, claim := range kube.OIDCRequiredClaim {
+					key, value, found := strings.Cut(claim, "=")
+					if !found {
+						return field.Invalid(field.NewPath("spec", "kubeAPIServer", "oidcRequiredClaim").Index(i), claim, `must be of the form "key=value"`)
+					}
+					oidc.RequiredClaims[key] = value
 				}
 			}
-			oidc.UsernameClaim = kube.OIDCUsernameClaim
-			oidc.UsernamePrefix = kube.OIDCUsernamePrefix
+
+			if out.Authentication == nil {
+				out.Authentication = &kops.AuthenticationSpec{}
+			}
+			out.Authentication.OIDC = oidc
 		}
 	}
 	if in.LegacyNetworking != nil {
@@ -181,6 +187,7 @@ func Convert_v1alpha2_ClusterSpec_To_kops_ClusterSpec(in *ClusterSpec, out *kops
 			string(kops.CloudProviderAzure),
 			string(kops.CloudProviderAWS),
 			string(kops.CloudProviderHetzner),
+			string(kops.CloudProviderLinode),
 			string(kops.CloudProviderOpenstack),
 			string(kops.CloudProviderScaleway),
 			string(kops.CloudProviderElemento),
@@ -208,6 +215,18 @@ func Convert_v1alpha2_ClusterSpec_To_kops_ClusterSpec(in *ClusterSpec, out *kops
 			}
 			out.CloudProvider.GCE.UseStartupScript = in.CloudConfig.GCEUseStartupScript
 		}
+		if in.CloudConfig.AWSBinariesLocation != nil {
+			if out.CloudProvider.AWS == nil {
+				return field.Forbidden(field.NewPath("spec").Child("cloudConfig", "awsBinariesLocation"), "AWS binaries location supports only AWS")
+			}
+			out.CloudProvider.AWS.BinariesLocation = in.CloudConfig.AWSBinariesLocation
+		}
+		if in.CloudConfig.GCEBinariesLocation != nil {
+			if out.CloudProvider.GCE == nil {
+				return field.Forbidden(field.NewPath("spec").Child("cloudConfig", "gceBinariesLocation"), "GCE binaries location supports only GCE")
+			}
+			out.CloudProvider.GCE.BinariesLocation = in.CloudConfig.GCEBinariesLocation
+		}
 		if in.CloudConfig.DisableSecurityGroupIngress != nil {
 			if out.CloudProvider.AWS == nil {
 				return field.Forbidden(field.NewPath("spec").Child("cloudConfig", "disableSecurityGroupIngress"), "disableSecurityGroupIngress supports only AWS")
@@ -221,6 +240,20 @@ func Convert_v1alpha2_ClusterSpec_To_kops_ClusterSpec(in *ClusterSpec, out *kops
 			}
 			val := *in.CloudConfig.ElbSecurityGroup
 			out.CloudProvider.AWS.ElbSecurityGroup = &val
+		}
+		if in.CloudConfig.UseIPBasedNodeNames != nil {
+			if out.CloudProvider.AWS == nil {
+				return field.Forbidden(field.NewPath("spec").Child("cloudConfig", "useIPBasedNodeNames"), "useIPBasedNodeNames supports only AWS")
+			}
+			val := *in.CloudConfig.UseIPBasedNodeNames
+			out.CloudProvider.AWS.UseIPBasedNodeNames = &val
+		}
+		if in.CloudConfig.NLBSecurityGroupMode != nil {
+			if out.CloudProvider.AWS == nil {
+				return field.Forbidden(field.NewPath("spec").Child("cloudConfig", "nlbSecurityGroupMode"), "nlbSecurityGroupMode supports only AWS")
+			}
+			val := *in.CloudConfig.NLBSecurityGroupMode
+			out.CloudProvider.AWS.NLBSecurityGroupMode = &val
 		}
 		if in.CloudConfig.GCPPDCSIDriver != nil {
 			if out.CloudProvider.GCE == nil {
@@ -443,6 +476,9 @@ func Convert_kops_ClusterSpec_To_v1alpha2_ClusterSpec(in *kops.ClusterSpec, out 
 	if in.CloudProvider.Scaleway != nil {
 		out.LegacyCloudProvider = string(kops.CloudProviderScaleway)
 	}
+	if in.CloudProvider.Linode != nil {
+		out.LegacyCloudProvider = string(kops.CloudProviderLinode)
+  }
 	if in.CloudProvider.Elemento != nil {
 		out.LegacyCloudProvider = string(kops.CloudProviderElemento)
 	}
@@ -455,6 +491,19 @@ func Convert_kops_ClusterSpec_To_v1alpha2_ClusterSpec(in *kops.ClusterSpec, out 
 			}
 			val := *aws.DisableSecurityGroupIngress
 			out.CloudConfig.DisableSecurityGroupIngress = &val
+		}
+		if aws.UseIPBasedNodeNames != nil {
+			if out.CloudConfig == nil {
+				out.CloudConfig = &CloudConfiguration{}
+			}
+			val := *aws.UseIPBasedNodeNames
+			out.CloudConfig.UseIPBasedNodeNames = &val
+		}
+		if aws.BinariesLocation != nil {
+			if out.CloudConfig == nil {
+				out.CloudConfig = &CloudConfiguration{}
+			}
+			out.CloudConfig.AWSBinariesLocation = aws.BinariesLocation
 		}
 		if aws.EBSCSIDriver != nil {
 			if out.CloudConfig == nil {
@@ -471,6 +520,13 @@ func Convert_kops_ClusterSpec_To_v1alpha2_ClusterSpec(in *kops.ClusterSpec, out 
 			}
 			val := *aws.ElbSecurityGroup
 			out.CloudConfig.ElbSecurityGroup = &val
+		}
+		if aws.NLBSecurityGroupMode != nil {
+			if out.CloudConfig == nil {
+				out.CloudConfig = &CloudConfiguration{}
+			}
+			val := *aws.NLBSecurityGroupMode
+			out.CloudConfig.NLBSecurityGroupMode = &val
 		}
 		if aws.NodeTerminationHandler != nil {
 			out.NodeTerminationHandler = &NodeTerminationHandlerSpec{}
@@ -559,6 +615,12 @@ func Convert_kops_ClusterSpec_To_v1alpha2_ClusterSpec(in *kops.ClusterSpec, out 
 			}
 			out.CloudConfig.GCEUseStartupScript = gce.UseStartupScript
 		}
+		if gce.BinariesLocation != nil {
+			if out.CloudConfig == nil {
+				out.CloudConfig = &CloudConfiguration{}
+			}
+			out.CloudConfig.GCEBinariesLocation = gce.BinariesLocation
+		}
 		if gce.PDCSIDriver != nil {
 			if out.CloudConfig == nil {
 				out.CloudConfig = &CloudConfiguration{}
@@ -643,6 +705,14 @@ func Convert_v1alpha2_ExternalDNSConfig_To_kops_ExternalDNSConfig(in *ExternalDN
 	return nil
 }
 
+func Convert_v1alpha2_KubeAPIServerConfig_To_kops_KubeAPIServerConfig(in *KubeAPIServerConfig, out *kops.KubeAPIServerConfig, s conversion.Scope) error {
+	return autoConvert_v1alpha2_KubeAPIServerConfig_To_kops_KubeAPIServerConfig(in, out, s)
+}
+
+func Convert_kops_KubeAPIServerConfig_To_v1alpha2_KubeAPIServerConfig(in *kops.KubeAPIServerConfig, out *KubeAPIServerConfig, s conversion.Scope) error {
+	return autoConvert_kops_KubeAPIServerConfig_To_v1alpha2_KubeAPIServerConfig(in, out, s)
+}
+
 func Convert_kops_ExternalDNSConfig_To_v1alpha2_ExternalDNSConfig(in *kops.ExternalDNSConfig, out *ExternalDNSConfig, s conversion.Scope) error {
 	if err := autoConvert_kops_ExternalDNSConfig_To_v1alpha2_ExternalDNSConfig(in, out, s); err != nil {
 		return err
@@ -675,7 +745,7 @@ func Convert_kops_HookSpec_To_v1alpha2_HookSpec(in *kops.HookSpec, out *HookSpec
 	}
 	if in.Roles != nil {
 		for i := range in.Roles {
-			if in.Roles[i] == kops.InstanceGroupRoleControlPlane {
+			if in.Roles[i].HasControlPlane() {
 				out.Roles[i] = "Master"
 			}
 		}
@@ -739,7 +809,7 @@ func Convert_kops_InstanceGroupSpec_To_v1alpha2_InstanceGroupSpec(in *kops.Insta
 	if err := autoConvert_kops_InstanceGroupSpec_To_v1alpha2_InstanceGroupSpec(in, out, s); err != nil {
 		return err
 	}
-	if in.Role == kops.InstanceGroupRoleControlPlane {
+	if in.Role.HasControlPlane() {
 		out.Role = "Master"
 	}
 	if in.RootVolume != nil {

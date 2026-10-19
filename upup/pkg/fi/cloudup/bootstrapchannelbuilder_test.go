@@ -18,10 +18,12 @@ package cloudup
 
 import (
 	"context"
+	"io"
 	"os"
 	"path"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kopsapi "k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/assets"
 	"k8s.io/kops/pkg/client/simple/vfsclientset"
@@ -35,17 +37,19 @@ import (
 	"k8s.io/kops/upup/models"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/bootstrapchannelbuilder"
-	"k8s.io/kops/upup/pkg/fi/fitasks"
 	"k8s.io/kops/util/pkg/vfs"
 )
 
 func TestBootstrapChannelBuilder_BuildTasks(t *testing.T) {
 	h := testutils.NewIntegrationTestHarness(t)
 	defer h.Close()
+	h.MockKopsVersion("1.37.0-beta.1")
 
 	h.SetupMockAWS()
 
 	runChannelBuilderTest(t, "simple", []string{"kops-controller.addons.k8s.io-k8s-1.16"})
+	// Clusters with dns=none get an empty dns-controller manifest, so leftover resources are pruned
+	runChannelBuilderTest(t, "dns-none", []string{"dns-controller.addons.k8s.io-k8s-1.12"})
 	// Use cilium networking, proxy
 	runChannelBuilderTest(t, "cilium", []string{"kops-controller.addons.k8s.io-k8s-1.16"})
 	runChannelBuilderTest(t, "amazonvpc", []string{"networking.amazon-vpc-routed-eni-k8s-1.16"})
@@ -60,6 +64,7 @@ func TestBootstrapChannelBuilder_BuildTasks(t *testing.T) {
 func TestBootstrapChannelBuilder_ServiceAccountIAM(t *testing.T) {
 	h := testutils.NewIntegrationTestHarness(t)
 	defer h.Close()
+	h.MockKopsVersion("1.37.0-beta.1")
 
 	h.SetupMockAWS()
 
@@ -74,18 +79,82 @@ func TestBootstrapChannelBuilder_ServiceAccountIAM(t *testing.T) {
 func TestBootstrapChannelBuilder_AWSCloudController(t *testing.T) {
 	h := testutils.NewIntegrationTestHarness(t)
 	defer h.Close()
+	h.MockKopsVersion("1.37.0-beta.1")
 
 	h.SetupMockAWS()
 
 	runChannelBuilderTest(t, "awscloudcontroller", []string{"aws-cloud-controller.addons.k8s.io-k8s-1.18"})
 }
 
-func runChannelBuilderTest(t *testing.T, key string, addonManifests []string) {
+// TestBootstrapChannelBuilder_InstanceGroupAddonsWhenUpdatingOthers checks that the addons needed by
+// some instance groups are kept in the channel when only other instance groups are being updated.
+func TestBootstrapChannelBuilder_InstanceGroupAddonsWhenUpdatingOthers(t *testing.T) {
+	h := testutils.NewIntegrationTestHarness(t)
+	defer h.Close()
+	h.MockKopsVersion("1.37.0-beta.1")
+
+	h.SetupMockAWS()
+
 	ctx := context.TODO()
+	cluster, cloud, addonTemplates := loadChannelBuilderTestCluster(t, ctx, "simple")
 
-	basedir := path.Join("tests/bootstrapchannelbuilder/", key)
+	controlPlane := &kopsapi.InstanceGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "control-plane"},
+		Spec:       kopsapi.InstanceGroupSpec{Role: kopsapi.InstanceGroupRoleControlPlane},
+	}
+	gpuNodes := &kopsapi.InstanceGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "gpu-nodes"},
+		Spec: kopsapi.InstanceGroupSpec{
+			Role:       kopsapi.InstanceGroupRoleNode,
+			Containerd: &kopsapi.ContainerdConfig{NvidiaGPU: &kopsapi.NvidiaGPUConfig{Enabled: new(true)}},
+		},
+	}
+	gvisorNodes := &kopsapi.InstanceGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-nodes"},
+		Spec: kopsapi.InstanceGroupSpec{
+			Role:       kopsapi.InstanceGroupRoleNode,
+			Containerd: &kopsapi.ContainerdConfig{GVisor: &kopsapi.GVisorConfig{Enabled: new(true)}},
+		},
+	}
+	kopsModel := &model.KopsModelContext{
+		IAMModelContext: iam.IAMModelContext{
+			Cluster:      cluster,
+			AWSAccountID: "123456789012",
+			AWSPartition: "aws-test",
+		},
+		Region:            "us-east-1",
+		AllInstanceGroups: []*kopsapi.InstanceGroup{controlPlane, gpuNodes, gvisorNodes},
+		InstanceGroups:    []*kopsapi.InstanceGroup{controlPlane},
+	}
 
-	clusterYamlPath := path.Join(basedir, "cluster.yaml")
+	bcb := bootstrapchannelbuilder.NewBootstrapChannelBuilder(
+		kopsModel,
+		fi.LifecycleSync,
+		assets.NewAssetBuilder(vfs.Context, cluster.Spec.Assets, false),
+		addonTemplates,
+		nil,
+		&addonTemplateRenderer{modelContext: kopsModel, cloud: cloud},
+	)
+	c := &fi.CloudupModelBuilderContext{
+		Tasks: make(map[string]fi.CloudupTask),
+	}
+	if err := bcb.Build(c); err != nil {
+		t.Fatalf("error from BootstrapChannelBuilder Build: %v", err)
+	}
+
+	for _, addon := range []string{"nvidia.addons.k8s.io-k8s-1.16", "gvisor.addons.k8s.io-k8s-1.20"} {
+		if c.Tasks["AddonManifest/"+cluster.ObjectMeta.Name+"-addons-"+addon] == nil {
+			t.Errorf("addon %q is not in the channel", addon)
+		}
+	}
+}
+
+// loadChannelBuilderTestCluster loads the cluster of a bootstrap channel builder test from
+// tests/bootstrapchannelbuilder/<key>/cluster.yaml, populates its spec and loads the addon templates.
+func loadChannelBuilderTestCluster(t *testing.T, ctx context.Context, key string) (*kopsapi.Cluster, fi.Cloud, *templates.Templates) {
+	t.Helper()
+
+	clusterYamlPath := path.Join("tests/bootstrapchannelbuilder/", key, "cluster.yaml")
 	clusterYaml, err := os.ReadFile(clusterYamlPath)
 	if err != nil {
 		t.Fatalf("error reading cluster yaml file %q: %v", clusterYamlPath, err)
@@ -105,16 +174,23 @@ func runChannelBuilderTest(t *testing.T, key string, addonManifests []string) {
 		t.Fatalf("error from PerformAssignments for %q: %v", key, err)
 	}
 
-	fullSpec, err := mockedPopulateClusterSpec(ctx, cluster, cloud)
+	cluster, err = mockedPopulateClusterSpec(ctx, cluster, cloud)
 	if err != nil {
 		t.Fatalf("error from PopulateClusterSpec for %q: %v", key, err)
 	}
-	cluster = fullSpec
 
-	templates, err := templates.LoadTemplates(ctx, cluster, models.NewAssetPath("cloudup/resources"))
+	addonTemplates, err := templates.LoadTemplates(ctx, models.NewAssetPath("cloudup/resources"))
 	if err != nil {
 		t.Fatalf("error building templates for %q: %v", key, err)
 	}
+	return cluster, cloud, addonTemplates
+}
+
+func runChannelBuilderTest(t *testing.T, key string, addonManifests []string) {
+	ctx := context.TODO()
+
+	basedir := path.Join("tests/bootstrapchannelbuilder/", key)
+	cluster, cloud, addonTemplates := loadChannelBuilderTestCluster(t, ctx, key)
 
 	vfs.Context.ResetMemfsContext(true)
 
@@ -155,18 +231,19 @@ func runChannelBuilderTest(t *testing.T, key string, addonManifests []string) {
 
 	kopsModel.AllInstanceGroups = kopsModel.InstanceGroups
 
-	tf := &TemplateFunctions{
-		KopsModelContext: kopsModel,
-		cloud:            cloud,
+	addonRenderer := &addonTemplateRenderer{
+		modelContext: &kopsModel,
+		cloud:        cloud,
+		secretStore:  secretStore,
 	}
-	tf.AddTo(templates.TemplateFunctions, secretStore)
 
 	bcb := bootstrapchannelbuilder.NewBootstrapChannelBuilder(
 		&kopsModel,
 		fi.LifecycleSync,
 		assets.NewAssetBuilder(vfs.Context, cluster.Spec.Assets, false),
-		templates,
+		addonTemplates,
 		nil,
+		addonRenderer,
 	)
 
 	context := &fi.CloudupModelBuilderContext{
@@ -176,16 +253,44 @@ func runChannelBuilderTest(t *testing.T, key string, addonManifests []string) {
 	if err != nil {
 		t.Fatalf("error from BootstrapChannelBuilder Build: %v", err)
 	}
+	if context.Tasks["ManagedFile/"+cluster.ObjectMeta.Name+"-addons-bootstrap"] != nil {
+		t.Fatalf("bootstrap addon manifest should be created as an BootstrapChannel task")
+	}
+	if context.Tasks["BootstrapChannel/"+cluster.ObjectMeta.Name+"-addons-bootstrap"] == nil {
+		t.Fatalf("bootstrap addons channel task not found")
+	}
+
+	target := fi.NewCloudupDryRunTarget(assets.NewAssetBuilder(vfs.Context, cluster.Spec.Assets, false), false, io.Discard)
+	cloudupContext, err := fi.NewCloudupContext(ctx, fi.DeletionProcessingModeDeleteIncludingDeferred, target, cluster, cloud, nil, secretStore, basePath, context.Tasks)
+	if err != nil {
+		t.Fatalf("error building cloudup context: %v", err)
+	}
 
 	{
 		name := cluster.ObjectMeta.Name + "-addons-bootstrap"
-		manifestTask := context.Tasks["ManagedFile/"+name]
+		manifestTask := context.Tasks["BootstrapChannel/"+name]
 		if manifestTask == nil {
 			t.Fatalf("manifest task not found (%q)", name)
 		}
 
-		manifestFileTask := manifestTask.(*fitasks.ManagedFile)
-		actualManifest, err := fi.ResourceAsString(manifestFileTask.Contents)
+		bootstrapChannelTask, ok := manifestTask.(*bootstrapchannelbuilder.BootstrapChannel)
+		if !ok {
+			t.Fatalf("expected BootstrapChannel task, got %T", manifestTask)
+		}
+		for _, dependency := range bootstrapChannelTask.GetDependencies(context.Tasks) {
+			addonManifestTask, ok := dependency.(*bootstrapchannelbuilder.AddonManifest)
+			if !ok {
+				t.Fatalf("expected AddonManifest dependency, got %T", dependency)
+			}
+			if err := addonManifestTask.Normalize(cloudupContext); err != nil {
+				t.Fatalf("error normalizing addon manifest %q: %v", fi.ValueOf(addonManifestTask.Name), err)
+			}
+		}
+		if err := bootstrapChannelTask.Normalize(cloudupContext); err != nil {
+			t.Fatalf("error normalizing addons channel: %v", err)
+		}
+
+		actualManifest, err := fi.ResourceAsString(bootstrapChannelTask.Contents)
 		if err != nil {
 			t.Fatalf("error getting manifest as string: %v", err)
 		}
@@ -196,7 +301,7 @@ func runChannelBuilderTest(t *testing.T, key string, addonManifests []string) {
 
 	for _, k := range addonManifests {
 		name := cluster.ObjectMeta.Name + "-addons-" + k
-		manifestTask := context.Tasks["ManagedFile/"+name]
+		manifestTask := context.Tasks["AddonManifest/"+name]
 		if manifestTask == nil {
 			for k := range context.Tasks {
 				t.Logf("found task %s", k)
@@ -204,8 +309,12 @@ func runChannelBuilderTest(t *testing.T, key string, addonManifests []string) {
 			t.Fatalf("manifest task not found (%q)", name)
 		}
 
-		manifestFileTask := manifestTask.(*fitasks.ManagedFile)
-		actualManifest, err := fi.ResourceAsString(manifestFileTask.Contents)
+		addonManifestTask, ok := manifestTask.(*bootstrapchannelbuilder.AddonManifest)
+		if !ok {
+			t.Fatalf("expected AddonManifest task, got %T", manifestTask)
+		}
+
+		actualManifest, err := fi.ResourceAsString(addonManifestTask.Contents)
 		if err != nil {
 			t.Fatalf("error getting manifest as string: %v", err)
 		}

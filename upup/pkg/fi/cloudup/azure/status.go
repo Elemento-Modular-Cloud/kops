@@ -26,7 +26,7 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/cloudinstances"
-	"k8s.io/kops/protokube/pkg/etcd"
+	"k8s.io/kops/pkg/etcd"
 	"k8s.io/kops/upup/pkg/fi"
 )
 
@@ -180,9 +180,13 @@ func (c *azureCloudImplementation) buildCloudInstanceGroup(
 	for _, vm := range vms {
 		// TODO(kenji): Ignore an instance that is being terminated.
 
-		// TODO(kenji): Set the status properly so that kops can
-		// tell whether a VM is up-to-date or not.
+		// kOps uses a Manual scale set upgrade policy, so latestModelApplied remains false until a
+		// rolling update replaces the VM. Missing values are treated as up-to-date to prevent
+		// incomplete Azure data from triggering a rolling update.
 		status := cloudinstances.CloudInstanceStatusUpToDate
+		if vm.Properties != nil && vm.Properties.LatestModelApplied != nil && !*vm.Properties.LatestModelApplied {
+			status = cloudinstances.CloudInstanceStatusNeedsUpdate
+		}
 		_, err := cg.NewCloudInstance(*vm.Name, status, nodeMap[*vm.Name])
 		if err != nil {
 			return nil, fmt.Errorf("error creating cloud instance group member: %s", err)
@@ -207,10 +211,11 @@ func keyedByName(instancegroups []*kops.InstanceGroup, clusterName string) (map[
 	m := map[string]*kops.InstanceGroup{}
 	for _, ig := range instancegroups {
 		var name string
-		switch ig.Spec.Role {
-		case kops.InstanceGroupRoleControlPlane:
+		switch {
+		case ig.Spec.Role.HasControlPlane():
 			name = ig.Name + ".masters." + clusterName
-		case kops.InstanceGroupRoleNode, kops.InstanceGroupRoleBastion:
+		case ig.Spec.Role.HasNode(),
+			ig.Spec.Role.HasBastion():
 			name = ig.Name + "." + clusterName
 		default:
 			klog.Warningf("Ignoring InstanceGroup of unknown role %q", ig.Spec.Role)

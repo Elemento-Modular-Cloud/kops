@@ -58,7 +58,7 @@ type Subnet struct {
 	Tags map[string]string
 }
 
-var _ fi.CompareWithID = &Subnet{}
+var _ fi.CompareWithID = (*Subnet)(nil)
 
 func (e *Subnet) CompareWithID() *string {
 	return e.ID
@@ -74,7 +74,7 @@ func (a OrderSubnetsById) Less(i, j int) bool {
 }
 
 func (e *Subnet) Find(c *fi.CloudupContext) (*Subnet, error) {
-	e.AssignIPv6AddressOnCreation = fi.PtrTo(e.IPv6CIDR != nil)
+	e.AssignIPv6AddressOnCreation = new(e.IPv6CIDR != nil)
 
 	subnet, err := e.findEc2Subnet(c)
 	if err != nil {
@@ -111,7 +111,7 @@ func (e *Subnet) Find(c *fi.CloudupContext) (*Subnet, error) {
 
 	actual.AssignIPv6AddressOnCreation = subnet.AssignIpv6AddressOnCreation
 
-	actual.ResourceBasedNaming = fi.PtrTo(subnet.PrivateDnsNameOptionsOnLaunch.HostnameType == ec2types.HostnameTypeResourceName)
+	actual.ResourceBasedNaming = new(subnet.PrivateDnsNameOptionsOnLaunch.HostnameType == ec2types.HostnameTypeResourceName)
 	if *actual.ResourceBasedNaming {
 		if fi.ValueOf(actual.CIDR) != "" && !aws.ToBool(subnet.PrivateDnsNameOptionsOnLaunch.EnableResourceNameDnsARecord) {
 			actual.ResourceBasedNaming = nil
@@ -436,18 +436,18 @@ func (_ *Subnet) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *Su
 		Tags:             e.Tags,
 	}
 	if fi.ValueOf(e.CIDR) == "" {
-		tf.EnableDNS64 = fi.PtrTo(true)
-		tf.IPv6Native = fi.PtrTo(true)
+		tf.EnableDNS64 = new(true)
+		tf.IPv6Native = new(true)
 	}
 	if fi.ValueOf(e.IPv6CIDR) != "" {
-		tf.AssignIPv6AddressOnCreation = fi.PtrTo(true)
+		tf.AssignIPv6AddressOnCreation = new(true)
 	}
 	if e.ResourceBasedNaming != nil {
 		hostnameType := ec2types.HostnameTypeIpName
 		if *e.ResourceBasedNaming {
 			hostnameType = ec2types.HostnameTypeResourceName
 		}
-		tf.PrivateDNSHostnameTypeOnLaunch = fi.PtrTo(string(hostnameType))
+		tf.PrivateDNSHostnameTypeOnLaunch = new(string(hostnameType))
 		if fi.ValueOf(e.CIDR) != "" {
 			tf.EnableResourceNameDNSARecordOnLaunch = e.ResourceBasedNaming
 		}
@@ -521,7 +521,7 @@ type deleteSubnetIPv6CIDRBlock struct {
 	associationID *string
 }
 
-var _ fi.CloudupDeletion = &deleteSubnetIPv6CIDRBlock{}
+var _ fi.CloudupDeletion = (*deleteSubnetIPv6CIDRBlock)(nil)
 
 func (d *deleteSubnetIPv6CIDRBlock) Delete(t fi.CloudupTarget) error {
 	ctx := context.TODO()

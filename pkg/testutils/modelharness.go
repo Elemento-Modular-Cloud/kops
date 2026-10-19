@@ -121,7 +121,7 @@ func ValidateStaticFiles(t *testing.T, expectedDir string, assetBuilder *assets.
 	prefix := "static-"
 
 	staticFiles := make(map[string]*assets.StaticFile)
-	for _, staticFile := range assetBuilder.StaticFiles {
+	for _, staticFile := range assetBuilder.StaticFiles() {
 		k := filepath.Base(staticFile.Path)
 		staticFiles[k] = staticFile
 		expectedFile := filepath.Join(expectedDir, prefix+k)

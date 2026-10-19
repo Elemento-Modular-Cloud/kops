@@ -18,7 +18,7 @@ func newControlPlaneInstanceGroup(name string) *kops.InstanceGroup {
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: kops.InstanceGroupSpec{
 			Role:    kops.InstanceGroupRoleControlPlane,
-			MinSize: fi.PtrTo(int32(1)), Subnets: []string{"europe"},
+			MinSize: new(int32(1)), Subnets: []string{"europe"},
 		},
 	}
 }
@@ -33,7 +33,7 @@ func TestControlPlaneDNSUsesReservationsAndEtcdTopology(t *testing.T) {
 	for _, name := range []string{"main", "events"} {
 		etcd := kops.EtcdClusterSpec{Name: name}
 		for _, group := range groups {
-			etcd.Members = append(etcd.Members, kops.EtcdMemberSpec{InstanceGroup: fi.PtrTo(group.Name)})
+			etcd.Members = append(etcd.Members, kops.EtcdMemberSpec{InstanceGroup: new(group.Name)})
 		}
 		cluster.Spec.EtcdClusters = append(cluster.Spec.EtcdClusters, etcd)
 	}
@@ -44,7 +44,7 @@ func TestControlPlaneDNSUsesReservationsAndEtcdTopology(t *testing.T) {
 	}}
 	for i, group := range groups {
 		records, err := ctx.elementoDNSRecordTasksForInstanceGroup(group, fi.LifecycleSync,
-			&elementotasks.DNSZone{Name: fi.PtrTo(cluster.Name)})
+			&elementotasks.DNSZone{Name: new(cluster.Name)})
 		if err != nil {
 			t.Fatal(err)
 		}

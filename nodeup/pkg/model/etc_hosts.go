@@ -28,7 +28,7 @@ type EtcHostsBuilder struct {
 
 var _ fi.NodeupModelBuilder = &EtcHostsBuilder{}
 
-// Build is responsible for configuring the gossip DNS tasks.
+// Build is responsible for configuring the /etc/hosts tasks.
 func (b *EtcHostsBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 
 	task := &nodetasks.UpdateEtcHostsTask{
@@ -54,6 +54,18 @@ func (b *EtcHostsBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 		task.Records = append(task.Records, nodetasks.HostRecord{
 			Hostname:  "kops-controller.internal." + b.NodeupConfig.ClusterName,
 			Addresses: b.BootConfig.APIServerIPs,
+		})
+	}
+
+	if b.HasAPIServer && !b.IsMaster {
+		// APIServer only, no Etcd, need to point to the Etcd
+		task.Records = append(task.Records, nodetasks.HostRecord{
+			Hostname:  "main.etcd.internal." + b.NodeupConfig.ClusterName,
+			Addresses: b.BootConfig.EtcdIPs,
+		})
+		task.Records = append(task.Records, nodetasks.HostRecord{
+			Hostname:  "events.etcd.internal." + b.NodeupConfig.ClusterName,
+			Addresses: b.BootConfig.EtcdIPs,
 		})
 	}
 

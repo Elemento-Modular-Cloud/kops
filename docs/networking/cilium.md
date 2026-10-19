@@ -122,7 +122,7 @@ Enable this by setting `--networking=cilium-eni` (as of kOps 1.26) or by specify
       ipam: eni
 ```
 
-In kOps versions before 1.22, when using ENI IPAM you need to explicitly disable masquerading in Cilium as well.
+When using ENI IPAM, kOps enables masquerading by default. If pods in your cluster can reach external destinations without it — for example, nodes in private subnets behind a NAT gateway, or via VPC endpoints — you can disable masquerading to match Cilium's upstream default for ENI IPAM:
 
 ```yaml
   networking:
@@ -130,6 +130,8 @@ In kOps versions before 1.22, when using ENI IPAM you need to explicitly disable
       disableMasquerade: true
       ipam: eni
 ```
+
+Do not disable masquerading if pods rely on the node's address to reach external destinations (for example, nodes in public subnets without a NAT gateway), as their traffic would otherwise be dropped.
 
 Note that since Cilium Operator is the entity that interacts with the EC2 API to provision and attaching ENIs, we force it to run on the master nodes when this IPAM is used.
 
@@ -168,8 +170,7 @@ Cilium can make use of the [wireguard protocol for transparent encryption](https
       encryptionType: wireguard
 ```
 
-
-#### Resources in Cilium
+### Resources in Cilium
 {{ kops_feature_table(kops_added_default='1.21', k8s_min='1.20') }}
 
 As of kOps 1.20, it is possible to choose your own values for Cilium Agents + Operator. Example:
@@ -178,6 +179,17 @@ As of kOps 1.20, it is possible to choose your own values for Cilium Agents + Op
     cilium:
       cpuRequest: "25m"
       memoryRequest: "128Mi"
+```
+
+### CNI Exclusive
+{{ kops_feature_table(kops_added_default='1.32') }}
+
+If you want to use additional CNI plugins, for example when using service meshes like Istio or Linkerd, It is required to disable the `cni-exclusive` option so that Cilium does not remove the other CNI configuration files.
+
+```yaml
+  networking:
+    cilium:
+      cniExclusive: false
 ```
 
 ## Hubble
@@ -238,6 +250,32 @@ EOF
 ```
 
 Note that you can create an ingress resource for Hubble UI by configuring the `hubble.ui.ingress` stanza. See [Cilium Helm chart documentation](https://artifacthub.io/packages/helm/cilium/cilium/1.11.1) for more information.
+
+## Gateway API Support
+
+{{ kops_feature_table(kops_added_default='1.32') }}
+
+Cilium supports the Kubernetes Gateway API, which provides a more expressive and extensible way to configure ingress traffic. To enable Gateway API support in Cilium, you need to:
+
+1. Enable the cluster-wide Gateway API feature in your cluster spec
+2. Enable Cilium's Gateway API support
+
+Here's how to configure it:
+
+```yaml
+spec:
+  networking:
+    cilium:
+      gatewayAPI:
+        enabled: true
+```
+
+Note that enabling Cilium's Gateway API support requires having the Gateway API custom resources definitions (CRDs) deployed manually or through a custom addon first. The current version of Cilium requires the experimental channel. To install it manually, simply run:
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.3.0/experimental-install.yaml
+```
+
+For more information about using the Gateway API with Cilium, see the [Cilium Gateway API documentation](https://docs.cilium.io/en/stable/network/servicemesh/gateway-api/).
 
 ## Getting help
 

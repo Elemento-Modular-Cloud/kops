@@ -608,12 +608,6 @@ resource "aws_iam_role_policy" "masters-mixedinstances-example-com" {
   role   = aws_iam_role.masters-mixedinstances-example-com.name
 }
 
-resource "aws_iam_role_policy" "nodes-mixedinstances-example-com" {
-  name   = "nodes.mixedinstances.example.com"
-  policy = file("${path.module}/data/aws_iam_role_policy_nodes.mixedinstances.example.com_policy")
-  role   = aws_iam_role.nodes-mixedinstances-example-com.name
-}
-
 resource "aws_internet_gateway" "mixedinstances-example-com" {
   tags = {
     "KubernetesCluster"                                = "mixedinstances.example.com"
@@ -691,6 +685,21 @@ resource "aws_launch_template" "master-us-test-1a-masters-mixedinstances-example
   }
   tag_specifications {
     resource_type = "volume"
+    tags = {
+      "KubernetesCluster"                                                                                     = "mixedinstances.example.com"
+      "Name"                                                                                                  = "master-us-test-1a.masters.mixedinstances.example.com"
+      "aws-node-termination-handler/managed"                                                                  = ""
+      "k8s.io/cluster-autoscaler/node-template/label/kops.k8s.io/kops-controller-pki"                         = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node-role.kubernetes.io/control-plane"                   = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node.kubernetes.io/exclude-from-external-load-balancers" = ""
+      "k8s.io/role/control-plane"                                                                             = "1"
+      "k8s.io/role/master"                                                                                    = "1"
+      "kops.k8s.io/instancegroup"                                                                             = "master-us-test-1a"
+      "kubernetes.io/cluster/mixedinstances.example.com"                                                      = "owned"
+    }
+  }
+  tag_specifications {
+    resource_type = "network-interface"
     tags = {
       "KubernetesCluster"                                                                                     = "mixedinstances.example.com"
       "Name"                                                                                                  = "master-us-test-1a.masters.mixedinstances.example.com"
@@ -790,6 +799,21 @@ resource "aws_launch_template" "master-us-test-1b-masters-mixedinstances-example
       "kubernetes.io/cluster/mixedinstances.example.com"                                                      = "owned"
     }
   }
+  tag_specifications {
+    resource_type = "network-interface"
+    tags = {
+      "KubernetesCluster"                                                                                     = "mixedinstances.example.com"
+      "Name"                                                                                                  = "master-us-test-1b.masters.mixedinstances.example.com"
+      "aws-node-termination-handler/managed"                                                                  = ""
+      "k8s.io/cluster-autoscaler/node-template/label/kops.k8s.io/kops-controller-pki"                         = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node-role.kubernetes.io/control-plane"                   = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node.kubernetes.io/exclude-from-external-load-balancers" = ""
+      "k8s.io/role/control-plane"                                                                             = "1"
+      "k8s.io/role/master"                                                                                    = "1"
+      "kops.k8s.io/instancegroup"                                                                             = "master-us-test-1b"
+      "kubernetes.io/cluster/mixedinstances.example.com"                                                      = "owned"
+    }
+  }
   tags = {
     "KubernetesCluster"                                                                                     = "mixedinstances.example.com"
     "Name"                                                                                                  = "master-us-test-1b.masters.mixedinstances.example.com"
@@ -863,6 +887,21 @@ resource "aws_launch_template" "master-us-test-1c-masters-mixedinstances-example
   }
   tag_specifications {
     resource_type = "volume"
+    tags = {
+      "KubernetesCluster"                                                                                     = "mixedinstances.example.com"
+      "Name"                                                                                                  = "master-us-test-1c.masters.mixedinstances.example.com"
+      "aws-node-termination-handler/managed"                                                                  = ""
+      "k8s.io/cluster-autoscaler/node-template/label/kops.k8s.io/kops-controller-pki"                         = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node-role.kubernetes.io/control-plane"                   = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node.kubernetes.io/exclude-from-external-load-balancers" = ""
+      "k8s.io/role/control-plane"                                                                             = "1"
+      "k8s.io/role/master"                                                                                    = "1"
+      "kops.k8s.io/instancegroup"                                                                             = "master-us-test-1c"
+      "kubernetes.io/cluster/mixedinstances.example.com"                                                      = "owned"
+    }
+  }
+  tag_specifications {
+    resource_type = "network-interface"
     tags = {
       "KubernetesCluster"                                                                                     = "mixedinstances.example.com"
       "Name"                                                                                                  = "master-us-test-1c.masters.mixedinstances.example.com"
@@ -952,6 +991,18 @@ resource "aws_launch_template" "nodes-mixedinstances-example-com" {
       "kubernetes.io/cluster/mixedinstances.example.com"                           = "owned"
     }
   }
+  tag_specifications {
+    resource_type = "network-interface"
+    tags = {
+      "KubernetesCluster"                                                          = "mixedinstances.example.com"
+      "Name"                                                                       = "nodes.mixedinstances.example.com"
+      "aws-node-termination-handler/managed"                                       = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node-role.kubernetes.io/node" = ""
+      "k8s.io/role/node"                                                           = "1"
+      "kops.k8s.io/instancegroup"                                                  = "nodes"
+      "kubernetes.io/cluster/mixedinstances.example.com"                           = "owned"
+    }
+  }
   tags = {
     "KubernetesCluster"                                                          = "mixedinstances.example.com"
     "Name"                                                                       = "nodes.mixedinstances.example.com"
@@ -1029,6 +1080,14 @@ resource "aws_s3_object" "kops-version-txt" {
   bucket                 = "testingBucket"
   content                = file("${path.module}/data/aws_s3_object_kops-version.txt_content")
   key                    = "clusters.example.com/mixedinstances.example.com/kops-version.txt"
+  provider               = aws.files
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_object" "manifests-channels-kops-channels" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_object_manifests-channels-kops-channels_content")
+  key                    = "clusters.example.com/mixedinstances.example.com/manifests/channels/kops-channels.yaml"
   provider               = aws.files
   server_side_encryption = "AES256"
 }
@@ -1441,7 +1500,7 @@ terraform {
     aws = {
       "configuration_aliases" = [aws.files]
       "source"                = "hashicorp/aws"
-      "version"               = ">= 5.0.0"
+      "version"               = ">= 6.57.1"
     }
   }
 }

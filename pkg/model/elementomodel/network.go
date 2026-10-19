@@ -32,7 +32,7 @@ var _ fi.CloudupModelBuilder = &NetworkModelBuilder{}
 
 func (b *NetworkModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	network := &elementotasks.Network{
-		Name:      fi.PtrTo(b.ClusterName()),
+		Name:      new(b.ClusterName()),
 		Lifecycle: b.Lifecycle,
 	}
 
@@ -52,7 +52,7 @@ func (b *NetworkModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			elemento.TagKubernetesClusterName: b.ClusterName(),
 		}
 	} else {
-		network.ID = fi.PtrTo(b.Cluster.Spec.Networking.NetworkID)
+		network.ID = new(b.Cluster.Spec.Networking.NetworkID)
 	}
 
 	c.AddTask(network)

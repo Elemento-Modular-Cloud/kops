@@ -116,7 +116,7 @@ func (_ *ExternalLoadBalancer) RenderElemento(t *elemento.ElementoAPITarget, act
 	if dnsIPAddress == "" {
 		return fmt.Errorf("DNS zone task for external load balancer has no service IP address")
 	}
-	expected.DNSZoneTask.IPAddress = fi.PtrTo(dnsIPAddress)
+	expected.DNSZoneTask.IPAddress = new(dnsIPAddress)
 
 	result, _, err := t.Cloud.MulticloudClient().CreateExternalLoadBalancer(context.TODO(), expected.Plan, ecloud.ExternalLoadBalancerCreateOpts{
 		DNSIPAddress: dnsIPAddress,

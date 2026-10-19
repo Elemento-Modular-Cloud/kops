@@ -22,21 +22,27 @@ kops toolbox enroll [CLUSTER] [flags]
 ### Options
 
 ```
+      --api-server string       Override the API server used when communicating with the cluster kube-apiserver
+      --build-host              only build the host resource, don't apply it or enroll the node
       --cluster string          Name of cluster to join
   -h, --help                    help for enroll
       --host string             IP/hostname for machine to add
       --instance-group string   Name of instance-group to join
+      --pod-cidr strings        IP Address range to use for pods that run on this node
       --ssh-port int            port for ssh (default 22)
       --ssh-user string         user for ssh (default "root")
+      --use-kubeconfig          Use the server endpoint from the local kubeconfig instead of inferring from cluster name
 ```
 
 ### Options inherited from parent commands
 
 ```
-      --config string   yaml config file (default is $HOME/.kops.yaml)
-      --name string     Name of cluster. Overrides KOPS_CLUSTER_NAME environment variable
-      --state string    Location of state storage (kops 'config' file). Overrides KOPS_STATE_STORE environment variable
-  -v, --v Level         number for the log level verbosity
+      --alsologtostderrthreshold severity   logs at or above this threshold go to stderr when -alsologtostderr=true (no effect when -logtostderr=true)
+      --config string                       yaml config file (default is $HOME/.kops.yaml)
+      --legacy_stderr_threshold_behavior    If true, stderrthreshold is ignored when logtostderr=true (legacy behavior). If false, stderrthreshold is honored even when logtostderr=true
+      --name string                         Name of cluster. Overrides KOPS_CLUSTER_NAME environment variable
+      --state string                        Location of state storage (kops 'config' file). Overrides KOPS_STATE_STORE environment variable
+  -v, --v Level                             number for the log level verbosity
 ```
 
 ### SEE ALSO

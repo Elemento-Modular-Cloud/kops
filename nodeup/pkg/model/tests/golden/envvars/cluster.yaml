@@ -39,7 +39,7 @@ spec:
         value: "50"
   kubelet:
     anonymousAuth: false
-  kubernetesVersion: v1.28.0
+  kubernetesVersion: v1.35.0
   masterPublicName: api.minimal.example.com
   networkCIDR: 172.20.0.0/16
   networking:

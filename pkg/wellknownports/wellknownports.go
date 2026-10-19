@@ -20,6 +20,18 @@ const (
 	// KubeAPIServer is the port where kube-apiserver listens.
 	KubeAPIServer = 443
 
+	// BGP is the port used by the BGP routing protocol (Calico node-to-node mesh).
+	BGP = 179
+
+	// EtcdMetricsPort is used to serve etcd metrics
+	EtcdMetricsPort = 2382
+
+	// EtcdEventsMetricsPort is used to serve etcd metrics for the events etcd
+	EtcdEventsMetricsPort = 2384
+
+	// KopsChannelsHealthCheck is the loopback port the kops-channels static pod serves /readyz on.
+	KopsChannelsHealthCheck = 3986
+
 	// NodeupChallenge is the port where nodeup listens for challenges.
 	NodeupChallenge = 3987
 
@@ -35,7 +47,9 @@ const (
 	EtcdCiliumGRPC                  = 3991
 	EtcdCiliumQuarantinedClientPort = 3992
 
-	// DNSControllerGossipMemberlist is the port where dns-controller listens for the memberlist-backed gossip
+	// DNSControllerGossipMemberlist was the port where dns-controller listened for the memberlist-backed gossip.
+	//
+	// Deprecated: gossip DNS support was removed in kOps 1.37; retained so the port is not reused.
 	DNSControllerGossipMemberlist = 3993
 
 	// EtcdMainQuarantinedClientPort is the port used by etcd when quarantined, for the main etcd
@@ -44,25 +58,50 @@ const (
 	// EtcdEventsQuarantinedClientPort is the port used by etcd when quarantined, for the events etcd
 	EtcdEventsQuarantinedClientPort = 3995
 
+	// EtcdLeasesQuarantinedClientPort is the port used by etcd when quarantined, for the leases etcd
+	EtcdLeasesQuarantinedClientPort = 4005
+
 	// EtcdMainGRPC is the GRPC port used by etcd-manager, for the main etcd
 	EtcdMainGRPC = 3996
 
 	// EtcdEventsGRPC is the GRPC port used by etcd-manager, for the events etcd
 	EtcdEventsGRPC = 3997
 
-	// DNSControllerGossipWeaveMesh is the port where dns-controller listens for the weave-mesh backend gossip
+	// EtcdLeasesGRPC is the GRPC port used by etcd-manager, for the leases etcd
+	EtcdLeasesGRPC = 4006
+
+	// DNSControllerGossipWeaveMesh was the port where dns-controller listened for the weave-mesh-backed gossip.
+	//
+	// Deprecated: gossip DNS support was removed in kOps 1.37; retained so the port is not reused.
 	DNSControllerGossipWeaveMesh = 3998
 
-	// ProtokubeGossipWeaveMesh is the port where protokube listens for the weave-mesh-backed gossip
+	// ProtokubeGossipWeaveMesh was the port where protokube listened for the weave-mesh-backed gossip.
+	//
+	// Deprecated: gossip DNS support was removed in kOps 1.37; retained so the port is not reused.
 	ProtokubeGossipWeaveMesh = 3999
 
-	// ProtokubeGossipMemberlist is the port where protokube listens for the memberlist-backed gossip
+	// ProtokubeGossipMemberlist was the port where protokube listened for the memberlist-backed gossip.
+	//
+	// Deprecated: gossip DNS support was removed in kOps 1.37; retained so the port is not reused.
 	ProtokubeGossipMemberlist = 4000
 
-	// 4001 is etcd main, 4002 is etcd events
-
+	// EtcdMainClientPort is the client port for the main etcd cluster
+	EtcdMainClientPort = 4001
+	// EtcdEventsClientPort is the client port for the events etcd cluster
+	EtcdEventsClientPort = 4002
 	// EtcdCiliumClientPort is the port were the Cilium etcd cluster listens
 	EtcdCiliumClientPort = 4003
+	// EtcdLeasesClientPort is the client port for the leases etcd cluster
+	EtcdLeasesClientPort = 4004
+
+	// EtcdMainPeerPort is the peer port for the main etcd cluster
+	EtcdMainPeerPort = 2380
+	// EtcdEventsPeerPort is the peer port for the events etcd cluster
+	EtcdEventsPeerPort = 2381
+	// EtcdCiliumPeerPort is the peer port for the cilium etcd cluster
+	EtcdCiliumPeerPort = 2382
+	// EtcdLeasesPeerPort is the peer port for the leases etcd cluster
+	EtcdLeasesPeerPort = 2383
 
 	// CiliumOperatorPrometheusPort is the port the Cilium Operator exposes metrics
 	CiliumPrometheusOperatorPort = 6942
@@ -81,6 +120,18 @@ const (
 
 	// KubeletAPI is the port where kubelet listens
 	KubeletAPI = 10250
+
+	// KubeProxyMetricsPort is used by kube-proxy to expose metrics
+	KubeProxyMetricsPort = 10249
+
+	// KubeSchedulerMetricsPort is used by kube-scheduler to expose metrics
+	KubeSchedulerMetricsPort = 10259
+
+	// KubeControllerManagerMetricsPort is used by kube-controller-manager to expose metrics
+	KubeControllerManagerMetricsPort = 10257
+
+	// NodeExporterMetricsPort is used by node-exporter to expose node metrics
+	NodeExporterMetricsPort = 9100
 )
 
 type PortRange struct {
@@ -88,16 +139,9 @@ type PortRange struct {
 	Max int
 }
 
-func DNSGossipPortRanges() []PortRange {
-	return []PortRange{
-		// 3993 is used by dns-controller, which is less important, so we might be able to drop it
-		{Min: 3993, Max: 3993},
-		{Min: 3998, Max: 4000},
-	}
-}
-
 func ETCDPortRanges() []PortRange {
 	return []PortRange{
 		{Min: 3994, Max: 3997},
+		{Min: 4005, Max: 4006},
 	}
 }

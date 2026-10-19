@@ -187,7 +187,6 @@ resource "aws_autoscaling_group" "master-us-test-1a-masters-privatedns1-example-
     id      = aws_launch_template.master-us-test-1a-masters-privatedns1-example-com.id
     version = aws_launch_template.master-us-test-1a-masters-privatedns1-example-com.latest_version
   }
-  load_balancers        = [aws_elb.api-privatedns1-example-com.id]
   max_instance_lifetime = 0
   max_size              = 1
   metrics_granularity   = "1Minute"
@@ -254,6 +253,7 @@ resource "aws_autoscaling_group" "master-us-test-1a-masters-privatedns1-example-
     propagate_at_launch = true
     value               = "owned"
   }
+  target_group_arns   = [aws_lb_target_group.tcp-privatedns1-example-c-1ia51c.id]
   vpc_zone_identifier = [aws_subnet.us-test-1a-privatedns1-example-com.id]
 }
 
@@ -458,36 +458,6 @@ resource "aws_eip" "us-test-1a-privatedns1-example-com" {
   }
 }
 
-resource "aws_elb" "api-privatedns1-example-com" {
-  connection_draining         = true
-  connection_draining_timeout = 300
-  cross_zone_load_balancing   = false
-  health_check {
-    healthy_threshold   = 2
-    interval            = 10
-    target              = "SSL:443"
-    timeout             = 5
-    unhealthy_threshold = 2
-  }
-  idle_timeout = 300
-  listener {
-    instance_port     = 443
-    instance_protocol = "TCP"
-    lb_port           = 443
-    lb_protocol       = "TCP"
-  }
-  name            = "api-privatedns1-example-c-lq96ht"
-  security_groups = [aws_security_group.api-elb-privatedns1-example-com.id]
-  subnets         = [aws_subnet.utility-us-test-1a-privatedns1-example-com.id]
-  tags = {
-    "KubernetesCluster"                             = "privatedns1.example.com"
-    "Name"                                          = "api.privatedns1.example.com"
-    "Owner"                                         = "John Doe"
-    "foo/bar"                                       = "fib+baz"
-    "kubernetes.io/cluster/privatedns1.example.com" = "owned"
-  }
-}
-
 resource "aws_iam_instance_profile" "bastions-privatedns1-example-com" {
   name = "bastions.privatedns1.example.com"
   role = aws_iam_role.bastions-privatedns1-example-com.name
@@ -560,22 +530,10 @@ resource "aws_iam_role" "nodes-privatedns1-example-com" {
   }
 }
 
-resource "aws_iam_role_policy" "bastions-privatedns1-example-com" {
-  name   = "bastions.privatedns1.example.com"
-  policy = file("${path.module}/data/aws_iam_role_policy_bastions.privatedns1.example.com_policy")
-  role   = aws_iam_role.bastions-privatedns1-example-com.name
-}
-
 resource "aws_iam_role_policy" "masters-privatedns1-example-com" {
   name   = "masters.privatedns1.example.com"
   policy = file("${path.module}/data/aws_iam_role_policy_masters.privatedns1.example.com_policy")
   role   = aws_iam_role.masters-privatedns1-example-com.name
-}
-
-resource "aws_iam_role_policy" "nodes-privatedns1-example-com" {
-  name   = "nodes.privatedns1.example.com"
-  policy = file("${path.module}/data/aws_iam_role_policy_nodes.privatedns1.example.com_policy")
-  role   = aws_iam_role.nodes-privatedns1-example-com.name
 }
 
 resource "aws_internet_gateway" "privatedns1-example-com" {
@@ -653,6 +611,19 @@ resource "aws_launch_template" "bastion-privatedns1-example-com" {
   }
   tag_specifications {
     resource_type = "volume"
+    tags = {
+      "KubernetesCluster"                             = "privatedns1.example.com"
+      "Name"                                          = "bastion.privatedns1.example.com"
+      "Owner"                                         = "John Doe"
+      "aws-node-termination-handler/managed"          = ""
+      "foo/bar"                                       = "fib+baz"
+      "k8s.io/role/bastion"                           = "1"
+      "kops.k8s.io/instancegroup"                     = "bastion"
+      "kubernetes.io/cluster/privatedns1.example.com" = "owned"
+    }
+  }
+  tag_specifications {
+    resource_type = "network-interface"
     tags = {
       "KubernetesCluster"                             = "privatedns1.example.com"
       "Name"                                          = "bastion.privatedns1.example.com"
@@ -751,6 +722,23 @@ resource "aws_launch_template" "master-us-test-1a-masters-privatedns1-example-co
       "kubernetes.io/cluster/privatedns1.example.com"                                                         = "owned"
     }
   }
+  tag_specifications {
+    resource_type = "network-interface"
+    tags = {
+      "KubernetesCluster"                                                                                     = "privatedns1.example.com"
+      "Name"                                                                                                  = "master-us-test-1a.masters.privatedns1.example.com"
+      "Owner"                                                                                                 = "John Doe"
+      "aws-node-termination-handler/managed"                                                                  = ""
+      "foo/bar"                                                                                               = "fib+baz"
+      "k8s.io/cluster-autoscaler/node-template/label/kops.k8s.io/kops-controller-pki"                         = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node-role.kubernetes.io/control-plane"                   = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node.kubernetes.io/exclude-from-external-load-balancers" = ""
+      "k8s.io/role/control-plane"                                                                             = "1"
+      "k8s.io/role/master"                                                                                    = "1"
+      "kops.k8s.io/instancegroup"                                                                             = "master-us-test-1a"
+      "kubernetes.io/cluster/privatedns1.example.com"                                                         = "owned"
+    }
+  }
   tags = {
     "KubernetesCluster"                                                                                     = "privatedns1.example.com"
     "Name"                                                                                                  = "master-us-test-1a.masters.privatedns1.example.com"
@@ -833,6 +821,20 @@ resource "aws_launch_template" "nodes-privatedns1-example-com" {
       "kubernetes.io/cluster/privatedns1.example.com"                              = "owned"
     }
   }
+  tag_specifications {
+    resource_type = "network-interface"
+    tags = {
+      "KubernetesCluster"                                                          = "privatedns1.example.com"
+      "Name"                                                                       = "nodes.privatedns1.example.com"
+      "Owner"                                                                      = "John Doe"
+      "aws-node-termination-handler/managed"                                       = ""
+      "foo/bar"                                                                    = "fib+baz"
+      "k8s.io/cluster-autoscaler/node-template/label/node-role.kubernetes.io/node" = ""
+      "k8s.io/role/node"                                                           = "1"
+      "kops.k8s.io/instancegroup"                                                  = "nodes"
+      "kubernetes.io/cluster/privatedns1.example.com"                              = "owned"
+    }
+  }
   tags = {
     "KubernetesCluster"                                                          = "privatedns1.example.com"
     "Name"                                                                       = "nodes.privatedns1.example.com"
@@ -845,6 +847,24 @@ resource "aws_launch_template" "nodes-privatedns1-example-com" {
     "kubernetes.io/cluster/privatedns1.example.com"                              = "owned"
   }
   user_data = filebase64("${path.module}/data/aws_launch_template_nodes.privatedns1.example.com_user_data")
+}
+
+resource "aws_lb" "api-privatedns1-example-com" {
+  enable_cross_zone_load_balancing = false
+  internal                         = false
+  load_balancer_type               = "network"
+  name                             = "api-privatedns1-example-c-lq96ht"
+  security_groups                  = [aws_security_group.api-elb-privatedns1-example-com.id]
+  subnet_mapping {
+    subnet_id = aws_subnet.utility-us-test-1a-privatedns1-example-com.id
+  }
+  tags = {
+    "KubernetesCluster"                             = "privatedns1.example.com"
+    "Name"                                          = "api.privatedns1.example.com"
+    "Owner"                                         = "John Doe"
+    "foo/bar"                                       = "fib+baz"
+    "kubernetes.io/cluster/privatedns1.example.com" = "owned"
+  }
 }
 
 resource "aws_lb" "bastion-privatedns1-example-com" {
@@ -863,6 +883,16 @@ resource "aws_lb" "bastion-privatedns1-example-com" {
     "foo/bar"                                       = "fib+baz"
     "kubernetes.io/cluster/privatedns1.example.com" = "owned"
   }
+}
+
+resource "aws_lb_listener" "api-privatedns1-example-com-443" {
+  default_action {
+    target_group_arn = aws_lb_target_group.tcp-privatedns1-example-c-1ia51c.id
+    type             = "forward"
+  }
+  load_balancer_arn = aws_lb.api-privatedns1-example-com.id
+  port              = 443
+  protocol          = "TCP"
 }
 
 resource "aws_lb_listener" "bastion-privatedns1-example-com-22" {
@@ -890,6 +920,28 @@ resource "aws_lb_target_group" "bastion-privatedns1-examp-mbgbef" {
   tags = {
     "KubernetesCluster"                             = "privatedns1.example.com"
     "Name"                                          = "bastion-privatedns1-examp-mbgbef"
+    "Owner"                                         = "John Doe"
+    "foo/bar"                                       = "fib+baz"
+    "kubernetes.io/cluster/privatedns1.example.com" = "owned"
+  }
+  vpc_id = aws_vpc.privatedns1-example-com.id
+}
+
+resource "aws_lb_target_group" "tcp-privatedns1-example-c-1ia51c" {
+  connection_termination = "true"
+  deregistration_delay   = "30"
+  health_check {
+    healthy_threshold   = 2
+    interval            = 10
+    protocol            = "TCP"
+    unhealthy_threshold = 2
+  }
+  name     = "tcp-privatedns1-example-c-1ia51c"
+  port     = 443
+  protocol = "TCP"
+  tags = {
+    "KubernetesCluster"                             = "privatedns1.example.com"
+    "Name"                                          = "tcp-privatedns1-example-c-1ia51c"
     "Owner"                                         = "John Doe"
     "foo/bar"                                       = "fib+baz"
     "kubernetes.io/cluster/privatedns1.example.com" = "owned"
@@ -930,8 +982,8 @@ resource "aws_route" "route-private-us-test-1a-0-0-0-0--0" {
 resource "aws_route53_record" "api-privatedns1-example-com" {
   alias {
     evaluate_target_health = false
-    name                   = aws_elb.api-privatedns1-example-com.dns_name
-    zone_id                = aws_elb.api-privatedns1-example-com.zone_id
+    name                   = aws_lb.api-privatedns1-example-com.dns_name
+    zone_id                = aws_lb.api-privatedns1-example-com.zone_id
   }
   name    = "api.privatedns1.example.com"
   type    = "A"
@@ -941,8 +993,8 @@ resource "aws_route53_record" "api-privatedns1-example-com" {
 resource "aws_route53_record" "api-privatedns1-example-com-AAAA" {
   alias {
     evaluate_target_health = false
-    name                   = aws_elb.api-privatedns1-example-com.dns_name
-    zone_id                = aws_elb.api-privatedns1-example-com.zone_id
+    name                   = aws_lb.api-privatedns1-example-com.dns_name
+    zone_id                = aws_lb.api-privatedns1-example-com.zone_id
   }
   name    = "api.privatedns1.example.com"
   type    = "AAAA"
@@ -1016,6 +1068,14 @@ resource "aws_s3_object" "kops-version-txt" {
   bucket                 = "testingBucket"
   content                = file("${path.module}/data/aws_s3_object_kops-version.txt_content")
   key                    = "clusters.example.com/privatedns1.example.com/kops-version.txt"
+  provider               = aws.files
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_object" "manifests-channels-kops-channels" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_object_manifests-channels-kops-channels_content")
+  key                    = "clusters.example.com/privatedns1.example.com/manifests/channels/kops-channels.yaml"
   provider               = aws.files
   server_side_encryption = "AES256"
 }
@@ -1568,7 +1628,7 @@ terraform {
     aws = {
       "configuration_aliases" = [aws.files]
       "source"                = "hashicorp/aws"
-      "version"               = ">= 5.0.0"
+      "version"               = ">= 6.57.1"
     }
   }
 }

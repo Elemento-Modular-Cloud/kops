@@ -310,7 +310,7 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 		if dnsIPAddress == "" {
 			return fmt.Errorf("DNS zone task for server group %q has no service IP address", fi.ValueOf(e.Name))
 		}
-		e.DNSZoneTask.IPAddress = fi.PtrTo(dnsIPAddress)
+		e.DNSZoneTask.IPAddress = new(dnsIPAddress)
 	}
 
 	// Resolve generated resources only after their dependencies have completed.
@@ -387,7 +387,7 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 
 		opts := ecloud.ServerCreateOpts{
 			Name:             name,
-			StartAfterCreate: fi.PtrTo(true),
+			StartAfterCreate: new(true),
 			Networks: []*ecloud.Network{
 				{
 					ID: networkID,

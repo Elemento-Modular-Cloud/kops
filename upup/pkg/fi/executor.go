@@ -146,8 +146,9 @@ func (e *executor[T]) RunTasks(ctx context.Context, taskMap map[string]Task[T]) 
 				}
 
 				remaining := time.Second * time.Duration(int(time.Until(ts.deadline).Seconds()))
-				if _, ok := err.(*TryAgainLaterError); ok {
-					klog.V(2).Infof("Task %q not ready (attempt %d/%d): %v", ts.key, ts.attemptCount, e.options.MaxRetryAttempts, err)
+				var tryAgainLater *TryAgainLaterError
+				if errors.As(err, &tryAgainLater) {
+					klog.V(2).Infof("Task %q not ready: %v", ts.key, err)
 				} else {
 					if e.options.MaxRetryAttempts > 0 {
 						klog.Warningf("error running task %q (attempt %d/%d, %v remaining to succeed): %v", ts.key, ts.attemptCount, e.options.MaxRetryAttempts, remaining, err)
@@ -175,8 +176,8 @@ func (e *executor[T]) RunTasks(ctx context.Context, taskMap map[string]Task[T]) 
 
 			tryAgainLaterCount := 0
 			for _, err := range errs {
-				var tryAgainLaterError TryAgainLaterError
-				if !errors.Is(err, &tryAgainLaterError) {
+				var tryAgainLater *TryAgainLaterError
+				if errors.As(err, &tryAgainLater) {
 					tryAgainLaterCount++
 				}
 			}
@@ -243,6 +244,7 @@ func (e *executor[T]) forkJoin(ctx context.Context, tasks []*taskState[T]) []err
 			}
 
 			result := ts.task.Run(e.context)
+			klog.V(2).Infof("Ran task %q: %v: Result %v\n", ts.key, ts.task, result)
 
 			resultsMutex.Lock()
 			results[index] = result

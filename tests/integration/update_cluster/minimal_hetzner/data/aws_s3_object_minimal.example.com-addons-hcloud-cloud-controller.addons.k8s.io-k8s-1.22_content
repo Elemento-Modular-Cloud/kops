@@ -1,23 +1,6 @@
 apiVersion: v1
-kind: Secret
-metadata:
-  creationTimestamp: null
-  labels:
-    addon.kops.k8s.io/name: hcloud-cloud-controller.addons.k8s.io
-    app.kubernetes.io/managed-by: kops
-    k8s-addon: hcloud-cloud-controller.addons.k8s.io
-  name: hcloud
-  namespace: kube-system
-stringData:
-  network: minimal.example.com
-  token: REDACTED
-
----
-
-apiVersion: v1
 kind: ServiceAccount
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: hcloud-cloud-controller.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -28,18 +11,87 @@ metadata:
 ---
 
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: ClusterRole
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: hcloud-cloud-controller.addons.k8s.io
     app.kubernetes.io/managed-by: kops
     k8s-addon: hcloud-cloud-controller.addons.k8s.io
   name: system:hcloud-cloud-controller-manager
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  verbs:
+  - '*'
+- apiGroups:
+  - ""
+  resources:
+  - nodes/status
+  verbs:
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - services/status
+  verbs:
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - create
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+  - update
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    addon.kops.k8s.io/name: hcloud-cloud-controller.addons.k8s.io
+    app.kubernetes.io/managed-by: kops
+    k8s-addon: hcloud-cloud-controller.addons.k8s.io
+  name: system:hcloud-cloud-controller-manager:restricted
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: cluster-admin
+  name: system:hcloud-cloud-controller-manager
 subjects:
 - kind: ServiceAccount
   name: hcloud-cloud-controller-manager
@@ -50,7 +102,6 @@ subjects:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: hcloud-cloud-controller.addons.k8s.io
     app.kubernetes.io/managed-by: kops
@@ -62,37 +113,39 @@ spec:
   revisionHistoryLimit: 2
   selector:
     matchLabels:
-      app: hcloud-cloud-controller-manager
+      app.kubernetes.io/instance: hcloud-cloud-controller-manager
+      app.kubernetes.io/name: hcloud-cloud-controller-manager
   template:
     metadata:
-      creationTimestamp: null
       labels:
-        app: hcloud-cloud-controller-manager
+        app.kubernetes.io/instance: hcloud-cloud-controller-manager
+        app.kubernetes.io/name: hcloud-cloud-controller-manager
         kops.k8s.io/managed-by: kops
     spec:
       containers:
-      - command:
-        - /bin/hcloud-cloud-controller-manager
+      - args:
         - --allocate-node-cidrs=true
-        - --allow-untagged-cloud=true
+        - --allow-untagged-cloud
         - --cloud-provider=hcloud
         - --cluster-cidr=100.96.0.0/11
         - --configure-cloud-routes=false
-        - --leader-elect=false
+        - --feature-gates=CloudControllerManagerWatchBasedRoutesReconciliation=true
+        - --route-reconciliation-period=30s
         - --v=2
-        - --use-service-account-credentials=true
+        - --webhook-secure-port=0
+        - --leader-elect=false
         env:
-        - name: HCLOUD_TOKEN
-          valueFrom:
-            secretKeyRef:
-              key: token
-              name: hcloud
         - name: HCLOUD_NETWORK
           valueFrom:
             secretKeyRef:
               key: network
               name: hcloud
-        image: hetznercloud/hcloud-cloud-controller-manager:v1.19.0
+        - name: HCLOUD_TOKEN
+          valueFrom:
+            secretKeyRef:
+              key: token
+              name: hcloud
+        image: hetznercloud/hcloud-cloud-controller-manager:v1.36.0
         name: hcloud-cloud-controller-manager
         ports:
         - containerPort: 8233
@@ -101,8 +154,20 @@ spec:
           requests:
             cpu: 100m
             memory: 50Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
       dnsPolicy: Default
       priorityClassName: system-cluster-critical
+      securityContext:
+        runAsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
       serviceAccountName: hcloud-cloud-controller-manager
       tolerations:
       - effect: NoSchedule

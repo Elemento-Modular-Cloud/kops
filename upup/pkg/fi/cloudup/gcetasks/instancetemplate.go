@@ -57,9 +57,11 @@ type InstanceTemplate struct {
 	Preemptible          *bool
 	GCPProvisioningModel *string
 
-	BootDiskImage  *string
-	BootDiskSizeGB *int64
-	BootDiskType   *string
+	BootDiskImage      *string
+	BootDiskSizeGB     *int64
+	BootDiskType       *string
+	BootDiskIOPS       *int64
+	BootDiskThroughput *int64
 
 	CanIPForward  *bool
 	Subnet        *Subnet
@@ -123,16 +125,22 @@ func (e *InstanceTemplate) Find(c *fi.CloudupContext) (*InstanceTemplate, error)
 
 		actual.Tags = append(actual.Tags, p.Tags.Items...)
 		actual.Labels = p.Labels
-		actual.MachineType = fi.PtrTo(lastComponent(p.MachineType))
+		actual.MachineType = new(lastComponent(p.MachineType))
 		actual.CanIPForward = &p.CanIpForward
 
 		bootDiskImage, err := ShortenImageURL(cloud.Project(), p.Disks[0].InitializeParams.SourceImage)
 		if err != nil {
 			return nil, fmt.Errorf("error parsing source image URL: %v", err)
 		}
-		actual.BootDiskImage = fi.PtrTo(bootDiskImage)
+		actual.BootDiskImage = new(bootDiskImage)
 		actual.BootDiskType = &p.Disks[0].InitializeParams.DiskType
 		actual.BootDiskSizeGB = &p.Disks[0].InitializeParams.DiskSizeGb
+		if p.Disks[0].InitializeParams.ProvisionedIops > 0 {
+			actual.BootDiskIOPS = &p.Disks[0].InitializeParams.ProvisionedIops
+		}
+		if p.Disks[0].InitializeParams.ProvisionedThroughput > 0 {
+			actual.BootDiskThroughput = &p.Disks[0].InitializeParams.ProvisionedThroughput
+		}
 
 		if p.Scheduling != nil {
 			actual.Preemptible = &p.Scheduling.Preemptible
@@ -140,7 +148,7 @@ func (e *InstanceTemplate) Find(c *fi.CloudupContext) (*InstanceTemplate, error)
 		}
 		if len(p.NetworkInterfaces) != 0 {
 			ni := p.NetworkInterfaces[0]
-			actual.Network = &Network{Name: fi.PtrTo(lastComponent(ni.Network))}
+			actual.Network = &Network{Name: new(lastComponent(ni.Network))}
 			if ni.StackType != "" {
 				actual.StackType = &ni.StackType
 			}
@@ -153,7 +161,7 @@ func (e *InstanceTemplate) Find(c *fi.CloudupContext) (*InstanceTemplate, error)
 			}
 
 			if ni.Subnetwork != "" {
-				actual.Subnet = &Subnet{Name: fi.PtrTo(lastComponent(ni.Subnetwork))}
+				actual.Subnet = &Subnet{Name: new(lastComponent(ni.Subnetwork))}
 			}
 
 			acs := ni.AccessConfigs
@@ -164,9 +172,9 @@ func (e *InstanceTemplate) Find(c *fi.CloudupContext) (*InstanceTemplate, error)
 				if acs[0].Type != accessConfigOneToOneNAT {
 					return nil, fmt.Errorf("unexpected access type in template %q: %s", *actual.Name, acs[0].Type)
 				}
-				actual.HasExternalIP = fi.PtrTo(true)
+				actual.HasExternalIP = new(true)
 			} else {
-				actual.HasExternalIP = fi.PtrTo(false)
+				actual.HasExternalIP = new(false)
 			}
 		}
 
@@ -197,7 +205,7 @@ func (e *InstanceTemplate) Find(c *fi.CloudupContext) (*InstanceTemplate, error)
 		//			if err != nil {
 		//				return nil, fmt.Errorf("unable to parse image URL: %q", d.SourceImage)
 		//			}
-		//			actual.Image = fi.PtrTo(imageURL.Project + "/" + imageURL.Name)
+		//			actual.Image = new(imageURL.Project + "/" + imageURL.Name)
 		//		}
 		//	}
 		//}
@@ -239,7 +247,7 @@ func (e *InstanceTemplate) Run(c *fi.CloudupContext) error {
 	return fi.CloudupDefaultDeltaRunMethod(e, c)
 }
 
-func (_ *InstanceTemplate) CheckChanges(a, e, changes *InstanceTemplate) error {
+func (*InstanceTemplate) CheckChanges(a, e, changes *InstanceTemplate) error {
 	if fi.ValueOf(e.BootDiskImage) == "" {
 		return fi.RequiredField("BootDiskImage")
 	}
@@ -249,31 +257,74 @@ func (_ *InstanceTemplate) CheckChanges(a, e, changes *InstanceTemplate) error {
 	return nil
 }
 
-func (e *InstanceTemplate) mapToGCE(project string, region string) (*compute.InstanceTemplate, error) {
-	// TODO: This is similar to Instance...
+type MachineTypeInfo struct {
+	SupportsMigration bool
+}
+
+func buildScheduling(machineTypeInfo *MachineTypeInfo, preemptible *bool, gcpProvisioningModel *string, guestAccelerators []AcceleratorConfig) *compute.Scheduling {
 	var scheduling *compute.Scheduling
 
-	if fi.ValueOf(e.Preemptible) {
+	if fi.ValueOf(preemptible) {
 		scheduling = &compute.Scheduling{
-			AutomaticRestart:  fi.PtrTo(false),
+			AutomaticRestart:  new(false),
 			OnHostMaintenance: "TERMINATE",
-			ProvisioningModel: fi.ValueOf(e.GCPProvisioningModel),
+			ProvisioningModel: fi.ValueOf(gcpProvisioningModel),
 			Preemptible:       true,
 		}
 	} else {
+		// We default to allowing migration, as it gives higher uptime.
+		// However, if we figure out that the instance does not support migration, we will set this to TERMINATE (so we can create the instance at all).
 		scheduling = &compute.Scheduling{
-			AutomaticRestart: fi.PtrTo(true),
-			// TODO: Migrate or terminate?
+			AutomaticRestart:  new(true),
 			OnHostMaintenance: "MIGRATE",
 			ProvisioningModel: "STANDARD",
 			Preemptible:       false,
 		}
 	}
 
-	if len(e.GuestAccelerators) > 0 {
+	if len(guestAccelerators) > 0 {
 		// Instances with accelerators cannot be migrated.
 		scheduling.OnHostMaintenance = "TERMINATE"
 	}
+
+	if machineTypeInfo != nil {
+		if !machineTypeInfo.SupportsMigration {
+			scheduling.OnHostMaintenance = "TERMINATE"
+		}
+	}
+	return scheduling
+}
+
+// guessMachineTypeInfo returns information about the machine type, such as whether it supports live migration.
+// We use this to determine the correct scheduling options for non-preemptible VMs.
+// If the machine type is not found, we return placeholder information, as we want to be tolerant of missing machine types, and just default to the safest scheduling options.
+func guessMachineTypeInfo(machineType string) (*MachineTypeInfo, error) {
+	machineTypeInfo := &MachineTypeInfo{
+		SupportsMigration: true,
+	}
+	if machineType == "" {
+		return machineTypeInfo, nil
+	}
+
+	family := strings.Split(machineType, "-")[0]
+
+	switch family {
+	case "a4x", "a4", "a3", "a2", "g2", "g4":
+		// VMs with GPUs attached do not support live migration.
+		// https://docs.cloud.google.com/compute/docs/instances/live-migration-process#limitations
+		machineTypeInfo.SupportsMigration = false
+	}
+
+	return machineTypeInfo, nil
+}
+
+func (e *InstanceTemplate) mapToGCE(project string, region string) (*compute.InstanceTemplate, error) {
+	machineTypeInfo, err := guessMachineTypeInfo(fi.ValueOf(e.MachineType))
+	if err != nil {
+		return nil, fmt.Errorf("getting machine type info: %w", err)
+	}
+
+	scheduling := buildScheduling(machineTypeInfo, e.Preemptible, e.GCPProvisioningModel, e.GuestAccelerators)
 
 	var disks []*compute.AttachedDisk
 	disks = append(disks, &compute.AttachedDisk{
@@ -290,6 +341,14 @@ func (e *InstanceTemplate) mapToGCE(project string, region string) (*compute.Ins
 		Mode:       "READ_WRITE",
 		Type:       "PERSISTENT",
 	})
+
+	if e.BootDiskIOPS != nil {
+		disks[0].InitializeParams.ProvisionedIops = *e.BootDiskIOPS
+	}
+
+	if e.BootDiskThroughput != nil {
+		disks[0].InitializeParams.ProvisionedThroughput = *e.BootDiskThroughput
+	}
 
 	var tags *compute.Tags
 	if e.Tags != nil {
@@ -359,7 +418,7 @@ func (e *InstanceTemplate) mapToGCE(project string, region string) (*compute.Ins
 		}
 		metadataItems = append(metadataItems, &compute.MetadataItems{
 			Key:   key,
-			Value: fi.PtrTo(v),
+			Value: new(v),
 		})
 	}
 
@@ -521,15 +580,17 @@ type terraformInstanceTemplateAttachedDisk struct {
 	DeviceName string `cty:"device_name"`
 
 	// scratch vs persistent
-	Type        string `cty:"type"`
-	Boot        bool   `cty:"boot"`
-	DiskName    string `cty:"disk_name"`
-	SourceImage string `cty:"source_image"`
-	Source      string `cty:"source"`
-	Interface   string `cty:"interface"`
-	Mode        string `cty:"mode"`
-	DiskType    string `cty:"disk_type"`
-	DiskSizeGB  int64  `cty:"disk_size_gb"`
+	Type                  string `cty:"type"`
+	Boot                  bool   `cty:"boot"`
+	DiskName              string `cty:"disk_name"`
+	SourceImage           string `cty:"source_image"`
+	Source                string `cty:"source"`
+	Interface             string `cty:"interface"`
+	Mode                  string `cty:"mode"`
+	DiskType              string `cty:"disk_type"`
+	DiskSizeGB            int64  `cty:"disk_size_gb"`
+	ProvisionedIops       int64  `cty:"provisioned_iops"`
+	ProvisionedThroughput int64  `cty:"provisioned_throughput"`
 }
 
 type terraformNetworkInterface struct {
@@ -605,7 +666,7 @@ func mapServiceAccountsToTerraform(serviceAccounts []*ServiceAccount, saScopes [
 	var out []*terraformTemplateServiceAccount
 	for _, serviceAccount := range serviceAccounts {
 		tsa := &terraformTemplateServiceAccount{
-			Email:  serviceAccount.TerraformLink(),
+			Email:  serviceAccount.TerraformLink_Email(),
 			Scopes: scopes,
 		}
 		out = append(out, tsa)
@@ -624,7 +685,7 @@ func (_ *InstanceTemplate) RenderTerraform(t *terraform.TerraformTarget, a, e, c
 	name := fi.ValueOf(e.Name)
 
 	tf := &terraformInstanceTemplate{
-		Lifecycle:  &terraform.Lifecycle{CreateBeforeDestroy: fi.PtrTo(true)},
+		Lifecycle:  &terraform.Lifecycle{CreateBeforeDestroy: new(true)},
 		NamePrefix: fi.ValueOf(e.NamePrefix) + "-",
 	}
 
@@ -648,6 +709,13 @@ func (_ *InstanceTemplate) RenderTerraform(t *terraform.TerraformTarget, a, e, c
 			DiskType:    d.InitializeParams.DiskType,
 			DiskSizeGB:  d.InitializeParams.DiskSizeGb,
 			Type:        d.Type,
+		}
+		if d.InitializeParams.ProvisionedIops > 0 {
+			tfd.ProvisionedIops = d.InitializeParams.ProvisionedIops
+		}
+
+		if d.InitializeParams.ProvisionedThroughput > 0 {
+			tfd.ProvisionedThroughput = d.InitializeParams.ProvisionedThroughput
 		}
 		tf.Disks = append(tf.Disks, tfd)
 	}

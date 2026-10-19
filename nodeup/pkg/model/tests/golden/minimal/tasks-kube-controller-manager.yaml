@@ -2,7 +2,6 @@ contents: |
   apiVersion: v1
   kind: Pod
   metadata:
-    creationTimestamp: null
     labels:
       k8s-app: kube-controller-manager
     name: kube-controller-manager
@@ -17,7 +16,6 @@ contents: |
       - --attach-detach-reconcile-sync-period=1m0s
       - --authentication-kubeconfig=/var/lib/kube-controller-manager/kubeconfig
       - --authorization-kubeconfig=/var/lib/kube-controller-manager/kubeconfig
-      - --cloud-config=/etc/kubernetes/in-tree-cloud.config
       - --cloud-provider=external
       - --cluster-cidr=100.96.0.0/11
       - --cluster-name=minimal.example.com
@@ -78,9 +76,6 @@ contents: |
       - mountPath: /etc/openssl
         name: etcopenssl
         readOnly: true
-      - mountPath: /etc/kubernetes/in-tree-cloud.config
-        name: cloudconfig
-        readOnly: true
       - mountPath: /srv/kubernetes/ca.crt
         name: cabundle
         readOnly: true
@@ -128,9 +123,6 @@ contents: |
     - hostPath:
         path: /etc/openssl
       name: etcopenssl
-    - hostPath:
-        path: /etc/kubernetes/in-tree-cloud.config
-      name: cloudconfig
     - hostPath:
         path: /srv/kubernetes/ca.crt
       name: cabundle

@@ -366,12 +366,6 @@ resource "aws_iam_role_policy" "masters-minimal-etcd-example-com" {
   role   = aws_iam_role.masters-minimal-etcd-example-com.name
 }
 
-resource "aws_iam_role_policy" "nodes-minimal-etcd-example-com" {
-  name   = "nodes.minimal-etcd.example.com"
-  policy = file("${path.module}/data/aws_iam_role_policy_nodes.minimal-etcd.example.com_policy")
-  role   = aws_iam_role.nodes-minimal-etcd-example-com.name
-}
-
 resource "aws_internet_gateway" "minimal-etcd-example-com" {
   tags = {
     "KubernetesCluster"                              = "minimal-etcd.example.com"
@@ -462,6 +456,21 @@ resource "aws_launch_template" "master-us-test-1a-masters-minimal-etcd-example-c
       "kubernetes.io/cluster/minimal-etcd.example.com"                                                        = "owned"
     }
   }
+  tag_specifications {
+    resource_type = "network-interface"
+    tags = {
+      "KubernetesCluster"                                                                                     = "minimal-etcd.example.com"
+      "Name"                                                                                                  = "master-us-test-1a.masters.minimal-etcd.example.com"
+      "aws-node-termination-handler/managed"                                                                  = ""
+      "k8s.io/cluster-autoscaler/node-template/label/kops.k8s.io/kops-controller-pki"                         = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node-role.kubernetes.io/control-plane"                   = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node.kubernetes.io/exclude-from-external-load-balancers" = ""
+      "k8s.io/role/control-plane"                                                                             = "1"
+      "k8s.io/role/master"                                                                                    = "1"
+      "kops.k8s.io/instancegroup"                                                                             = "master-us-test-1a"
+      "kubernetes.io/cluster/minimal-etcd.example.com"                                                        = "owned"
+    }
+  }
   tags = {
     "KubernetesCluster"                                                                                     = "minimal-etcd.example.com"
     "Name"                                                                                                  = "master-us-test-1a.masters.minimal-etcd.example.com"
@@ -528,6 +537,18 @@ resource "aws_launch_template" "nodes-minimal-etcd-example-com" {
   }
   tag_specifications {
     resource_type = "volume"
+    tags = {
+      "KubernetesCluster"                                                          = "minimal-etcd.example.com"
+      "Name"                                                                       = "nodes.minimal-etcd.example.com"
+      "aws-node-termination-handler/managed"                                       = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node-role.kubernetes.io/node" = ""
+      "k8s.io/role/node"                                                           = "1"
+      "kops.k8s.io/instancegroup"                                                  = "nodes"
+      "kubernetes.io/cluster/minimal-etcd.example.com"                             = "owned"
+    }
+  }
+  tag_specifications {
+    resource_type = "network-interface"
     tags = {
       "KubernetesCluster"                                                          = "minimal-etcd.example.com"
       "Name"                                                                       = "nodes.minimal-etcd.example.com"
@@ -605,6 +626,14 @@ resource "aws_s3_object" "kops-version-txt" {
   bucket                 = "testingBucket"
   content                = file("${path.module}/data/aws_s3_object_kops-version.txt_content")
   key                    = "clusters.example.com/minimal-etcd.example.com/kops-version.txt"
+  provider               = aws.files
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_object" "manifests-channels-kops-channels" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_object_manifests-channels-kops-channels_content")
+  key                    = "clusters.example.com/minimal-etcd.example.com/manifests/channels/kops-channels.yaml"
   provider               = aws.files
   server_side_encryption = "AES256"
 }
@@ -937,7 +966,7 @@ terraform {
     aws = {
       "configuration_aliases" = [aws.files]
       "source"                = "hashicorp/aws"
-      "version"               = ">= 5.0.0"
+      "version"               = ">= 6.57.1"
     }
   }
 }

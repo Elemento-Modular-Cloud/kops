@@ -82,23 +82,21 @@ func (d *podLogDumper) DumpLogs(ctx context.Context) error {
 	for i := 0; i < len(allPods.Items); i++ {
 		result := <-results
 		if result.err != nil {
-			errors.Join(dumpErr, result.err)
+			dumpErr = errors.Join(dumpErr, result.err)
 		}
 	}
-	close(results)
 	return dumpErr
 }
 
 func (d *podLogDumper) getPodLogs(ctx context.Context, pods chan v1.Pod, results chan podLogDumpResult) {
 	for pod := range pods {
+		var podErr error
 		for _, container := range append(pod.Spec.InitContainers, pod.Spec.Containers...) {
 			resPath := path.Join(d.artifactsDir, "cluster-info", pod.Namespace, pod.Name, container.Name)
 
 			err := os.MkdirAll(path.Dir(resPath), 0755)
 			if err != nil {
-				results <- podLogDumpResult{
-					err: fmt.Errorf("creating directory %q: %w", resPath, err),
-				}
+				podErr = errors.Join(podErr, fmt.Errorf("creating directory %q: %w", resPath, err))
 				continue
 			}
 
@@ -107,16 +105,12 @@ func (d *podLogDumper) getPodLogs(ctx context.Context, pods chan v1.Pod, results
 				var statusErr *k8sErrors.StatusError
 				if errors.As(err, &statusErr) {
 					if statusErr.ErrStatus.Code != 400 {
-						results <- podLogDumpResult{
-							err: fmt.Errorf("getting pod logs for the previous instance of %v/%v: %w", pod.Namespace, pod.Name, err),
-						}
+						podErr = errors.Join(podErr, fmt.Errorf("getting pod logs for the previous instance of %v/%v: %w", pod.Namespace, pod.Name, err))
 					}
 				} else {
 					err := writeContainerLogs(resPath+".previous.log", resp)
 					if err != nil {
-						results <- podLogDumpResult{
-							err: err,
-						}
+						podErr = errors.Join(podErr, err)
 					}
 				}
 			}
@@ -126,23 +120,19 @@ func (d *podLogDumper) getPodLogs(ctx context.Context, pods chan v1.Pod, results
 				var statusErr *k8sErrors.StatusError
 				if errors.As(err, &statusErr) {
 					if statusErr.ErrStatus.Code != 400 {
-						results <- podLogDumpResult{
-							err: fmt.Errorf("getting pod logs for the current instance of %v/%v: %w", pod.Namespace, pod.Name, err),
-						}
+						podErr = errors.Join(podErr, fmt.Errorf("getting pod logs for the current instance of %v/%v: %w", pod.Namespace, pod.Name, err))
 						continue
 					}
 				} else {
 					err := writeContainerLogs(resPath+".log", resp)
 					if err != nil {
-						results <- podLogDumpResult{
-							err: err,
-						}
+						podErr = errors.Join(podErr, err)
 					}
 				}
 			}
 		}
 
-		results <- podLogDumpResult{}
+		results <- podLogDumpResult{err: podErr}
 	}
 }
 

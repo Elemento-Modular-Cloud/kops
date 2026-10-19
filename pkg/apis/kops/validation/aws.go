@@ -17,6 +17,7 @@ limitations under the License.
 package validation
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strconv"
@@ -39,7 +40,9 @@ func awsValidateCluster(c *kops.Cluster, strict bool) field.ErrorList {
 	if c.Spec.API.LoadBalancer != nil {
 		lbPath := field.NewPath("spec", "api", "loadBalancer")
 		lbSpec := c.Spec.API.LoadBalancer
-		if strict || lbSpec.Class != "" {
+		if lbSpec.Class == kops.LoadBalancerClassClassic {
+			allErrs = append(allErrs, field.Forbidden(lbPath.Child("class"), "AWS Classic Load Balancer for API is no longer supported; migrate to a Network Load Balancer using kOps 1.36 or earlier. See https://github.com/kubernetes/kops/blob/master/permalinks/acm_nlb.md"))
+		} else if strict || lbSpec.Class != "" {
 			allErrs = append(allErrs, IsValidValue(lbPath.Child("class"), &lbSpec.Class, kops.SupportedLoadBalancerClasses)...)
 		}
 		allErrs = append(allErrs, awsValidateTopologyDNS(lbPath.Child("type"), c)...)
@@ -57,11 +60,40 @@ func awsValidateCluster(c *kops.Cluster, strict bool) field.ErrorList {
 
 	allErrs = append(allErrs, awsValidateEBSCSIDriver(c)...)
 
+	allErrs = append(allErrs, awsValidateNLBSecurityGroupMode(c)...)
+
+	allErrs = append(allErrs, awsValidateUseIPBasedNodeNames(c)...)
+
+	allErrs = append(allErrs, awsValidateS3FileRepositoryPartition(c)...)
+
 	if c.Spec.Authentication != nil && c.Spec.Authentication.AWS != nil {
 		allErrs = append(allErrs, awsValidateIAMAuthenticator(field.NewPath("spec", "authentication", "aws"), c.Spec.Authentication.AWS)...)
 	}
 
 	return allErrs
+}
+
+func awsValidateS3FileRepositoryPartition(cluster *kops.Cluster) field.ErrorList {
+	assets := cluster.Spec.Assets
+	if assets == nil || assets.FileRepository == nil || !strings.HasPrefix(*assets.FileRepository, "s3://") {
+		return nil
+	}
+
+	region, err := awsup.FindRegion(cluster)
+	if err != nil {
+		// Subnet validation reports invalid or missing zones separately.
+		return nil
+	}
+
+	fldPath := field.NewPath("spec", "assets", "fileRepository")
+	supported, err := awsup.SupportsS3BootstrapEndpoint(context.TODO(), region)
+	if err != nil {
+		return field.ErrorList{field.Invalid(fldPath, *assets.FileRepository, err.Error())}
+	}
+	if !supported {
+		return field.ErrorList{field.Forbidden(fldPath, fmt.Sprintf("s3:// fileRepository is not supported in AWS region %q", region))}
+	}
+	return nil
 }
 
 func awsValidateEBSCSIDriver(cluster *kops.Cluster) (allErrs field.ErrorList) {
@@ -70,6 +102,26 @@ func awsValidateEBSCSIDriver(cluster *kops.Cluster) (allErrs field.ErrorList) {
 	fldPath := field.NewPath("spec", "cloudProvider", "aws", "ebsCSIDriver", "enabled")
 	if c.CloudProvider.AWS.EBSCSIDriver != nil && c.CloudProvider.AWS.EBSCSIDriver.Enabled != nil && !*c.CloudProvider.AWS.EBSCSIDriver.Enabled {
 		allErrs = append(allErrs, field.Forbidden(fldPath, "must not be disabled"))
+	}
+	return allErrs
+}
+
+func awsValidateNLBSecurityGroupMode(cluster *kops.Cluster) (allErrs field.ErrorList) {
+	c := cluster.Spec
+
+	fldPath := field.NewPath("spec", "cloudProvider", "aws", "nlbSecurityGroupMode")
+	if c.CloudProvider.AWS.NLBSecurityGroupMode != nil {
+		allErrs = append(allErrs, IsValidValue(fldPath, c.CloudProvider.AWS.NLBSecurityGroupMode, []string{"Managed"})...)
+	}
+	return allErrs
+}
+
+func awsValidateUseIPBasedNodeNames(cluster *kops.Cluster) (allErrs field.ErrorList) {
+	c := cluster.Spec
+
+	fldPath := field.NewPath("spec", "cloudProvider", "aws", "useIPBasedNodeNames")
+	if fi.ValueOf(c.CloudProvider.AWS.UseIPBasedNodeNames) && c.IsIPv6Only() {
+		allErrs = append(allErrs, field.Forbidden(fldPath, "IP-based node names are not supported on IPv6-only clusters"))
 	}
 	return allErrs
 }
@@ -168,9 +220,6 @@ func awsValidateSecurityGroupOverride(fieldPath *field.Path, lbSpec *kops.LoadBa
 	if !strings.HasPrefix(override, "sg-") {
 		allErrs = append(allErrs, field.Invalid(fieldPath, override, "security group override does not match the expected AWS format"))
 	}
-	if lbSpec.Class == kops.LoadBalancerClassNetwork {
-		allErrs = append(allErrs, field.Forbidden(fieldPath, "security group override cannot be specified for a Network Load Balancer"))
-	}
 
 	return allErrs
 }
@@ -243,30 +292,36 @@ func awsValidateInstanceInterruptionBehavior(fieldPath *field.Path, ig *kops.Ins
 func awsValidateMixedInstancesPolicy(path *field.Path, spec *kops.MixedInstancesPolicySpec, ig *kops.InstanceGroup, cloud awsup.AWSCloud) field.ErrorList {
 	var errs field.ErrorList
 
-	mainMachineTypeInfo, err := awsup.GetMachineTypeInfo(cloud, ec2types.InstanceType(ig.Spec.MachineType))
-	if err != nil {
-		errs = append(errs, field.Invalid(field.NewPath("spec", "machineType"), ig.Spec.MachineType, fmt.Sprintf("machine type specified is invalid: %q", ig.Spec.MachineType)))
-		return errs
-	}
-
-	hasGPU := mainMachineTypeInfo.GPU
-
-	// @step: check the instance types are valid
-	for i, instanceTypes := range spec.Instances {
-		fld := path.Child("instances").Index(i)
-		errs = append(errs, awsValidateInstanceTypeAndImage(path.Child("instances").Index(i), path.Child("image"), instanceTypes, ig.Spec.Image, cloud)...)
-
-		for _, instanceType := range strings.Split(instanceTypes, ",") {
-			machineTypeInfo, err := awsup.GetMachineTypeInfo(cloud, ec2types.InstanceType(instanceType))
-			if err != nil {
-				errs = append(errs, field.Invalid(field.NewPath("spec", "machineType"), ig.Spec.MachineType, fmt.Sprintf("machine type specified is invalid: %q", ig.Spec.MachineType)))
-				return errs
-			}
-			if machineTypeInfo.GPU != hasGPU {
-				errs = append(errs, field.Forbidden(fld, "Cannot mix GPU and non-GPU machine types in the same Instance Group"))
-			}
+	if ig.Spec.Manager == kops.InstanceManagerKarpenter {
+		for i, instanceTypes := range spec.Instances {
+			fld := path.Child("instances").Index(i)
+			errs = append(errs, awsValidateInstanceTypeAndImage(fld, path.Child("image"), instanceTypes, ig.Spec.Image, cloud)...)
+		}
+	} else {
+		mainMachineTypeInfo, err := awsup.GetMachineTypeInfo(cloud, ec2types.InstanceType(ig.Spec.MachineType))
+		if err != nil {
+			errs = append(errs, field.Invalid(field.NewPath("spec", "machineType"), ig.Spec.MachineType, fmt.Sprintf("machine type specified is invalid: %q", ig.Spec.MachineType)))
+			return errs
 		}
 
+		hasGPU := mainMachineTypeInfo.GPU
+
+		// @step: check the instance types are valid
+		for i, instanceTypes := range spec.Instances {
+			fld := path.Child("instances").Index(i)
+			errs = append(errs, awsValidateInstanceTypeAndImage(path.Child("instances").Index(i), path.Child("image"), instanceTypes, ig.Spec.Image, cloud)...)
+
+			for _, instanceType := range strings.Split(instanceTypes, ",") {
+				machineTypeInfo, err := awsup.GetMachineTypeInfo(cloud, ec2types.InstanceType(instanceType))
+				if err != nil {
+					errs = append(errs, field.Invalid(field.NewPath("spec", "machineType"), ig.Spec.MachineType, fmt.Sprintf("machine type specified is invalid: %q", ig.Spec.MachineType)))
+					return errs
+				}
+				if machineTypeInfo.GPU != hasGPU {
+					errs = append(errs, field.Forbidden(fld, "Cannot mix GPU and non-GPU machine types in the same Instance Group"))
+				}
+			}
+		}
 	}
 
 	if spec.OnDemandBase != nil {

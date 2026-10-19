@@ -40,6 +40,12 @@ type TerraformWriter struct {
 	// Providers is a list of TF Providers we need for writing files
 	Providers map[string]*TerraformProvider
 
+	// AzureStorageAccountID is the Azure Resource Manager ID of the storage
+	// account holding the cluster's state blobs. It is needed to build the
+	// storage_container_id argument of azurerm_storage_blob resources, which
+	// the azurerm provider requires as of v5.0.
+	AzureStorageAccountID string
+
 	// Files is a map of TF resource Files that should be created
 	Files map[string][]byte
 }
@@ -115,7 +121,7 @@ func (t *TerraformWriter) EnsureTerraformProvider(name string, arguments map[str
 			// already exists and matches
 			return existing
 		}
-		klog.Fatalf("attempt to add different tfProvider with key %q", key)
+		klog.Fatalf("attempt to add different tfProvider with key %q, arguments: %q vs %q", key, tfProvider.Arguments, existing.Arguments)
 	}
 	t.Providers[key] = tfProvider
 	return tfProvider

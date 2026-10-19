@@ -17,27 +17,33 @@ limitations under the License.
 package model
 
 import (
+	_ "embed"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/blang/semver/v4"
-	"github.com/pelletier/go-toml"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/klog/v2"
-	"k8s.io/kops/nodeup/pkg/model/resources"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/flagbuilder"
 	"k8s.io/kops/pkg/systemd"
+	"k8s.io/kops/pkg/tomlwriter"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
 	"k8s.io/kops/util/pkg/distributions"
 )
 
-const containerdConfigFilePath = "/etc/containerd/config.toml"
+const (
+	containerdConfigFilePath  = "/etc/containerd/config.toml"
+	containerdRegistryDirPath = "/etc/containerd/certs.d"
+)
 
 // ContainerdBuilder install containerd (just the packages at the moment)
 type ContainerdBuilder struct {
@@ -53,17 +59,15 @@ func (b *ContainerdBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 		return nil
 	}
 
-	installContainerd := true
+	installContainerd := !b.usesOSContainerd()
 
 	// @check: neither flatcar nor containeros need provision containerd.service, just the containerd daemon options
 	switch b.Distribution {
 	case distributions.DistributionFlatcar:
 		klog.Infof("Detected Flatcar; won't install containerd")
-		installContainerd = false
 		b.buildSystemdServiceOverrideFlatcar(c)
 	case distributions.DistributionContainerOS:
 		klog.Infof("Detected ContainerOS; won't install containerd")
-		installContainerd = false
 		b.buildSystemdServiceOverrideContainerOS(c)
 	}
 
@@ -79,9 +83,19 @@ func (b *ContainerdBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 		}
 	}
 
+	// Emit per-registry hosts.toml files when the user has configured registry mirrors.
+	if err := b.buildRegistryHosts(c); err != nil {
+		return err
+	}
+
 	// If there are containerd configuration overrides, apply them
 	if err := b.buildConfigFile(c); err != nil {
 		return err
+	}
+
+	// If gVisor is enabled, emit the runsc shim config file
+	if b.InstallGVisorRuntime() {
+		b.buildGVisorShimConfig(c)
 	}
 
 	if installContainerd {
@@ -93,6 +107,9 @@ func (b *ContainerdBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 	return nil
 }
 
+//go:embed resources/containerd-license.txt
+var ContainerdLicense string
+
 // installContainerd installs the binaries and services to run containerd.
 // We break it out because on immutable OSes we only configure containerd, we don't install it.
 func (b *ContainerdBuilder) installContainerd(c *fi.NodeupModelBuilderContext) error {
@@ -100,7 +117,7 @@ func (b *ContainerdBuilder) installContainerd(c *fi.NodeupModelBuilderContext) e
 	{
 		t := &nodetasks.File{
 			Path:     "/usr/share/doc/containerd/apache.txt",
-			Contents: fi.NewStringResource(resources.ContainerdApache2License),
+			Contents: fi.NewStringResource(ContainerdLicense),
 			Type:     nodetasks.FileType_File,
 		}
 		c.AddTask(t)
@@ -109,15 +126,6 @@ func (b *ContainerdBuilder) installContainerd(c *fi.NodeupModelBuilderContext) e
 	// Add containerd binaries from containerd release package
 	f := b.Assets.FindMatches(regexp.MustCompile(`^bin/(containerd|ctr)`))
 	if len(f) == 0 {
-		// Add containerd binaries from containerd bundle package
-		f = b.Assets.FindMatches(regexp.MustCompile(`^(\./)?usr/local/bin/(containerd|crictl|ctr)`))
-	}
-	if len(f) == 0 {
-		// Add containerd binaries from Docker package (for ARM64 builds < v1.6.0)
-		// https://github.com/containerd/containerd/pull/6196
-		f = b.Assets.FindMatches(regexp.MustCompile(`^docker/(containerd|ctr)`))
-	}
-	if len(f) == 0 {
 		return fmt.Errorf("unable to find any containerd binaries in assets")
 	}
 	for k, v := range f {
@@ -125,7 +133,7 @@ func (b *ContainerdBuilder) installContainerd(c *fi.NodeupModelBuilderContext) e
 			Path:     filepath.Join("/usr/bin", k),
 			Contents: v,
 			Type:     nodetasks.FileType_File,
-			Mode:     fi.PtrTo("0755"),
+			Mode:     new("0755"),
 		}
 		c.AddTask(fileTask)
 	}
@@ -133,15 +141,6 @@ func (b *ContainerdBuilder) installContainerd(c *fi.NodeupModelBuilderContext) e
 	// Add runc binary from https://github.com/opencontainers/runc
 	// https://github.com/containerd/containerd/issues/6541
 	f = b.Assets.FindMatches(regexp.MustCompile(`/runc\.(amd64|arm64)$`))
-	if len(f) == 0 {
-		// Add runc binary from containerd package (for builds < v1.6.0)
-		f = b.Assets.FindMatches(regexp.MustCompile(`^(\./)?usr/local/sbin/runc$`))
-	}
-	if len(f) == 0 {
-		// Add runc binary from Docker package (for ARM64 builds < v1.6.0)
-		// https://github.com/containerd/containerd/pull/6196
-		f = b.Assets.FindMatches(regexp.MustCompile(`^docker/runc$`))
-	}
 	if len(f) != 1 {
 		return fmt.Errorf("error finding runc asset")
 	}
@@ -150,7 +149,7 @@ func (b *ContainerdBuilder) installContainerd(c *fi.NodeupModelBuilderContext) e
 			Path:     "/usr/sbin/runc",
 			Contents: v,
 			Type:     nodetasks.FileType_File,
-			Mode:     fi.PtrTo("0755"),
+			Mode:     new("0755"),
 		}
 		c.AddTask(fileTask)
 	}
@@ -166,7 +165,7 @@ func (b *ContainerdBuilder) installContainerd(c *fi.NodeupModelBuilderContext) e
 	}
 	sv, err := semver.ParseTolerant(containerdVersion)
 	if err != nil {
-		return fmt.Errorf("error parsing container runtime version %q: %v", containerdVersion, err)
+		return fmt.Errorf("error parsing container runtime version %q: %w", containerdVersion, err)
 	}
 	c.AddTask(b.buildSystemdService(sv))
 
@@ -183,7 +182,13 @@ func (b *ContainerdBuilder) buildSystemdService(containerdVersion semver.Version
 	manifest := &systemd.Manifest{}
 	manifest.Set("Unit", "Description", "containerd container runtime")
 	manifest.Set("Unit", "Documentation", "https://containerd.io")
-	manifest.Set("Unit", "After", "network.target local-fs.target")
+	manifest.Set("Unit", "After", "network.target dbus.service")
+
+	// Restore the default SELinux security contexts for the containerd and runc binaries
+	if b.Distribution.IsRHELFamily() && b.NodeupConfig.ContainerdConfig != nil && b.NodeupConfig.ContainerdConfig.SeLinuxEnabled {
+		manifest.Set("Service", "ExecStartPre", "/bin/sh -c 'restorecon -v /usr/sbin/runc'")
+		manifest.Set("Service", "ExecStartPre", "/bin/sh -c 'restorecon -v /usr/bin/containerd*'")
+	}
 
 	manifest.Set("Service", "EnvironmentFile", "/etc/sysconfig/containerd")
 	manifest.Set("Service", "EnvironmentFile", "/etc/environment")
@@ -424,7 +429,7 @@ func (b *ContainerdBuilder) buildCNIConfigTemplateFile(c *fi.NodeupModelBuilderC
 	// Based on https://github.com/kubernetes/kubernetes/blob/15a8a8ec4a3275a33b7f8eb3d4d98db2abad55b7/cluster/gce/gci/configure-helper.sh#L2911-L2937
 
 	contents := `{
-    "cniVersion": "0.4.0",
+    "cniVersion": "1.0.0",
     "name": "k8s-pod-network",
     "plugins": [
         {
@@ -470,94 +475,231 @@ func (b *ContainerdBuilder) buildCNIConfigTemplateFile(c *fi.NodeupModelBuilderC
 	return nil
 }
 
+// buildContainerdConfig builds the containerd config used for containerd >= 2.0.
+// containerd 2.0 split io.containerd.grpc.v1.cri into io.containerd.cri.v1.runtime and io.containerd.cri.v1.images.
+// See https://github.com/containerd/containerd/blob/main/docs/cri/config.md
+// Apart from ConfigAdditions, the emitted fields load identically under config versions 3
+// and 4; see containerdConfigVersion.
+// Callers must short-circuit ConfigOverride before calling this.
 func (b *ContainerdBuilder) buildContainerdConfig() (string, error) {
 	containerd := b.NodeupConfig.ContainerdConfig
-	if fi.ValueOf(containerd.ConfigOverride) != "" {
-		return *containerd.ConfigOverride, nil
-	}
 
-	// Build config file for containerd running in CRI mode
-
-	config, _ := toml.Load("")
-	config.SetPath([]string{"version"}, int64(2))
+	config := tomlwriter.NewTree()
+	config.SetPath([]string{"version"}, b.containerdConfigVersion())
 
 	if containerd.NRI != nil && (containerd.NRI.Enabled == nil || fi.ValueOf(containerd.NRI.Enabled)) {
 		config.SetPath([]string{"plugins", "io.containerd.nri.v1.nri", "disable"}, false)
+		// containerd expects Go duration strings such as "5s".
 		if containerd.NRI.PluginRequestTimeout != nil {
-			config.SetPath([]string{"plugins", "io.containerd.nri.v1.nri", "plugin_request_timeout"}, containerd.NRI.PluginRequestTimeout)
+			config.SetPath([]string{"plugins", "io.containerd.nri.v1.nri", "plugin_request_timeout"}, containerd.NRI.PluginRequestTimeout.Duration.String())
 		}
 		if containerd.NRI.PluginRegistrationTimeout != nil {
-			config.SetPath([]string{"plugins", "io.containerd.nri.v1.nri", "plugin_registration_timeout"}, containerd.NRI.PluginRegistrationTimeout)
+			config.SetPath([]string{"plugins", "io.containerd.nri.v1.nri", "plugin_registration_timeout"}, containerd.NRI.PluginRegistrationTimeout.Duration.String())
 		}
 	}
 	if containerd.SeLinuxEnabled {
-		config.SetPath([]string{"plugins", "io.containerd.grpc.v1.cri", "enable_selinux"}, true)
+		config.SetPath([]string{"plugins", "io.containerd.cri.v1.runtime", "enable_selinux"}, true)
 	}
-	if b.NodeupConfig.KubeletConfig.PodInfraContainerImage != "" {
-		config.SetPath([]string{"plugins", "io.containerd.grpc.v1.cri", "sandbox_image"}, b.NodeupConfig.KubeletConfig.PodInfraContainerImage)
+	if containerd.SandboxImage != nil {
+		// In v3 the sandbox image moved out of the cri runtime plugin and into the images plugin
+		// under pinned_images.sandbox.
+		config.SetPath([]string{"plugins", "io.containerd.cri.v1.images", "pinned_images", "sandbox"}, fi.ValueOf(containerd.SandboxImage))
 	}
-	for name, endpoints := range containerd.RegistryMirrors {
-		config.SetPath([]string{"plugins", "io.containerd.grpc.v1.cri", "registry", "mirrors", name, "endpoint"}, endpoints)
+	if len(containerd.RegistryMirrors) > 0 {
+		config.SetPath([]string{"plugins", "io.containerd.cri.v1.images", "registry", "config_path"}, containerdRegistryDirPath)
 	}
-	config.SetPath([]string{"plugins", "io.containerd.grpc.v1.cri", "containerd", "runtimes", "runc", "runtime_type"}, "io.containerd.runc.v2")
-	// only enable systemd cgroups for kubernetes >= 1.20
-	config.SetPath([]string{"plugins", "io.containerd.grpc.v1.cri", "containerd", "runtimes", "runc", "options", "SystemdCgroup"}, true)
+	// containerd must use the same cgroup driver as the kubelet. With KubeletCgroupDriverFromCRI the kubelet
+	// takes the driver from the runtime, so this is the setting that decides the effective driver on the node.
+	systemdCgroup := b.NodeupConfig.KubeletConfig.CgroupDriver == "systemd"
+	config.SetPath([]string{"plugins", "io.containerd.cri.v1.runtime", "containerd", "default_runtime_name"}, "runc")
+	config.SetPath([]string{"plugins", "io.containerd.cri.v1.runtime", "containerd", "runtimes", "runc", "runtime_type"}, "io.containerd.runc.v2")
+	config.SetPath([]string{"plugins", "io.containerd.cri.v1.runtime", "containerd", "runtimes", "runc", "options", "SystemdCgroup"}, systemdCgroup)
 	if b.NodeupConfig.UsesKubenet {
 		// Using containerd with Kubenet requires special configuration.
 		// This is a temporary backwards-compatible solution for kubenet users and will be deprecated when Kubenet is deprecated:
 		// https://github.com/containerd/containerd/blob/master/docs/cri/config.md#cni-config-template
-		config.SetPath([]string{"plugins", "io.containerd.grpc.v1.cri", "cni", "conf_template"}, "/etc/containerd/config-cni.template")
+		config.SetPath([]string{"plugins", "io.containerd.cri.v1.runtime", "cni", "conf_template"}, "/etc/containerd/config-cni.template")
 	}
 
 	if b.InstallNvidiaRuntime() {
-		if err := appendNvidiaGPURuntimeConfig(config); err != nil {
-			return "", err
-		}
+		appendNvidiaGPURuntimeConfig(config.Table("plugins", "io.containerd.cri.v1.runtime", "containerd", "runtimes"), systemdCgroup)
 	}
 
-	for k, v := range containerd.ConfigAdditions {
-		r := csv.NewReader(strings.NewReader(k))
-		r.Comma = '.'
-		path, err := r.Read()
-		if err != nil {
-			return "", fmt.Errorf("parsing additional containerd config entry: %w", err)
-		}
+	if b.InstallGVisorRuntime() {
+		appendGVisorRuntimeConfig(config.Table("plugins", "io.containerd.cri.v1.runtime", "containerd", "runtimes"))
+	}
 
-		if v.Type == intstr.Int {
-			config.SetPath(path, int64(v.IntValue()))
-		} else {
-			if v.String() == "true" {
-				config.SetPath(path, true)
-			} else if v.String() == "false" {
-				config.SetPath(path, false)
-			} else {
-				config.SetPath(path, v.String())
-			}
-		}
+	if err := applyConfigAdditions(config, containerd.ConfigAdditions); err != nil {
+		return "", fmt.Errorf("applying ConfigAdditions to containerd config: %w", err)
 	}
 
 	return config.String(), nil
 }
 
-func appendNvidiaGPURuntimeConfig(config *toml.Tree) error {
-	gpuConfig, err := toml.TreeFromMap(
-		map[string]interface{}{
-			"privileged_without_host_devices": false,
-			"runtime_engine":                  "",
-			"runtime_root":                    "",
-			"runtime_type":                    "io.containerd.runc.v1",
-			"options": map[string]interface{}{
-				"SystemdCgroup": true,
-				"BinaryName":    "/usr/bin/nvidia-container-runtime",
-			},
-		},
-	)
+// usesOSContainerd reports whether kops only configures a distro-supplied containerd,
+// whose version spec.containerd.version does not identify.
+func (b *ContainerdBuilder) usesOSContainerd() bool {
+	switch b.Distribution {
+	case distributions.DistributionFlatcar, distributions.DistributionContainerOS:
+		return true
+	}
+	return false
+}
+
+// containerdConfigVersion returns the config version to declare in the generated config.toml:
+// 4 for containerd >= 2.3, otherwise 3.
+// Both bounds matter: containerd 2.1 and 2.2 reject version 4, while 2.3.0-2.3.4 refuse
+// drop-in configs (such as the NVIDIA container toolkit's) that declare a newer version
+// than the root config.
+func (b *ContainerdBuilder) containerdConfigVersion() int64 {
+	if b.usesOSContainerd() {
+		return 3
+	}
+	sv, err := semver.ParseTolerant(fi.ValueOf(b.NodeupConfig.ContainerdConfig.Version))
 	if err != nil {
-		return err
+		return 3
+	}
+	if sv.GE(semver.Version{Major: 2, Minor: 3}) {
+		return 4
+	}
+	return 3
+}
+
+// applyConfigAdditions sets the user-provided ConfigAdditions on the toml tree.
+// Each key is parsed as a CSV record using '.' as the separator, so quoted dots inside
+// plugin names like `plugins."io.containerd.grpc.v1.cri".sandbox_image` survive the split.
+// Paths are written verbatim; the user is responsible for matching the schema version of
+// the configured containerd binary (v3 vs v4).
+// Keys are applied in sorted order so output is reproducible across runs.
+func applyConfigAdditions(config *tomlwriter.Tree, additions map[string]intstr.IntOrString) error {
+	keys := make([]string, 0, len(additions))
+	for k := range additions {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, k := range keys {
+		v := additions[k]
+		r := csv.NewReader(strings.NewReader(k))
+		r.Comma = '.'
+		path, err := r.Read()
+		if err != nil {
+			return fmt.Errorf("parsing additional containerd config entry %q: %w", k, err)
+		}
+
+		if v.Type == intstr.Int {
+			config.SetPath(path, int64(v.IntValue()))
+			continue
+		}
+		switch s := v.String(); s {
+		case "true":
+			config.SetPath(path, true)
+		case "false":
+			config.SetPath(path, false)
+		default:
+			config.SetPath(path, s)
+		}
+	}
+	return nil
+}
+
+func appendNvidiaGPURuntimeConfig(runtimes *tomlwriter.Tree, systemdCgroup bool) {
+	runtimes.SetPath([]string{"nvidia", "privileged_without_host_devices"}, false)
+	runtimes.SetPath([]string{"nvidia", "runtime_engine"}, "")
+	runtimes.SetPath([]string{"nvidia", "runtime_root"}, "")
+	runtimes.SetPath([]string{"nvidia", "runtime_type"}, "io.containerd.runc.v2")
+	runtimes.SetPath([]string{"nvidia", "options", "SystemdCgroup"}, systemdCgroup)
+	runtimes.SetPath([]string{"nvidia", "options", "BinaryName"}, "/usr/bin/nvidia-container-runtime")
+}
+
+func appendGVisorRuntimeConfig(runtimes *tomlwriter.Tree) {
+	runtimes.SetPath([]string{"runsc", "runtime_type"}, "io.containerd.runsc.v1")
+}
+
+// buildGVisorShimConfig emits /etc/containerd/runsc.toml, the shim-level
+// configuration consumed by containerd-shim-runsc-v1 at container creation.
+// See https://gvisor.dev/docs/user_guide/containerd/configuration/
+func (b *ContainerdBuilder) buildGVisorShimConfig(c *fi.NodeupModelBuilderContext) {
+	platform := b.NodeupConfig.GVisor.Platform
+	if platform == "" {
+		platform = "systrap"
 	}
 
-	config.SetPath([]string{"plugins", "io.containerd.grpc.v1.cri", "containerd", "runtimes", "nvidia"}, gpuConfig)
-	config.SetPath([]string{"plugins", "io.containerd.grpc.v1.cri", "containerd", "default_runtime_name"}, "runc")
+	shimConfig := tomlwriter.NewTree()
+	shimConfig.SetPath([]string{"runsc_config", "platform"}, platform)
 
+	c.AddTask(&nodetasks.File{
+		Path:     "/etc/containerd/runsc.toml",
+		Contents: fi.NewStringResource(shimConfig.String()),
+		Type:     nodetasks.FileType_File,
+	})
+}
+
+// buildRegistryHosts emits one hosts.toml per RegistryMirrors entry under containerdRegistryDirPath.
+// The directory is referenced by registry.config_path in the main containerd config; the
+// emit-files-iff-mirrors-non-empty condition here must stay in sync with the registry.config_path
+// emission in buildContainerdConfig.
+// containerd watches this directory at runtime, so no daemon reload is needed when a hosts.toml changes.
+// containerd uses host declaration order as mirror priority, so endpoints are emitted in the order
+// the user provided them instead of sorting them as tomlwriter.Tree.String does.
+// Format reference: https://github.com/containerd/containerd/blob/main/docs/hosts.md
+func (b *ContainerdBuilder) buildRegistryHosts(c *fi.NodeupModelBuilderContext) error {
+	// ConfigOverride is a complete bypass of the generated containerd config; honour
+	// that contract by also skipping the registry hosts.toml files it would reference.
+	if b.NodeupConfig.ContainerdConfig.ConfigOverride != nil {
+		return nil
+	}
+	mirrors := b.NodeupConfig.ContainerdConfig.RegistryMirrors
+	if len(mirrors) == 0 {
+		return nil
+	}
+
+	// Sort names so emission order is stable for golden tests and reproducible diffs.
+	names := make([]string, 0, len(mirrors))
+	for name := range mirrors {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		var buf strings.Builder
+		for _, endpoint := range mirrors[name] {
+			fmt.Fprintf(&buf, "[host.%q]\n", endpoint)
+			buf.WriteString("  capabilities = [\"pull\", \"resolve\"]\n")
+			if endpointHasPath(endpoint) {
+				buf.WriteString("  override_path = true\n")
+			}
+			buf.WriteString("\n")
+		}
+		// containerd uses the special "_default" directory as the catch-all namespace.
+		// Translate the kops convention of "*" so users don't end up with a literal
+		// /etc/containerd/certs.d/* directory that containerd would not interpret as a fallback.
+		dir := name
+		if dir == "*" {
+			dir = "_default"
+		}
+		c.AddTask(&nodetasks.File{
+			Path:     filepath.Join(containerdRegistryDirPath, dir, "hosts.toml"),
+			Contents: fi.NewStringResource(buf.String()),
+			Type:     nodetasks.FileType_File,
+		})
+	}
 	return nil
+}
+
+// endpointHasPath reports whether a mirror endpoint has a non-root path. These endpoints get
+// override_path, so containerd uses the path as-is instead of appending /v2, as the legacy
+// registry.mirrors config did.
+func endpointHasPath(endpoint string) bool {
+	// Match containerd's parseHostConfig normalization so we check the same path.
+	// Keep in sync with validateContainerdMirrorEndpoint in pkg/apis/kops/validation.
+	if !strings.HasPrefix(endpoint, "http") {
+		endpoint = "https://" + endpoint
+	}
+
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return false
+	}
+	return u.Path != "" && path.Clean(u.Path) != "/"
 }

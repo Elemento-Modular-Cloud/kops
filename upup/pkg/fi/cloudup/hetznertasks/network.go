@@ -23,7 +23,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/hetznercloud/hcloud-go/hcloud"
+	"github.com/hetznercloud/hcloud-go/v2/hcloud"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner"
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraform"
@@ -43,7 +43,7 @@ type Network struct {
 	Labels map[string]string
 }
 
-var _ fi.CompareWithID = &Network{}
+var _ fi.CompareWithID = (*Network)(nil)
 
 func (v *Network) CompareWithID() *string {
 	return v.ID
@@ -72,7 +72,7 @@ func (v *Network) Find(c *fi.CloudupContext) (*Network, error) {
 	matches := &Network{
 		Name:      v.Name,
 		Lifecycle: v.Lifecycle,
-		ID:        fi.PtrTo(strconv.Itoa(network.ID)),
+		ID:        new(strconv.FormatInt(network.ID, 10)),
 	}
 
 	if v.ID == nil {
@@ -151,7 +151,7 @@ func (_ *Network) RenderHetzner(t *hetzner.HetznerAPITarget, a, e, changes *Netw
 		if err != nil {
 			return err
 		}
-		e.ID = fi.PtrTo(strconv.Itoa(network.ID))
+		e.ID = new(strconv.FormatInt(network.ID, 10))
 
 	} else {
 		var err error
@@ -221,7 +221,7 @@ func (_ *Network) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *N
 	{
 		tf := &terraformNetwork{
 			Name:    e.Name,
-			IPRange: fi.PtrTo(e.IPRange),
+			IPRange: new(e.IPRange),
 			Labels:  e.Labels,
 		}
 
@@ -239,9 +239,9 @@ func (_ *Network) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *N
 
 		tf := &terraformNetworkSubnet{
 			NetworkID:   e.TerraformLink(),
-			Type:        fi.PtrTo(string(hcloud.NetworkSubnetTypeCloud)),
-			IPRange:     fi.PtrTo(subnetIpRange.String()),
-			NetworkZone: fi.PtrTo(e.Region),
+			Type:        new(string(hcloud.NetworkSubnetTypeCloud)),
+			IPRange:     new(subnetIpRange.String()),
+			NetworkZone: new(e.Region),
 		}
 
 		err = t.RenderResource("hcloud_network_subnet", *e.Name+"-"+subnet, tf)

@@ -1,0 +1,80 @@
+Assets:
+  amd64:
+  - 5ad4965598773d56a37a8e8429c3dc3d86b4c5c26d8417ab333ae345c053dae2@https://dl.k8s.io/release/v1.32.0/bin/linux/amd64/kubelet
+  - 646d58f6d98ee670a71d9cdffbf6625aeea2849d567f214bc43a35f8ccb7bf70@https://dl.k8s.io/release/v1.32.0/bin/linux/amd64/kubectl
+  - b5852509ab5c950485794afd49a3fd1c3d6166db988c15b683d2373b7055300f@https://artifacts.k8s.io/binaries/cloud-provider-gcp/v35.0.0/auth-provider-gcp/linux/amd64/auth-provider-gcp
+  - df806bb9b86653ebc94822a7076642ff3c3614324dbc1b511bdf75ac1669b762@https://github.com/containerd/containerd/releases/download/v2.3.6/containerd-2.3.6-linux-amd64.tar.gz
+  - 177df879d50c913eb205e898d5c1c05a18f574053c0ce5524c471208eaf06f6f@https://github.com/opencontainers/runc/releases/download/v1.5.1/runc.amd64
+  arm64:
+  - bda9b2324c96693b38c41ecea051bab4c7c434be5683050b5e19025b50dbc0bf@https://dl.k8s.io/release/v1.32.0/bin/linux/arm64/kubelet
+  - ba4004f98f3d3a7b7d2954ff0a424caa2c2b06b78c17b1dccf2acc76a311a896@https://dl.k8s.io/release/v1.32.0/bin/linux/arm64/kubectl
+  - 510aee27ef32a27b76e461e9084719365210d56166057b37db290a72dfecbffa@https://artifacts.k8s.io/binaries/cloud-provider-gcp/v35.0.0/auth-provider-gcp/linux/arm64/auth-provider-gcp
+  - 6b3d383cc051f0bd7b2303f9034fdc9029f04c237cadb23b5e890a5b68534e05@https://github.com/containerd/containerd/releases/download/v2.3.6/containerd-2.3.6-linux-arm64.tar.gz
+  - ca70e7dbd6616ca782a59b5d3ac86909123fdaa9fa3f89dcf29051c70eee7ce9@https://github.com/opencontainers/runc/releases/download/v1.5.1/runc.arm64
+CAs:
+  etcd-clients-ca-cilium: |
+    -----BEGIN CERTIFICATE-----
+    MIIBgDCCASqgAwIBAgIMFotPsR9PsbCKkTJsMA0GCSqGSIb3DQEBCwUAMCExHzAd
+    BgNVBAMTFmV0Y2QtY2xpZW50cy1jYS1jaWxpdW0wHhcNMjEwNjIxMjAyMTUyWhcN
+    MzEwNjIxMjAyMTUyWjAhMR8wHQYDVQQDExZldGNkLWNsaWVudHMtY2EtY2lsaXVt
+    MFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBANiW3hfHTcKnxCig+uWhpVbOfH1pANKm
+    XVSysPKgE80QSU4tZ6m49pAEeIMsvwvDMaLsb2v6JvXe0qvCmueU+/sCAwEAAaNC
+    MEAwDgYDVR0PAQH/BAQDAgEGMA8GA1UdEwEB/wQFMAMBAf8wHQYDVR0OBBYEFCOW
+    3hR7ngBsk9aUOlEznWzH494EMA0GCSqGSIb3DQEBCwUAA0EAR4UEW5ZK+NVtqm7s
+    HF/JbSYPd+BhcNaJVOv8JP+/CGfCOXOmxjpZICSYQqe6UjjjP7fbJy8FANTpKTuJ
+    UQC1kQ==
+    -----END CERTIFICATE-----
+    -----BEGIN CERTIFICATE-----
+    MIIBgDCCASqgAwIBAgIMFotP940EXpD3N1D7MA0GCSqGSIb3DQEBCwUAMCExHzAd
+    BgNVBAMTFmV0Y2QtY2xpZW50cy1jYS1jaWxpdW0wHhcNMjEwNjIxMjAyNjU1WhcN
+    MzEwNjIxMjAyNjU1WjAhMR8wHQYDVQQDExZldGNkLWNsaWVudHMtY2EtY2lsaXVt
+    MFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBANiW3hfHTcKnxCig+uWhpVbOfH1pANKm
+    XVSysPKgE80QSU4tZ6m49pAEeIMsvwvDMaLsb2v6JvXe0qvCmueU+/sCAwEAAaNC
+    MEAwDgYDVR0PAQH/BAQDAgEGMA8GA1UdEwEB/wQFMAMBAf8wHQYDVR0OBBYEFCOW
+    3hR7ngBsk9aUOlEznWzH494EMA0GCSqGSIb3DQEBCwUAA0EARXoKy6mExpD6tHFO
+    CN3ZGNZ5BsHl5W5y+gwUuVskgC7xt/bgTuXm5hz8TLgnG5kYtG4uxjFg4yCvtNg2
+    MQNfAQ==
+    -----END CERTIFICATE-----
+ClusterName: minimal-gce-ilb-cilium-etcd.example.com
+Hooks:
+- null
+- null
+KeypairIDs:
+  etcd-clients-ca-cilium: "6977087239278090025924899436"
+  kubernetes-ca: "6982820025135291416230495506"
+KubeProxy: null
+KubeletConfig:
+  anonymousAuth: false
+  cgroupDriver: systemd
+  cgroupRoot: /
+  cloudProvider: external
+  clusterDNS: 100.64.0.10
+  clusterDomain: cluster.local
+  enableDebuggingHandlers: true
+  evictionHard: memory.available<100Mi,nodefs.available<10%,nodefs.inodesFree<5%,imagefs.available<10%,imagefs.inodesFree<5%
+  hairpinMode: promiscuous-bridge
+  kubeconfigPath: /var/lib/kubelet/kubeconfig
+  logLevel: 2
+  nodeLabels:
+    node-role.kubernetes.io/node: ""
+  podManifestPath: /etc/kubernetes/manifests
+  protectKernelDefaults: true
+  registerSchedulable: true
+  shutdownGracePeriod: 30s
+  shutdownGracePeriodCriticalPods: 10s
+KubernetesVersion: 1.32.0
+Networking:
+  cilium: {}
+  nonMasqueradeCIDR: 100.64.0.0/10
+  serviceClusterIPRange: 100.64.0.0/13
+UpdatePolicy: automatic
+UseCiliumEtcd: true
+containerdConfig:
+  logLevel: info
+  runc:
+    version: 1.5.1
+  sandboxImage: registry.k8s.io/pause:3.10.1
+  version: 2.3.6
+multizone: true
+nodeTags: minimal-gce-ilb-cilium-etcd-example-com-k8s-io-role-node
+usesNoneDNS: false

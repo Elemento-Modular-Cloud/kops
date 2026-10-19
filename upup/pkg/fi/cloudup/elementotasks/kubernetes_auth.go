@@ -96,8 +96,8 @@ func (s *KubernetesAuthService) Find(c *fi.CloudupContext) (*KubernetesAuthServi
 	if err != nil {
 		return nil, err
 	}
-	s.NetworkUID = fi.PtrTo(expectedNetworkUID)
-	s.TailnetEndpoint = fi.PtrTo(endpoint)
+	s.NetworkUID = new(expectedNetworkUID)
+	s.TailnetEndpoint = new(endpoint)
 
 	actual := *s
 	return &actual, nil
@@ -151,8 +151,8 @@ func (*KubernetesAuthService) RenderElemento(t *elemento.ElementoAPITarget, actu
 		return fmt.Errorf("created Elemento Kubernetes authentication service has no tailnet endpoint")
 	}
 
-	expected.NetworkUID = fi.PtrTo(networkUID)
-	expected.TailnetEndpoint = fi.PtrTo(strings.TrimRight(service.TailnetEndpoint, "/"))
+	expected.NetworkUID = new(networkUID)
+	expected.TailnetEndpoint = new(strings.TrimRight(service.TailnetEndpoint, "/"))
 	ecloud.Log("info", "ekops", "Kubernetes authentication service is running", "operation", "ensure_auth_service", "cluster", fi.ValueOf(expected.Name), "endpoint", fi.ValueOf(expected.TailnetEndpoint))
 	return nil
 }
@@ -174,7 +174,7 @@ func (s *KubernetesAuthService) resolveNetworkUID(cloud elemento.ElementoCloud) 
 	if network == nil || strings.TrimSpace(network.ID) == "" {
 		return "", fmt.Errorf("Elemento network %q has no UUID for Kubernetes authentication", networkName)
 	}
-	s.Network.ID = fi.PtrTo(network.ID)
+	s.Network.ID = new(network.ID)
 	return network.ID, nil
 }
 

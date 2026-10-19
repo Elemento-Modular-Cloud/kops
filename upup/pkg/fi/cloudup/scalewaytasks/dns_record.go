@@ -38,8 +38,8 @@ type DNSRecord struct {
 	Lifecycle fi.Lifecycle
 }
 
-var _ fi.CloudupTask = &DNSRecord{}
-var _ fi.CompareWithID = &DNSRecord{}
+var _ fi.CloudupTask = (*DNSRecord)(nil)
+var _ fi.CompareWithID = (*DNSRecord)(nil)
 
 func (d *DNSRecord) CompareWithID() *string {
 	return d.ID
@@ -66,12 +66,12 @@ func (d *DNSRecord) Find(context *fi.CloudupContext) (*DNSRecord, error) {
 	recordFound := records.Records[0]
 
 	return &DNSRecord{
-		ID:        fi.PtrTo(recordFound.ID),
-		Name:      fi.PtrTo(recordFound.Name),
-		Data:      fi.PtrTo(recordFound.Data),
-		TTL:       fi.PtrTo(recordFound.TTL),
+		ID:        new(recordFound.ID),
+		Name:      new(recordFound.Name),
+		Data:      new(recordFound.Data),
+		TTL:       new(recordFound.TTL),
 		DNSZone:   d.DNSZone,
-		Type:      fi.PtrTo(recordFound.Type.String()),
+		Type:      new(recordFound.Type.String()),
 		Lifecycle: d.Lifecycle,
 	}, nil
 }
@@ -112,10 +112,8 @@ func (_ *DNSRecord) CheckChanges(actual, expected, changes *DNSRecord) error {
 }
 
 func (d *DNSRecord) RenderScw(t *scaleway.ScwAPITarget, actual, expected, changes *DNSRecord) error {
-	cloud := t.Cloud.(scaleway.ScwCloud)
-
 	if actual != nil {
-		recordUpdated, err := cloud.DomainService().UpdateDNSZoneRecords(&domain.UpdateDNSZoneRecordsRequest{
+		recordUpdated, err := t.Cloud.DomainService().UpdateDNSZoneRecords(&domain.UpdateDNSZoneRecordsRequest{
 			DNSZone: fi.ValueOf(actual.DNSZone),
 			Changes: []*domain.RecordChange{
 				{
@@ -138,7 +136,7 @@ func (d *DNSRecord) RenderScw(t *scaleway.ScwAPITarget, actual, expected, change
 		return nil
 	}
 
-	recordCreated, err := cloud.DomainService().UpdateDNSZoneRecords(&domain.UpdateDNSZoneRecordsRequest{
+	recordCreated, err := t.Cloud.DomainService().UpdateDNSZoneRecords(&domain.UpdateDNSZoneRecordsRequest{
 		DNSZone: fi.ValueOf(expected.DNSZone),
 		Changes: []*domain.RecordChange{
 			{
@@ -179,7 +177,7 @@ func (_ *DNSRecord) RenderTerraform(t *terraform.TerraformTarget, actual, expect
 		Data:    expected.Data,
 		DNSZone: expected.DNSZone,
 		Type:    expected.Type,
-		TTL:     fi.PtrTo(int32(fi.ValueOf(expected.TTL))),
+		TTL:     new(int32(fi.ValueOf(expected.TTL))),
 		Lifecycle: &terraform.Lifecycle{
 			IgnoreChanges: []*terraformWriter.Literal{{String: "data"}},
 		},

@@ -78,9 +78,9 @@ func (b *PlacementModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	// Network tasks depend on this write, making placement durable before
 	// provisioning starts. Only non-secret placement metadata belongs here.
 	c.AddTask(&fitasks.ManagedFile{
-		Name: fi.PtrTo("elemento-placement"), Lifecycle: b.Lifecycle,
-		Location: fi.PtrTo(placementPlanLocation), Contents: fi.NewBytesResource(data),
-		PublicACL: fi.PtrTo(false),
+		Name: new("elemento-placement"), Lifecycle: b.Lifecycle,
+		Location: new(placementPlanLocation), Contents: fi.NewBytesResource(data),
+		PublicACL: new(false),
 	})
 	// SDK calls resolve a node's provider from this plan; kOps does not invoke
 	// Google or Scaleway provisioning APIs directly.

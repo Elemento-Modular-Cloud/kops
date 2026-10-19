@@ -27,6 +27,14 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraformWriter"
 )
 
+// HealthCheckProtocol is the protocol used for a health check.
+type HealthCheckProtocol string
+
+const (
+	HealthCheckProtocolTCP HealthCheckProtocol = "TCP"
+	HealthCheckProtocolSSL HealthCheckProtocol = "SSL"
+)
+
 // +kops:fitask
 // HealthCheck represents a GCE "healthcheck" type - this is the
 // non-deprecated new-style HC, which combines the deprecated HTTPHealthCheck
@@ -35,13 +43,22 @@ import (
 type HealthCheck struct {
 	Name      *string
 	Port      int64
+	Protocol  HealthCheckProtocol
 	Lifecycle fi.Lifecycle
 }
 
-var _ fi.CompareWithID = &HealthCheck{}
+var _ fi.CompareWithID = (*HealthCheck)(nil)
 
 func (e *HealthCheck) CompareWithID() *string {
 	return e.Name
+}
+
+// protocol returns the effective protocol, defaulting to TCP.
+func (e *HealthCheck) protocol() HealthCheckProtocol {
+	if e.Protocol == "" {
+		return HealthCheckProtocolTCP
+	}
+	return e.Protocol
 }
 
 func (e *HealthCheck) Find(c *fi.CloudupContext) (*HealthCheck, error) {
@@ -72,8 +89,17 @@ func (e *HealthCheck) find(cloud gce.GCECloud) (*HealthCheck, error) {
 
 	actual := &HealthCheck{}
 	actual.Name = &r.Name
-	if r.TcpHealthCheck != nil {
-		actual.Port = r.TcpHealthCheck.Port
+	switch r.Type {
+	case "SSL":
+		actual.Protocol = HealthCheckProtocolSSL
+		if r.SslHealthCheck != nil {
+			actual.Port = r.SslHealthCheck.Port
+		}
+	default:
+		actual.Protocol = HealthCheckProtocolTCP
+		if r.TcpHealthCheck != nil {
+			actual.Port = r.TcpHealthCheck.Port
+		}
 	}
 
 	return actual, nil
@@ -91,6 +117,9 @@ func (_ *HealthCheck) CheckChanges(a, e, changes *HealthCheck) error {
 		if e.Port != a.Port {
 			return fi.CannotChangeField("Port")
 		}
+		if e.protocol() != a.protocol() {
+			return fi.CannotChangeField("Protocol")
+		}
 	}
 	return nil
 }
@@ -98,13 +127,21 @@ func (_ *HealthCheck) CheckChanges(a, e, changes *HealthCheck) error {
 func (_ *HealthCheck) RenderGCE(t *gce.GCEAPITarget, a, e, changes *HealthCheck) error {
 	cloud := t.Cloud
 	hc := &compute.HealthCheck{
-		Name: *e.Name,
-		TcpHealthCheck: &compute.TCPHealthCheck{
-			Port: e.Port,
-		},
-		Type: "TCP",
-
+		Name:   *e.Name,
 		Region: cloud.Region(),
+	}
+
+	switch e.protocol() {
+	case HealthCheckProtocolSSL:
+		hc.Type = "SSL"
+		hc.SslHealthCheck = &compute.SSLHealthCheck{
+			Port: e.Port,
+		}
+	default:
+		hc.Type = "TCP"
+		hc.TcpHealthCheck = &compute.TCPHealthCheck{
+			Port: e.Port,
+		}
 	}
 
 	if a == nil {
@@ -125,25 +162,31 @@ func (_ *HealthCheck) RenderGCE(t *gce.GCEAPITarget, a, e, changes *HealthCheck)
 	return nil
 }
 
-type terraformTCPBlock struct {
+type terraformHealthCheckBlock struct {
 	Port int64 `cty:"port"`
 }
 
 type terraformHealthCheck struct {
-	Name           string            `cty:"name"`
-	TCPHealthCheck terraformTCPBlock `cty:"tcp_health_check"`
+	Name           string                     `cty:"name"`
+	TCPHealthCheck *terraformHealthCheckBlock `cty:"tcp_health_check"`
+	SSLHealthCheck *terraformHealthCheckBlock `cty:"ssl_health_check"`
 }
 
 func (_ *HealthCheck) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *HealthCheck) error {
 	tf := &terraformHealthCheck{
 		Name: *e.Name,
-		TCPHealthCheck: terraformTCPBlock{
-			Port: e.Port,
-		},
 	}
-	return t.RenderResource("google_compute_health_check", *e.Name, tf)
+
+	switch e.protocol() {
+	case HealthCheckProtocolSSL:
+		tf.SSLHealthCheck = &terraformHealthCheckBlock{Port: e.Port}
+	default:
+		tf.TCPHealthCheck = &terraformHealthCheckBlock{Port: e.Port}
+	}
+
+	return t.RenderResource("google_compute_region_health_check", *e.Name, tf)
 }
 
 func (e *HealthCheck) TerraformAddress() *terraformWriter.Literal {
-	return terraformWriter.LiteralProperty("google_compute_health_check", *e.Name, "id")
+	return terraformWriter.LiteralProperty("google_compute_region_health_check", *e.Name, "id")
 }

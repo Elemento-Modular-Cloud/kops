@@ -39,15 +39,15 @@ func (b *NetworkModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		return nil
 	}
 
-	clusterName := strings.Replace(b.ClusterName(), ".", "-", -1)
+	clusterName := strings.ReplaceAll(b.ClusterName(), ".", "-")
 	vpcName := "vpc-" + clusterName
 
 	// Create a separate vpc for this cluster.
 	vpc := &dotasks.VPC{
-		Name:      fi.PtrTo(vpcName),
-		Region:    fi.PtrTo(b.Cluster.Spec.Networking.Subnets[0].Region),
+		Name:      new(vpcName),
+		Region:    new(b.Cluster.Spec.Networking.Subnets[0].Region),
 		Lifecycle: b.Lifecycle,
-		IPRange:   fi.PtrTo(ipRange),
+		IPRange:   new(ipRange),
 	}
 	c.AddTask(vpc)
 

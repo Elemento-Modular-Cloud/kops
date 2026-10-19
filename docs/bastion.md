@@ -37,7 +37,7 @@ metadata:
   name: bastions
 spec:
   associatePublicIp: true
-  image: ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20220404
+  image: ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20260714
   machineType: t2.micro
   maxSize: 1
   minSize: 1
@@ -100,9 +100,9 @@ spec:
         - "sg-***"
 ```
 
-### Access when using gossip
+### Access when using None-DNS
 
-When using [gossip mode](gossip.md), there is no DNS zone where we can configure a
+When using a None-DNS cluster (`--dns=none`), there is no DNS zone where we can configure a
 CNAME for the bastion. Because bastions are fronted with a load
 balancer, you can instead use the endpoint of the load balancer to
 reach your bastion.

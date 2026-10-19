@@ -36,7 +36,7 @@ type TargetPool struct {
 	Lifecycle fi.Lifecycle
 }
 
-var _ fi.CompareWithID = &TargetPool{}
+var _ fi.CompareWithID = (*TargetPool)(nil)
 
 func (e *TargetPool) CompareWithID() *string {
 	return e.Name
@@ -55,7 +55,7 @@ func (e *TargetPool) Find(c *fi.CloudupContext) (*TargetPool, error) {
 	}
 
 	actual := &TargetPool{}
-	actual.Name = fi.PtrTo(r.Name)
+	actual.Name = new(r.Name)
 
 	// Avoid spurious changes
 	actual.HealthCheck = e.HealthCheck

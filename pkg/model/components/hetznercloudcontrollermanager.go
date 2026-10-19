@@ -18,7 +18,6 @@ package components
 
 import (
 	"k8s.io/kops/pkg/apis/kops"
-	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/loader"
 )
 
@@ -43,19 +42,19 @@ func (b *HetznerCloudControllerManagerOptionsBuilder) BuildOptions(cluster *kops
 
 	eccm := clusterSpec.ExternalCloudControllerManager
 	eccm.CloudProvider = "hcloud"
-	eccm.AllowUntaggedCloud = fi.PtrTo(true)
+	eccm.AllowUntaggedCloud = new(true)
 	eccm.LeaderElection = &kops.LeaderElectionConfiguration{
-		LeaderElect: fi.PtrTo(false),
+		LeaderElect: new(false),
 	}
 
 	if eccm.ClusterCIDR == "" {
 		eccm.ClusterCIDR = clusterSpec.Networking.PodCIDR
 	}
-	eccm.AllocateNodeCIDRs = fi.PtrTo(true)
-	eccm.ConfigureCloudRoutes = fi.PtrTo(false)
+	eccm.AllocateNodeCIDRs = new(true)
+	eccm.ConfigureCloudRoutes = new(false)
 
 	if eccm.Image == "" {
-		eccm.Image = "hetznercloud/hcloud-cloud-controller-manager:v1.19.0"
+		eccm.Image = "hetznercloud/hcloud-cloud-controller-manager:v1.36.0"
 	}
 
 	return nil

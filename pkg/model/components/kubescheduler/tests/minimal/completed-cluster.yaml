@@ -1,10 +1,9 @@
 metadata:
-  creationTimestamp: null
   name: minimal.example.com
 spec:
   api: {}
   authorization:
-    alwaysAllow: {}
+    rbac: {}
   cloudProvider: {}
   configStore: {}
   kubernetesVersion: v1.26.0

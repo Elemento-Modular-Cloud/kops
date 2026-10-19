@@ -42,7 +42,7 @@ func (b *KubernetesAuthModelBuilder) Build(c *fi.CloudupModelBuilderContext) err
 		tailnetCIDR = "10.0.0.0/16"
 	}
 	service := &elementotasks.KubernetesAuthService{
-		Name:         fi.PtrTo(b.ClusterName()),
+		Name:         new(b.ClusterName()),
 		Lifecycle:    b.Lifecycle,
 		Network:      b.LinkToNetwork(),
 		AtomOSTarget: target,
@@ -53,7 +53,7 @@ func (b *KubernetesAuthModelBuilder) Build(c *fi.CloudupModelBuilderContext) err
 	// Register cluster and instance-group identities before the SDK requests
 	// individual node enrollments and one-time bootstrap tokens.
 	cluster := &elementotasks.KubernetesAuthCluster{
-		Name:         fi.PtrTo(b.ClusterName()),
+		Name:         new(b.ClusterName()),
 		Lifecycle:    b.Lifecycle,
 		AuthService:  service,
 		AtomOSTarget: target,
@@ -63,7 +63,7 @@ func (b *KubernetesAuthModelBuilder) Build(c *fi.CloudupModelBuilderContext) err
 
 	for _, ig := range b.InstanceGroups {
 		c.AddTask(&elementotasks.KubernetesAuthInstanceGroup{
-			Name:         fi.PtrTo(ig.Name),
+			Name:         new(ig.Name),
 			Lifecycle:    b.Lifecycle,
 			AuthCluster:  cluster,
 			AtomOSTarget: target,

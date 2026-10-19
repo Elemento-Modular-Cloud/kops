@@ -44,9 +44,11 @@ type BastionModelBuilder struct {
 var _ fi.CloudupModelBuilder = &BastionModelBuilder{}
 
 func (b *BastionModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
+	// The bastions are reached through the load balancer and security groups built here,
+	// including when the bastion instance groups are not being updated.
 	var bastionInstanceGroups []*kops.InstanceGroup
-	for _, ig := range b.InstanceGroups {
-		if ig.Spec.Role == kops.InstanceGroupRoleBastion {
+	for _, ig := range b.AllInstanceGroups {
+		if ig.Spec.Role.HasBastion() {
 			bastionInstanceGroups = append(bastionInstanceGroups, ig)
 		}
 	}
@@ -78,21 +80,21 @@ func (b *BastionModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		// Allow traffic from bastion instances to egress freely
 		{
 			t := &awstasks.SecurityGroupRule{
-				Name:          fi.PtrTo("ipv4-bastion-egress" + src.Suffix),
+				Name:          new("ipv4-bastion-egress" + src.Suffix),
 				Lifecycle:     b.SecurityLifecycle,
 				SecurityGroup: src.Task,
-				Egress:        fi.PtrTo(true),
-				CIDR:          fi.PtrTo("0.0.0.0/0"),
+				Egress:        new(true),
+				CIDR:          new("0.0.0.0/0"),
 			}
 			AddDirectionalGroupRule(c, t)
 		}
 		{
 			t := &awstasks.SecurityGroupRule{
-				Name:          fi.PtrTo("ipv6-bastion-egress" + src.Suffix),
+				Name:          new("ipv6-bastion-egress" + src.Suffix),
 				Lifecycle:     b.SecurityLifecycle,
 				SecurityGroup: src.Task,
-				Egress:        fi.PtrTo(true),
-				IPv6CIDR:      fi.PtrTo("::/0"),
+				Egress:        new(true),
+				IPv6CIDR:      new("::/0"),
 			}
 			AddDirectionalGroupRule(c, t)
 		}
@@ -126,13 +128,13 @@ func (b *BastionModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	for _, src := range bastionGroups {
 		for _, dest := range masterGroups {
 			t := &awstasks.SecurityGroupRule{
-				Name:          fi.PtrTo("bastion-to-master-ssh" + JoinSuffixes(src, dest)),
+				Name:          new("bastion-to-master-ssh" + JoinSuffixes(src, dest)),
 				Lifecycle:     b.SecurityLifecycle,
 				SecurityGroup: dest.Task,
 				SourceGroup:   src.Task,
-				Protocol:      fi.PtrTo("tcp"),
-				FromPort:      fi.PtrTo(int32(22)),
-				ToPort:        fi.PtrTo(int32(22)),
+				Protocol:      new("tcp"),
+				FromPort:      new(int32(22)),
+				ToPort:        new(int32(22)),
 			}
 			AddDirectionalGroupRule(c, t)
 		}
@@ -142,13 +144,13 @@ func (b *BastionModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	for _, src := range bastionGroups {
 		for _, dest := range nodeGroups {
 			t := &awstasks.SecurityGroupRule{
-				Name:          fi.PtrTo("bastion-to-node-ssh" + JoinSuffixes(src, dest)),
+				Name:          new("bastion-to-node-ssh" + JoinSuffixes(src, dest)),
 				Lifecycle:     b.SecurityLifecycle,
 				SecurityGroup: dest.Task,
 				SourceGroup:   src.Task,
-				Protocol:      fi.PtrTo("tcp"),
-				FromPort:      fi.PtrTo(int32(22)),
-				ToPort:        fi.PtrTo(int32(22)),
+				Protocol:      new("tcp"),
+				FromPort:      new(int32(22)),
+				ToPort:        new(int32(22)),
 			}
 			AddDirectionalGroupRule(c, t)
 		}
@@ -157,9 +159,9 @@ func (b *BastionModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	var lbSG *awstasks.SecurityGroup
 	{
 		lbSG = &awstasks.SecurityGroup{
-			Name:             fi.PtrTo(b.ELBSecurityGroupName("bastion")),
+			Name:             new(b.ELBSecurityGroupName("bastion")),
 			Lifecycle:        b.SecurityLifecycle,
-			Description:      fi.PtrTo("Security group for bastion ELB"),
+			Description:      new("Security group for bastion ELB"),
 			RemoveExtraRules: []string{"port=22"},
 			VPC:              b.LinkToVPC(),
 		}
@@ -172,20 +174,20 @@ func (b *BastionModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	{
 		{
 			t := &awstasks.SecurityGroupRule{
-				Name:          fi.PtrTo("ipv4-bastion-elb-egress"),
+				Name:          new("ipv4-bastion-elb-egress"),
 				Lifecycle:     b.SecurityLifecycle,
-				CIDR:          fi.PtrTo("0.0.0.0/0"),
-				Egress:        fi.PtrTo(true),
+				CIDR:          new("0.0.0.0/0"),
+				Egress:        new(true),
 				SecurityGroup: lbSG,
 			}
 			AddDirectionalGroupRule(c, t)
 		}
 		{
 			t := &awstasks.SecurityGroupRule{
-				Name:          fi.PtrTo("ipv6-bastion-elb-egress"),
+				Name:          new("ipv6-bastion-elb-egress"),
 				Lifecycle:     b.SecurityLifecycle,
-				IPv6CIDR:      fi.PtrTo("::/0"),
-				Egress:        fi.PtrTo(true),
+				IPv6CIDR:      new("::/0"),
+				Egress:        new(true),
 				SecurityGroup: lbSG,
 			}
 			AddDirectionalGroupRule(c, t)
@@ -233,12 +235,12 @@ func (b *BastionModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		// TODO: Could we get away without an NLB here?  Tricky to fix if dns-controller breaks though...
 		{
 			t := &awstasks.SecurityGroupRule{
-				Name:          fi.PtrTo(fmt.Sprintf("ssh-nlb-%s", cidr)),
+				Name:          new(fmt.Sprintf("ssh-nlb-%s", cidr)),
 				Lifecycle:     b.SecurityLifecycle,
 				SecurityGroup: lbSG,
-				Protocol:      fi.PtrTo("tcp"),
-				FromPort:      fi.PtrTo(int32(22)),
-				ToPort:        fi.PtrTo(int32(22)),
+				Protocol:      new("tcp"),
+				FromPort:      new(int32(22)),
+				ToPort:        new(int32(22)),
 			}
 			t.SetCidrOrPrefix(cidr)
 			AddDirectionalGroupRule(c, t)
@@ -247,12 +249,12 @@ func (b *BastionModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		// Allow ICMP traffic required for PMTU discovery
 		{
 			t := &awstasks.SecurityGroupRule{
-				Name:          fi.PtrTo("icmpv6-pmtu-ssh-nlb-" + cidr),
+				Name:          new("icmpv6-pmtu-ssh-nlb-" + cidr),
 				Lifecycle:     b.SecurityLifecycle,
-				FromPort:      fi.PtrTo(int32(-1)),
-				Protocol:      fi.PtrTo("icmpv6"),
+				FromPort:      new(int32(-1)),
+				Protocol:      new("icmpv6"),
 				SecurityGroup: lbSG,
-				ToPort:        fi.PtrTo(int32(-1)),
+				ToPort:        new(int32(-1)),
 			}
 			t.SetCidrOrPrefix(cidr)
 			if t.CIDR == nil {
@@ -261,12 +263,12 @@ func (b *BastionModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		}
 		{
 			t := &awstasks.SecurityGroupRule{
-				Name:          fi.PtrTo("icmp-pmtu-ssh-nlb-" + cidr),
+				Name:          new("icmp-pmtu-ssh-nlb-" + cidr),
 				Lifecycle:     b.SecurityLifecycle,
-				FromPort:      fi.PtrTo(int32(3)),
-				Protocol:      fi.PtrTo("icmp"),
+				FromPort:      new(int32(3)),
+				Protocol:      new("icmp"),
 				SecurityGroup: lbSG,
-				ToPort:        fi.PtrTo(int32(4)),
+				ToPort:        new(int32(4)),
 			}
 			t.SetCidrOrPrefix(cidr)
 			if t.IPv6CIDR == nil {
@@ -280,39 +282,39 @@ func (b *BastionModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		{
 			suffix := bastionGroup.Suffix
 			t := &awstasks.SecurityGroupRule{
-				Name:          fi.PtrTo(fmt.Sprintf("ssh-to-bastion%s", suffix)),
+				Name:          new(fmt.Sprintf("ssh-to-bastion%s", suffix)),
 				Lifecycle:     b.SecurityLifecycle,
 				SecurityGroup: bastionGroup.Task,
 				SourceGroup:   lbSG,
-				Protocol:      fi.PtrTo("tcp"),
-				FromPort:      fi.PtrTo(int32(22)),
-				ToPort:        fi.PtrTo(int32(22)),
+				Protocol:      new("tcp"),
+				FromPort:      new(int32(22)),
+				ToPort:        new(int32(22)),
 			}
 			AddDirectionalGroupRule(c, t)
 		}
 		{
 			suffix := bastionGroup.Suffix
 			t := &awstasks.SecurityGroupRule{
-				Name:          fi.PtrTo(fmt.Sprintf("icmp-to-bastion%s", suffix)),
+				Name:          new(fmt.Sprintf("icmp-to-bastion%s", suffix)),
 				Lifecycle:     b.SecurityLifecycle,
 				SecurityGroup: bastionGroup.Task,
 				SourceGroup:   lbSG,
-				Protocol:      fi.PtrTo("icmp"),
-				FromPort:      fi.PtrTo(int32(3)),
-				ToPort:        fi.PtrTo(int32(4)),
+				Protocol:      new("icmp"),
+				FromPort:      new(int32(3)),
+				ToPort:        new(int32(4)),
 			}
 			AddDirectionalGroupRule(c, t)
 		}
 		{
 			suffix := bastionGroup.Suffix
 			t := &awstasks.SecurityGroupRule{
-				Name:          fi.PtrTo(fmt.Sprintf("icmp-from-bastion%s", suffix)),
+				Name:          new(fmt.Sprintf("icmp-from-bastion%s", suffix)),
 				Lifecycle:     b.SecurityLifecycle,
 				SecurityGroup: lbSG,
 				SourceGroup:   bastionGroup.Task,
-				Protocol:      fi.PtrTo("icmp"),
-				FromPort:      fi.PtrTo(int32(3)),
-				ToPort:        fi.PtrTo(int32(4)),
+				Protocol:      new("icmp"),
+				FromPort:      new(int32(3)),
+				ToPort:        new(int32(4)),
 			}
 			AddDirectionalGroupRule(c, t)
 		}
@@ -329,7 +331,7 @@ func (b *BastionModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		tags["Name"] = "bastion." + b.ClusterName()
 
 		nlbListener := &awstasks.NetworkLoadBalancerListener{
-			Name:                fi.PtrTo(b.NLBListenerName("bastion", 22)),
+			Name:                new(b.NLBListenerName("bastion", 22)),
 			Lifecycle:           b.Lifecycle,
 			NetworkLoadBalancer: b.LinkToNLB("bastion"),
 			Port:                22,
@@ -338,11 +340,10 @@ func (b *BastionModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		c.AddTask(nlbListener)
 
 		nlb = &awstasks.NetworkLoadBalancer{
-			Name:      fi.PtrTo(b.NLBName("bastion")),
+			Name:      new(b.NLBName("bastion")),
 			Lifecycle: b.Lifecycle,
 
-			LoadBalancerBaseName: fi.PtrTo(b.LBName32("bastion")),
-			CLBName:              fi.PtrTo("bastion." + b.ClusterName()),
+			LoadBalancerBaseName: new(b.LBName32("bastion")),
 			SubnetMappings:       nlbSubnetMappings,
 			SecurityGroups: []*awstasks.SecurityGroup{
 				b.LinkToELBSecurityGroup("bastion"),
@@ -377,21 +378,36 @@ func (b *BastionModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		}
 
 		tg := &awstasks.TargetGroup{
-			Name:               fi.PtrTo(sshGroupName),
-			Lifecycle:          b.Lifecycle,
-			VPC:                b.LinkToVPC(),
-			Tags:               sshGroupTags,
-			Protocol:           elbv2types.ProtocolEnumTcp,
-			Port:               fi.PtrTo(int32(22)),
-			Attributes:         groupAttrs,
-			Interval:           fi.PtrTo(int32(10)),
-			HealthyThreshold:   fi.PtrTo(int32(2)),
-			UnhealthyThreshold: fi.PtrTo(int32(2)),
-			Shared:             fi.PtrTo(false),
+			Name:                new(sshGroupName),
+			Lifecycle:           b.Lifecycle,
+			VPC:                 b.LinkToVPC(),
+			Tags:                sshGroupTags,
+			Protocol:            elbv2types.ProtocolEnumTcp,
+			Port:                new(int32(22)),
+			Attributes:          groupAttrs,
+			Interval:            new(int32(10)),
+			HealthyThreshold:    new(int32(2)),
+			UnhealthyThreshold:  new(int32(2)),
+			HealthCheckProtocol: elbv2types.ProtocolEnumTcp,
+			Shared:              new(false),
 		}
 		tg.CreateNewRevisionsWith(nlb)
 
 		c.AddTask(tg)
+
+		// Add additional security groups to the NLB
+		if b.Cluster.Spec.Networking.Topology != nil && b.Cluster.Spec.Networking.Topology.Bastion != nil && b.Cluster.Spec.Networking.Topology.Bastion.LoadBalancer != nil && b.Cluster.Spec.Networking.Topology.Bastion.LoadBalancer.AdditionalSecurityGroups != nil {
+			for _, id := range b.Cluster.Spec.Networking.Topology.Bastion.LoadBalancer.AdditionalSecurityGroups {
+				t := &awstasks.SecurityGroup{
+					Name:      new(id),
+					Lifecycle: b.SecurityLifecycle,
+					ID:        new(id),
+					Shared:    new(true),
+				}
+				c.EnsureTask(t)
+				nlb.SecurityGroups = append(nlb.SecurityGroups, t)
+			}
+		}
 
 		c.AddTask(nlb)
 	}
@@ -404,22 +420,22 @@ func (b *BastionModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		// Here we implement the bastion CNAME logic
 		// By default bastions will create a CNAME that follows the `bastion-$clustername` formula
 		t := &awstasks.DNSName{
-			Name:      fi.PtrTo(publicName),
+			Name:      new(publicName),
 			Lifecycle: b.Lifecycle,
 
 			Zone:               b.LinkToDNSZone(),
-			ResourceName:       fi.PtrTo(publicName),
-			ResourceType:       fi.PtrTo("A"),
+			ResourceName:       new(publicName),
+			ResourceType:       new("A"),
 			TargetLoadBalancer: b.LinkToNLB("bastion"),
 		}
 		c.AddTask(t)
 		t = &awstasks.DNSName{
-			Name:      fi.PtrTo(publicName + "-AAAA"),
+			Name:      new(publicName + "-AAAA"),
 			Lifecycle: b.Lifecycle,
 
 			Zone:               b.LinkToDNSZone(),
-			ResourceName:       fi.PtrTo(publicName),
-			ResourceType:       fi.PtrTo("AAAA"),
+			ResourceName:       new(publicName),
+			ResourceType:       new("AAAA"),
 			TargetLoadBalancer: b.LinkToNLB("bastion"),
 		}
 		c.AddTask(t)
@@ -429,7 +445,7 @@ func (b *BastionModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 }
 
 func useIPv6ForBastion(b *BastionModelBuilder) bool {
-	for _, ig := range b.InstanceGroups {
+	for _, ig := range b.AllInstanceGroups {
 		for _, igSubnetName := range ig.Spec.Subnets {
 			for _, clusterSubnet := range b.Cluster.Spec.Networking.Subnets {
 				if igSubnetName != clusterSubnet.Name {

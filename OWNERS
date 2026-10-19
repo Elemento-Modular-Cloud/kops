@@ -12,18 +12,16 @@ emeritus_approvers:
   - gambol99
   - geojaz
   - granular-ryanbonham
+  - johngmyers
   - kashifsaadat
   - mikesplain
+  - olemarkus
   - rdrgmnzs
+  - zetaab
 approvers:
   - hakman
-  - johngmyers
   - justinsb
-  - olemarkus
   - rifelpet
-  - zetaab
 reviewers:
   - hakman
-  - johngmyers
-  - olemarkus
-  - zetaab
+  - moshevayner

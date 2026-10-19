@@ -101,14 +101,14 @@ spec:
       serviceAccountName: kindnet
       initContainers:
       - name: install-cni-bin
-        image: "ghcr.io/aojea/kindnetd:{{ .Networking.Kindnet.Version }}"
+        image: "registry.k8s.io/networking/kindnet:{{ .Networking.Kindnet.Version }}"
         command: ['sh', '-c', 'cat /opt/cni/bin/cni-kindnet > /cni/cni-kindnet ; chmod +x /cni/cni-kindnet']
         volumeMounts:
         - name: cni-bin
           mountPath: /cni
       containers:
       - name: kindnet-cni
-        image: "ghcr.io/aojea/kindnetd:{{ .Networking.Kindnet.Version }}"
+        image: "registry.k8s.io/networking/kindnet:{{ .Networking.Kindnet.Version }}"
         command:
         - /bin/kindnetd
         - --hostname-override=$(NODE_NAME)
@@ -122,7 +122,7 @@ spec:
         {{ if .Networking.Kindnet.BaselineAdminNetworkPolicies }}
         - --admin-network-policy={{ .Networking.Kindnet.BaselineAdminNetworkPolicies }}
         {{ end }}
-        - --dns-caching={{ WithDefaultBool .Networking.Kindnet.DNSCaching true }}
+        - --dns-caching={{ WithDefaultBool .Networking.Kindnet.DNSCaching false }}
         - --nat64={{ WithDefaultBool .Networking.Kindnet.NAT64 false }}
         - --fastpath-threshold={{ .Networking.Kindnet.FastPathThreshold }}
         {{- if .Networking.Kindnet.Masquerade }}
@@ -149,6 +149,8 @@ spec:
           mountPath: /etc/cni/net.d
         - name: var-lib-kindnet
           mountPath: /var/lib/cni-kindnet
+        - name: nri-plugin
+          mountPath: /var/run/nri
         resources:
           requests:
             cpu: "100m"
@@ -168,6 +170,9 @@ spec:
         hostPath:
           path: /var/lib/cni-kindnet
           type: DirectoryOrCreate
+      - name: nri-plugin
+        hostPath:
+          path: /var/run/nri
 {{- if .Networking.Kindnet.AdminNetworkPolicies }}
 ---
 apiVersion: apiextensions.k8s.io/v1

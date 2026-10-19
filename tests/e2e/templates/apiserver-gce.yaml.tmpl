@@ -1,0 +1,123 @@
+{{$zone := index .zones 0}}
+apiVersion: kops.k8s.io/v1alpha2
+kind: Cluster
+metadata:
+  name: {{.clusterName}}
+spec:
+  kubernetesApiAccess:
+  - {{.publicIP}}
+  api:
+    loadBalancer:
+      type: Public
+  authorization:
+    rbac: {}
+  channel: stable
+  cloudConfig:
+    gceServiceAccount: default
+  cloudProvider: {{.cloudProvider}}
+  configBase: "{{.stateStore}}/{{.clusterName}}"
+  containerd:
+    configAdditions:
+      plugins."io.containerd.cri.v1.runtime".containerd.runtimes.test-handler.runtime_type: io.containerd.runc.v2
+  etcdClusters:
+  - etcdMembers:
+    - instanceGroup: control-plane-{{$zone}}
+      name: {{$zone}}
+    name: main
+  - etcdMembers:
+    - instanceGroup: control-plane-{{$zone}}
+      name: {{$zone}}
+    name: events
+  iam:
+    allowContainerRegistry: true
+    legacy: false
+  kubelet:
+    anonymousAuth: false
+  kubernetesVersion: {{.kubernetesVersion}}
+  networking:
+    kubenet: {}
+  nodePortAccess:
+    - 0.0.0.0/0
+  nonMasqueradeCIDR: 100.64.0.0/10
+  project: {{.project}}
+  sshAccess:
+    - {{.publicIP}}
+  subnets:
+  - cidr: 10.0.16.0/20
+    name: {{.region}}
+    region: {{.region}}
+    type: Public
+  topology:
+    dns:
+      type: None
+
+---
+
+apiVersion: kops.k8s.io/v1alpha2
+kind: SSHCredential
+metadata:
+  name: admin
+  labels:
+    kops.k8s.io/cluster: {{.clusterName}}
+spec:
+  publicKey: {{.sshPublicKey}}
+
+---
+
+apiVersion: kops.k8s.io/v1alpha2
+kind: InstanceGroup
+metadata:
+  name: nodes-{{$zone}}
+  labels:
+    kops.k8s.io/cluster: {{.clusterName}}
+spec:
+  image: ubuntu-os-cloud/ubuntu-2404-noble-amd64-v20250606
+  machineType: e2-standard-2
+  maxSize: 4
+  minSize: 4
+  role: Node
+  rootVolumeSize: 100
+  subnets:
+  - {{.region}}
+  zones:
+  - {{$zone}}
+
+---
+
+apiVersion: kops.k8s.io/v1alpha2
+kind: InstanceGroup
+metadata:
+  name: control-plane-{{$zone}}
+  labels:
+    kops.k8s.io/cluster: {{.clusterName}}
+spec:
+  image: ubuntu-os-cloud/ubuntu-2404-noble-amd64-v20250606
+  machineType: e2-standard-2
+  maxSize: 1
+  minSize: 1
+  role: Master
+  rootVolumeSize: 48
+  subnets:
+  - {{.region}}
+  zones:
+  - {{$zone}}
+
+---
+
+apiVersion: kops.k8s.io/v1alpha2
+kind: InstanceGroup
+metadata:
+  name: apiserver-{{$zone}}
+  labels:
+    kops.k8s.io/cluster: {{.clusterName}}
+spec:
+  image: ubuntu-os-cloud/ubuntu-2404-noble-amd64-v20250606
+  machineType: e2-standard-2
+  maxSize: 1
+  minSize: 1
+  role: APIServer
+  rootVolumeSize: 48
+  subnets:
+  - {{.region}}
+  zones:
+  - {{$zone}}

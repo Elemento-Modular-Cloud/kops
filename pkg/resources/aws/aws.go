@@ -38,7 +38,6 @@ import (
 	route53types "github.com/aws/aws-sdk-go-v2/service/route53/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
-	"k8s.io/kops/pkg/dns"
 	"k8s.io/kops/pkg/featureflag"
 	"k8s.io/kops/pkg/resources"
 	"k8s.io/kops/pkg/resources/spotinst"
@@ -59,7 +58,6 @@ type listFn func(fi.Cloud, string, string) ([]*resources.Resource, error)
 
 func ListResourcesAWS(cloud awsup.AWSCloud, clusterInfo resources.ClusterInfo) (map[string]*resources.Resource, error) {
 	clusterName := clusterInfo.Name
-	clusterUsesNoneDNS := clusterInfo.UsesNoneDNS
 
 	resourceTrackers := make(map[string]*resources.Resource)
 
@@ -93,7 +91,7 @@ func ListResourcesAWS(cloud awsup.AWSCloud, clusterInfo resources.ClusterInfo) (
 		ListEventBridgeRules,
 	}
 
-	if !dns.IsGossipClusterName(clusterName) && !clusterUsesNoneDNS {
+	if clusterInfo.PublishesDNSRecords() {
 		// Route 53
 		listFunctions = append(listFunctions, ListRoute53Records)
 	}
@@ -328,17 +326,27 @@ func DeleteInstances(cloud fi.Cloud, t []*resources.Resource) error {
 	c := cloud.(awsup.AWSCloud)
 
 	var ids []string
+	var hasXenHyervisor bool
 	for i, instance := range t {
 		ids = append(ids, instance.ID)
+		if instance.Obj.(ec2types.Instance).Hypervisor == ec2types.HypervisorTypeXen {
+			hasXenHyervisor = true
+		}
 		if len(ids) < 100 && i < len(t)-1 {
 			continue
 		}
 
 		klog.Infof("Terminating %d EC2 instances", len(ids))
 		request := &ec2.TerminateInstancesInput{
-			InstanceIds: ids,
+			InstanceIds:    ids,
+			SkipOsShutdown: aws.Bool(true),
+		}
+		if hasXenHyervisor {
+			// SkipOsShutdown is not supported on Xen instance types.
+			request.SkipOsShutdown = aws.Bool(false)
 		}
 		ids = []string{}
+		hasXenHyervisor = false
 		_, err := c.EC2().TerminateInstances(ctx, request)
 		if err != nil {
 			if awsup.AWSErrorCode(err) == "InvalidInstanceID.NotFound" {
@@ -462,7 +470,7 @@ func (s *dumpState) getImageInfo(imageID string) (*imageInfo, error) {
 func guessSSHUser(image *ec2types.Image) string {
 	owner := aws.ToString(image.OwnerId)
 	switch owner {
-	case awsup.WellKnownAccountAmazonLinux2, awsup.WellKnownAccountRedhat:
+	case awsup.WellKnownAccountAmazonLinux2023, awsup.WellKnownAccountRedhat:
 		return "ec2-user"
 	case awsup.WellKnownAccountDebian:
 		return "admin"
@@ -470,6 +478,8 @@ func guessSSHUser(image *ec2types.Image) string {
 		return "ubuntu"
 	case awsup.WellKnownAccountFlatcar:
 		return "core"
+	case awsup.WellKnownAccountRockyLinux:
+		return "rocky"
 	}
 
 	name := aws.ToString(image.Name)
@@ -1430,7 +1440,7 @@ func DeleteAutoScalingGroupLaunchTemplate(cloud fi.Cloud, r *resources.Resource)
 	klog.V(2).Infof("Deleting EC2 LaunchTemplate %q", r.ID)
 
 	if _, err := c.EC2().DeleteLaunchTemplate(ctx, &ec2.DeleteLaunchTemplateInput{
-		LaunchTemplateId: fi.PtrTo(r.ID),
+		LaunchTemplateId: new(r.ID),
 	}); err != nil {
 		return fmt.Errorf("error deleting ec2 LaunchTemplate %q: %v", r.ID, err)
 	}
@@ -1583,7 +1593,25 @@ func DescribeELBs(cloud fi.Cloud) ([]elbtypes.LoadBalancerDescription, map[strin
 
 		tagResponse, err := c.ELB().DescribeTags(ctx, tagRequest)
 		if err != nil {
-			return nil, nil, fmt.Errorf("error listing elb Tags: %v", err)
+			// An ELB may be deleted between DescribeLoadBalancers and DescribeTags;
+			// in that case the batched call fails, so fall back to per-ELB lookups.
+			if awsup.AWSErrorCode(err) != "LoadBalancerNotFound" {
+				return nil, nil, fmt.Errorf("error listing elb Tags: %v", err)
+			}
+			tagResponse = &elb.DescribeTagsOutput{}
+			for _, name := range tagRequest.LoadBalancerNames {
+				resp, err := c.ELB().DescribeTags(ctx, &elb.DescribeTagsInput{
+					LoadBalancerNames: []string{name},
+				})
+				if err != nil {
+					if awsup.AWSErrorCode(err) == "LoadBalancerNotFound" {
+						klog.V(2).Infof("ELB %q was deleted before tags could be listed", name)
+						continue
+					}
+					return nil, nil, fmt.Errorf("error listing elb Tags: %v", err)
+				}
+				tagResponse.TagDescriptions = append(tagResponse.TagDescriptions, resp.TagDescriptions...)
+			}
 		}
 
 		for _, t := range tagResponse.TagDescriptions {
@@ -2148,7 +2176,7 @@ func ListIAMOIDCProviders(cloud fi.Cloud, vpcID, clusterName string) ([]*resourc
 func DeleteIAMOIDCProvider(cloud fi.Cloud, r *resources.Resource) error {
 	ctx := context.TODO()
 	c := cloud.(awsup.AWSCloud)
-	arn := fi.PtrTo(r.ID)
+	arn := new(r.ID)
 	{
 		klog.V(2).Infof("Deleting IAM OIDC Provider %v", arn)
 		request := &iam.DeleteOpenIDConnectProviderInput{

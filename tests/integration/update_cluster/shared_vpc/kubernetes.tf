@@ -14,7 +14,7 @@ locals {
   subnet_us-test-1a_id         = aws_subnet.us-test-1a-sharedvpc-example-com.id
   vpc_cidr_block               = data.aws_vpc.sharedvpc-example-com.cidr_block
   vpc_id                       = "vpc-12345678"
-  vpc_ipv6_cidr_block          = data.aws_vpc.sharedvpc-example-com.ipv6_cidr_block
+  vpc_ipv6_cidr_block          = element(concat([for a in data.aws_vpc.sharedvpc-example-com.ipv6_cidr_block_associations : a.ipv6_cidr_block if a.state == "associated"], [""]), 0)
   vpc_ipv6_cidr_length         = local.vpc_ipv6_cidr_block == "" ? null : tonumber(regex(".*/(\\d+)", local.vpc_ipv6_cidr_block)[0])
 }
 
@@ -79,7 +79,7 @@ output "vpc_id" {
 }
 
 output "vpc_ipv6_cidr_block" {
-  value = data.aws_vpc.sharedvpc-example-com.ipv6_cidr_block
+  value = element(concat([for a in data.aws_vpc.sharedvpc-example-com.ipv6_cidr_block_associations : a.ipv6_cidr_block if a.state == "associated"], [""]), 0)
 }
 
 output "vpc_ipv6_cidr_length" {
@@ -366,12 +366,6 @@ resource "aws_iam_role_policy" "masters-sharedvpc-example-com" {
   role   = aws_iam_role.masters-sharedvpc-example-com.name
 }
 
-resource "aws_iam_role_policy" "nodes-sharedvpc-example-com" {
-  name   = "nodes.sharedvpc.example.com"
-  policy = file("${path.module}/data/aws_iam_role_policy_nodes.sharedvpc.example.com_policy")
-  role   = aws_iam_role.nodes-sharedvpc-example-com.name
-}
-
 resource "aws_key_pair" "kubernetes-sharedvpc-example-com-c4a6ed9aa889b9e2c39cd663eb9c7157" {
   key_name   = "kubernetes.sharedvpc.example.com-c4:a6:ed:9a:a8:89:b9:e2:c3:9c:d6:63:eb:9c:71:57"
   public_key = file("${path.module}/data/aws_key_pair_kubernetes.sharedvpc.example.com-c4a6ed9aa889b9e2c39cd663eb9c7157_public_key")
@@ -440,6 +434,21 @@ resource "aws_launch_template" "master-us-test-1a-masters-sharedvpc-example-com"
   }
   tag_specifications {
     resource_type = "volume"
+    tags = {
+      "KubernetesCluster"                                                                                     = "sharedvpc.example.com"
+      "Name"                                                                                                  = "master-us-test-1a.masters.sharedvpc.example.com"
+      "aws-node-termination-handler/managed"                                                                  = ""
+      "k8s.io/cluster-autoscaler/node-template/label/kops.k8s.io/kops-controller-pki"                         = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node-role.kubernetes.io/control-plane"                   = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node.kubernetes.io/exclude-from-external-load-balancers" = ""
+      "k8s.io/role/control-plane"                                                                             = "1"
+      "k8s.io/role/master"                                                                                    = "1"
+      "kops.k8s.io/instancegroup"                                                                             = "master-us-test-1a"
+      "kubernetes.io/cluster/sharedvpc.example.com"                                                           = "owned"
+    }
+  }
+  tag_specifications {
+    resource_type = "network-interface"
     tags = {
       "KubernetesCluster"                                                                                     = "sharedvpc.example.com"
       "Name"                                                                                                  = "master-us-test-1a.masters.sharedvpc.example.com"
@@ -529,6 +538,18 @@ resource "aws_launch_template" "nodes-sharedvpc-example-com" {
       "kubernetes.io/cluster/sharedvpc.example.com"                                = "owned"
     }
   }
+  tag_specifications {
+    resource_type = "network-interface"
+    tags = {
+      "KubernetesCluster"                                                          = "sharedvpc.example.com"
+      "Name"                                                                       = "nodes.sharedvpc.example.com"
+      "aws-node-termination-handler/managed"                                       = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node-role.kubernetes.io/node" = ""
+      "k8s.io/role/node"                                                           = "1"
+      "kops.k8s.io/instancegroup"                                                  = "nodes"
+      "kubernetes.io/cluster/sharedvpc.example.com"                                = "owned"
+    }
+  }
   tags = {
     "KubernetesCluster"                                                          = "sharedvpc.example.com"
     "Name"                                                                       = "nodes.sharedvpc.example.com"
@@ -596,6 +617,14 @@ resource "aws_s3_object" "kops-version-txt" {
   bucket                 = "testingBucket"
   content                = file("${path.module}/data/aws_s3_object_kops-version.txt_content")
   key                    = "clusters.example.com/sharedvpc.example.com/kops-version.txt"
+  provider               = aws.files
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_object" "manifests-channels-kops-channels" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_object_manifests-channels-kops-channels_content")
+  key                    = "clusters.example.com/sharedvpc.example.com/manifests/channels/kops-channels.yaml"
   provider               = aws.files
   server_side_encryption = "AES256"
 }
@@ -905,7 +934,7 @@ terraform {
     aws = {
       "configuration_aliases" = [aws.files]
       "source"                = "hashicorp/aws"
-      "version"               = ">= 5.0.0"
+      "version"               = ">= 6.57.1"
     }
   }
 }

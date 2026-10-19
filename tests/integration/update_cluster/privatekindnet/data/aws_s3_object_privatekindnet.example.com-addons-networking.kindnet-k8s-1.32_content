@@ -1,7 +1,6 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: networking.kindnet
     app.kubernetes.io/managed-by: kops
@@ -50,7 +49,6 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: networking.kindnet
     app.kubernetes.io/managed-by: kops
@@ -70,7 +68,6 @@ subjects:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: networking.kindnet
     app.kubernetes.io/managed-by: kops
@@ -83,7 +80,6 @@ metadata:
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: networking.kindnet
     app: kindnet
@@ -99,7 +95,6 @@ spec:
       app: kindnet
   template:
     metadata:
-      creationTimestamp: null
       labels:
         app: kindnet
         k8s-app: kindnet
@@ -111,7 +106,7 @@ spec:
         - /bin/kindnetd
         - --hostname-override=$(NODE_NAME)
         - --v=2
-        - --dns-caching=true
+        - --dns-caching=false
         - --nat64=false
         - --fastpath-threshold=0
         - --masquerading=true
@@ -129,7 +124,7 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
-        image: ghcr.io/aojea/kindnetd:v1.8.2
+        image: registry.k8s.io/networking/kindnet:v1.0.2
         name: kindnet-cni
         resources:
           requests:
@@ -142,13 +137,15 @@ spec:
           name: cni-cfg
         - mountPath: /var/lib/cni-kindnet
           name: var-lib-kindnet
+        - mountPath: /var/run/nri
+          name: nri-plugin
       hostNetwork: true
       initContainers:
       - command:
         - sh
         - -c
         - cat /opt/cni/bin/cni-kindnet > /cni/cni-kindnet ; chmod +x /cni/cni-kindnet
-        image: ghcr.io/aojea/kindnetd:v1.8.2
+        image: registry.k8s.io/networking/kindnet:v1.0.2
         name: install-cni-bin
         volumeMounts:
         - mountPath: /cni
@@ -170,3 +167,6 @@ spec:
           path: /var/lib/cni-kindnet
           type: DirectoryOrCreate
         name: var-lib-kindnet
+      - hostPath:
+          path: /var/run/nri
+        name: nri-plugin

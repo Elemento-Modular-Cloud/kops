@@ -23,7 +23,6 @@ import (
 	"github.com/scaleway/scaleway-sdk-go/scw"
 	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
-	"k8s.io/kops/pkg/dns"
 	"k8s.io/kops/pkg/wellknownports"
 	"k8s.io/kops/pkg/wellknownservices"
 	"k8s.io/kops/upup/pkg/fi"
@@ -71,8 +70,8 @@ func (b *APILoadBalancerModelBuilder) Build(c *fi.CloudupModelBuilderContext) er
 
 	loadBalancerName := "api." + b.ClusterName()
 	loadBalancer := &scalewaytasks.LoadBalancer{
-		Name:                  fi.PtrTo(loadBalancerName),
-		Zone:                  fi.PtrTo(string(zone)),
+		Name:                  new(loadBalancerName),
+		Zone:                  new(string(zone)),
 		Type:                  scalewaytasks.LbDefaultType,
 		Lifecycle:             b.Lifecycle,
 		Tags:                  lbTags,
@@ -89,7 +88,7 @@ func (b *APILoadBalancerModelBuilder) Build(c *fi.CloudupModelBuilderContext) er
 	lbFrontendHttps.Lifecycle = b.Lifecycle
 	c.AddTask(lbFrontendHttps)
 
-	if dns.IsGossipClusterName(b.Cluster.Name) || b.Cluster.UsesPrivateDNS() || b.Cluster.UsesNoneDNS() {
+	if b.Cluster.UsesPrivateDNS() || b.Cluster.UsesNoneDNS() {
 		loadBalancer.WellKnownServices = append(loadBalancer.WellKnownServices, wellknownservices.KopsController)
 		lbBackendKopsController, lbFrontendKopsController := createLbBackendAndFrontend("kops-controller", wellknownports.KopsControllerPort, zone, loadBalancer)
 		lbBackendKopsController.Lifecycle = b.Lifecycle
@@ -103,20 +102,20 @@ func (b *APILoadBalancerModelBuilder) Build(c *fi.CloudupModelBuilderContext) er
 
 func createLbBackendAndFrontend(name string, port int, zone scw.Zone, loadBalancer *scalewaytasks.LoadBalancer) (*scalewaytasks.LBBackend, *scalewaytasks.LBFrontend) {
 	lbBackendKopsController := &scalewaytasks.LBBackend{
-		Name:                 fi.PtrTo("lb-backend-" + name),
-		Zone:                 fi.PtrTo(string(zone)),
-		ForwardProtocol:      fi.PtrTo(string(lb.ProtocolTCP)),
-		ForwardPort:          fi.PtrTo(int32(port)),
-		ForwardPortAlgorithm: fi.PtrTo(string(lb.ForwardPortAlgorithmRoundrobin)),
-		StickySessions:       fi.PtrTo(string(lb.StickySessionsTypeNone)),
-		ProxyProtocol:        fi.PtrTo(string(lb.ProxyProtocolProxyProtocolNone)),
+		Name:                 new("lb-backend-" + name),
+		Zone:                 new(string(zone)),
+		ForwardProtocol:      new(string(lb.ProtocolTCP)),
+		ForwardPort:          new(int32(port)),
+		ForwardPortAlgorithm: new(string(lb.ForwardPortAlgorithmRoundrobin)),
+		StickySessions:       new(string(lb.StickySessionsTypeNone)),
+		ProxyProtocol:        new(string(lb.ProxyProtocolProxyProtocolNone)),
 		LoadBalancer:         loadBalancer,
 	}
 
 	lbFrontendKopsController := &scalewaytasks.LBFrontend{
-		Name:         fi.PtrTo("lb-frontend-" + name),
-		Zone:         fi.PtrTo(string(zone)),
-		InboundPort:  fi.PtrTo(int32(port)),
+		Name:         new("lb-frontend-" + name),
+		Zone:         new(string(zone)),
+		InboundPort:  new(int32(port)),
 		LoadBalancer: loadBalancer,
 		LBBackend:    lbBackendKopsController,
 	}

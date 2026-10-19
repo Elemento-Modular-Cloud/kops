@@ -38,8 +38,8 @@ type SSHKey struct {
 	KeyFingerprint *string
 }
 
-var _ fi.CompareWithID = &SSHKey{}
-var _ fi.CloudupTaskNormalize = &SSHKey{}
+var _ fi.CompareWithID = (*SSHKey)(nil)
+var _ fi.CloudupTaskNormalize = (*SSHKey)(nil)
 
 func (e *SSHKey) CompareWithID() *string {
 	return e.Name
@@ -56,7 +56,7 @@ func (e *SSHKey) Find(c *fi.CloudupContext) (*SSHKey, error) {
 	}
 	actual := &SSHKey{
 		Name:           e.Name,
-		KeyFingerprint: fi.PtrTo(rs.Fingerprint),
+		KeyFingerprint: new(rs.Fingerprint),
 	}
 
 	// Avoid spurious changes
@@ -108,8 +108,8 @@ func (s *SSHKey) CheckChanges(a, e, changes *SSHKey) error {
 }
 
 func openstackKeyPairName(org string) string {
-	name := strings.Replace(org, ".", "-", -1)
-	name = strings.Replace(name, ":", "_", -1)
+	name := strings.ReplaceAll(org, ".", "-")
+	name = strings.ReplaceAll(name, ":", "_")
 	return name
 }
 
@@ -134,7 +134,7 @@ func (_ *SSHKey) RenderOpenstack(t *openstack.OpenstackAPITarget, a, e, changes 
 			return fmt.Errorf("Error creating keypair: %v", err)
 		}
 
-		e.KeyFingerprint = fi.PtrTo(v.Fingerprint)
+		e.KeyFingerprint = new(v.Fingerprint)
 		klog.V(2).Infof("Creating a new Openstack keypair, id=%s", v.Fingerprint)
 		return nil
 	}

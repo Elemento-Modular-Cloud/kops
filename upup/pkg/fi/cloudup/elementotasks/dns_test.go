@@ -18,18 +18,16 @@ package elementotasks
 
 import (
 	"testing"
-
-	"k8s.io/kops/upup/pkg/fi"
 )
 
 func TestDNSRecordCheckChangesAllowsPendingDHCPReservation(t *testing.T) {
 	expected := &DNSRecord{
-		Name:    fi.PtrTo("control-plane-europe-1"),
-		DNSZone: fi.PtrTo("test.k8s"),
-		Type:    fi.PtrTo("A"),
+		Name:    new("control-plane-europe-1"),
+		DNSZone: new("test.k8s"),
+		Type:    new("A"),
 		DHCPReservation: &DHCPReservation{
-			Name:       fi.PtrTo("control-plane-europe-1"),
-			MACAddress: fi.PtrTo("00:FF:A6:01:AA:BB"),
+			Name:       new("control-plane-europe-1"),
+			MACAddress: new("00:FF:A6:01:AA:BB"),
 		},
 	}
 
@@ -39,9 +37,9 @@ func TestDNSRecordCheckChangesAllowsPendingDHCPReservation(t *testing.T) {
 }
 
 func TestDNSZoneDependsOnNetwork(t *testing.T) {
-	network := &Network{Name: fi.PtrTo("test.k8s")}
+	network := &Network{Name: new("test.k8s")}
 	zone := &DNSZone{
-		Name:    fi.PtrTo("test.k8s"),
+		Name:    new("test.k8s"),
 		Network: network,
 	}
 
@@ -52,7 +50,7 @@ func TestDNSZoneDependsOnNetwork(t *testing.T) {
 }
 
 func TestDNSZoneCheckChangesRequiresNetwork(t *testing.T) {
-	expected := &DNSZone{Name: fi.PtrTo("test.k8s")}
+	expected := &DNSZone{Name: new("test.k8s")}
 	if err := expected.CheckChanges(nil, expected, &DNSZone{}); err == nil {
 		t.Fatal("expected DNS zone without a network to be rejected")
 	}

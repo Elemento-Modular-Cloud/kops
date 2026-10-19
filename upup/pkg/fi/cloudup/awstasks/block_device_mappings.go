@@ -124,7 +124,7 @@ func (i *BlockDeviceMapping) ToAutoscaling(deviceName string) *autoscalingtypes.
 			DeleteOnTermination: i.EbsDeleteOnTermination,
 			Encrypted:           i.EbsEncrypted,
 			VolumeSize:          i.EbsVolumeSize,
-			VolumeType:          fi.PtrTo(string(i.EbsVolumeType)),
+			VolumeType:          new(string(i.EbsVolumeType)),
 		}
 		if ec2types.VolumeType(fi.ValueOf(o.Ebs.VolumeType)) == ec2types.VolumeTypeIo1 || ec2types.VolumeType(fi.ValueOf(o.Ebs.VolumeType)) == ec2types.VolumeTypeIo2 {
 			o.Ebs.Iops = i.EbsVolumeIops
@@ -181,7 +181,7 @@ func (i *BlockDeviceMapping) ToLaunchTemplateBootDeviceRequest(deviceName string
 	return o
 }
 
-var _ fi.CloudupHasDependencies = &BlockDeviceMapping{}
+var _ fi.CloudupHasDependencies = (*BlockDeviceMapping)(nil)
 
 // GetDependencies is for future use
 func (i *BlockDeviceMapping) GetDependencies(tasks map[string]fi.CloudupTask) []fi.CloudupTask {

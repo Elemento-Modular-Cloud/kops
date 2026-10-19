@@ -37,14 +37,14 @@ func (b *DHCPModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	networkName := b.ClusterName()
 	network := b.LinkToNetwork()
 	dnsZoneTask := &elementotasks.DNSZone{
-		Name:      fi.PtrTo(b.ClusterName()),
+		Name:      new(b.ClusterName()),
 		Network:   network,
 		Lifecycle: b.Lifecycle,
 	}
 	c.EnsureTask(dnsZoneTask)
 
 	service := &elementotasks.DHCPService{
-		Name:        fi.PtrTo(networkName),
+		Name:        new(networkName),
 		Lifecycle:   b.Lifecycle,
 		Network:     network,
 		DNSZoneTask: dnsZoneTask,
@@ -73,10 +73,10 @@ func (b *DHCPModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			}
 
 			reservation := &elementotasks.DHCPReservation{
-				Name:        fi.PtrTo(serverName),
+				Name:        new(serverName),
 				Lifecycle:   b.Lifecycle,
-				NetworkName: fi.PtrTo(networkName),
-				MACAddress:  fi.PtrTo(macAddress),
+				NetworkName: new(networkName),
+				MACAddress:  new(macAddress),
 				DHCPService: service,
 				DependsOn:   previous,
 			}

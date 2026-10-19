@@ -21,7 +21,7 @@ import (
 	"net"
 	"strconv"
 
-	"github.com/hetznercloud/hcloud-go/hcloud"
+	"github.com/hetznercloud/hcloud-go/v2/hcloud"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner"
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraform"
@@ -32,17 +32,17 @@ type Firewall struct {
 	Name      *string
 	Lifecycle fi.Lifecycle
 
-	ID       *int
+	ID       *int64
 	Selector string
 	Rules    []*FirewallRule
 
 	Labels map[string]string
 }
 
-var _ fi.CompareWithID = &Firewall{}
+var _ fi.CompareWithID = (*Firewall)(nil)
 
 func (v *Firewall) CompareWithID() *string {
-	return fi.PtrTo(strconv.Itoa(fi.ValueOf(v.ID)))
+	return new(strconv.FormatInt(fi.ValueOf(v.ID), 10))
 }
 
 func (v *Firewall) Find(c *fi.CloudupContext) (*Firewall, error) {
@@ -59,8 +59,8 @@ func (v *Firewall) Find(c *fi.CloudupContext) (*Firewall, error) {
 		if firewall.Name == fi.ValueOf(v.Name) {
 			matches := &Firewall{
 				Lifecycle: v.Lifecycle,
-				Name:      fi.PtrTo(firewall.Name),
-				ID:        fi.PtrTo(firewall.ID),
+				Name:      new(firewall.Name),
+				ID:        new(firewall.ID),
 				Labels:    firewall.Labels,
 			}
 			for _, rule := range firewall.Rules {
@@ -201,7 +201,7 @@ type FirewallRule struct {
 	Port      *string
 }
 
-var _ fi.CloudupHasDependencies = &FirewallRule{}
+var _ fi.CloudupHasDependencies = (*FirewallRule)(nil)
 
 func (e *FirewallRule) GetDependencies(tasks map[string]fi.CloudupTask) []fi.CloudupTask {
 	return nil
@@ -231,19 +231,19 @@ func (_ *Firewall) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *
 			Name: e.Name,
 			ApplyTo: []*terraformFirewallApplyTo{
 				{
-					LabelSelector: fi.PtrTo(e.Selector),
+					LabelSelector: new(e.Selector),
 				},
 			},
 			Labels: e.Labels,
 		}
 		for _, rule := range e.Rules {
 			tfr := &terraformFirewallRule{
-				Direction: fi.PtrTo(string(rule.Direction)),
-				Protocol:  fi.PtrTo(string(rule.Protocol)),
+				Direction: new(string(rule.Direction)),
+				Protocol:  new(string(rule.Protocol)),
 				Port:      rule.Port,
 			}
 			for _, ip := range rule.SourceIPs {
-				tfr.SourceIPs = append(tfr.SourceIPs, fi.PtrTo(ip.String()))
+				tfr.SourceIPs = append(tfr.SourceIPs, new(ip.String()))
 			}
 			tf.Rules = append(tf.Rules, tfr)
 		}

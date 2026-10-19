@@ -41,13 +41,22 @@ func (d *deployer) replace() error {
 		return err
 	}
 
+	if d.terraform == nil {
+		// Preview the changes first so the planned resources are logged.
+		if err := d.updateCluster(false); err != nil {
+			return err
+		}
+		if err := d.updateCluster(true); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	args = []string{
 		d.KopsBinaryPath, "update", "cluster", "--yes",
 		"--admin",
 		"--name", d.ClusterName,
-	}
-	if d.terraform != nil {
-		args = append(args, "--target", "terraform", "--out", d.terraform.Dir())
+		"--target", "terraform", "--out", d.terraform.Dir(),
 	}
 
 	klog.Info(strings.Join(args, " "))
@@ -60,10 +69,5 @@ func (d *deployer) replace() error {
 	if err != nil {
 		return err
 	}
-	if d.terraform != nil {
-		if err := d.terraform.InitApply(); err != nil {
-			return err
-		}
-	}
-	return nil
+	return d.terraform.InitApply()
 }

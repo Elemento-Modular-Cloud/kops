@@ -22,6 +22,10 @@ import (
 	"k8s.io/kops/upup/pkg/fi/loader"
 )
 
+const (
+	DefaultSandboxImage = "registry.k8s.io/pause:3.10.1"
+)
+
 // ContainerdOptionsBuilder adds options for containerd to the model
 type ContainerdOptionsBuilder struct {
 	*OptionsContext
@@ -39,26 +43,38 @@ func (b *ContainerdOptionsBuilder) BuildOptions(o *kops.Cluster) error {
 
 	containerd := clusterSpec.Containerd
 
-	// Set version based on Kubernetes version
+	// Set the default version
 	if fi.ValueOf(containerd.Version) == "" {
-		switch {
-		case b.IsKubernetesLT("1.27.2"):
-			containerd.Version = fi.PtrTo("1.6.20")
-			containerd.Runc = &kops.Runc{
-				Version: fi.PtrTo("1.1.5"),
-			}
-		default:
-			containerd.Version = fi.PtrTo("1.7.25")
-			containerd.Runc = &kops.Runc{
-				Version: fi.PtrTo("1.2.4"),
-			}
+		// Do not use containerd 2.3.0-2.3.3: a sandbox-image lookup regression breaks
+		// digest-pinned references (https://github.com/containerd/containerd/issues/13529),
+		// which kops emits by default; fixed in 2.3.4.
+		containerd.Version = new("2.3.6")
+		containerd.Runc = &kops.Runc{
+			Version: new("1.5.1"),
 		}
 	}
-	// Set default log level to INFO
-	containerd.LogLevel = fi.PtrTo("info")
+	// Set the default log level to INFO
+	containerd.LogLevel = new("info")
 
-	if containerd.NvidiaGPU != nil && fi.ValueOf(containerd.NvidiaGPU.Enabled) && containerd.NvidiaGPU.DriverPackage == "" {
-		containerd.NvidiaGPU.DriverPackage = kops.NvidiaDefaultDriverPackage
+	// Set the sandbox image used to scope pod shared resources used by the pod's containers.
+	if fi.ValueOf(containerd.SandboxImage) == "" {
+		containerd.SandboxImage = new(b.AssetBuilder.RemapImage(DefaultSandboxImage))
+	}
+
+	if containerd.NvidiaGPU != nil && fi.ValueOf(containerd.NvidiaGPU.Enabled) {
+		if containerd.NvidiaGPU.DriverPackage == "" {
+			containerd.NvidiaGPU.DriverPackage = kops.NvidiaDefaultDriverPackage
+		}
+
+		if containerd.NvidiaGPU.DevicePluginImage == "" {
+			containerd.NvidiaGPU.DevicePluginImage = kops.NvidiaDevicePluginImage
+		}
+	}
+
+	if containerd.GVisor != nil && fi.ValueOf(containerd.GVisor.Enabled) {
+		if containerd.GVisor.Platform == "" {
+			containerd.GVisor.Platform = kops.GVisorDefaultPlatform
+		}
 	}
 
 	return nil

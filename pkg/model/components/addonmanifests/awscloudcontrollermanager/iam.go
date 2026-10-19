@@ -31,8 +31,13 @@ var _ iam.Subject = &ServiceAccount{}
 // BuildAWSPolicy generates a custom policy for a ServiceAccount IAM role.
 func (r *ServiceAccount) BuildAWSPolicy(b *iam.PolicyBuilder) (*iam.Policy, error) {
 	clusterName := b.Cluster.ObjectMeta.Name
-	p := iam.NewPolicy(clusterName, b.Partition)
-	iam.AddCCMPermissions(p, b.Cluster.Spec.Networking.Kubenet != nil)
+	p := iam.NewPolicy(clusterName, b.Partition, b.Region)
+
+	// Only inject NLBSecurityMode=Managed specific IAM permissions if enabled
+	nlbSecurityGroupMode := b.Cluster.Spec.CloudProvider.AWS.NLBSecurityGroupMode
+	nlbSecurityGroupModeManaged := nlbSecurityGroupMode != nil && *nlbSecurityGroupMode == "Managed"
+
+	iam.AddCCMPermissions(p, b.Cluster.Spec.Networking.Kubenet != nil, nlbSecurityGroupModeManaged)
 	return p, nil
 }
 

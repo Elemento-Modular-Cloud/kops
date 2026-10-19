@@ -27,17 +27,20 @@ package iam
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
 
 	"k8s.io/kops/pkg/apis/kops"
-	"k8s.io/kops/pkg/apis/kops/model"
+	"k8s.io/kops/pkg/truncate"
 	"k8s.io/kops/pkg/util/stringorset"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awstasks"
@@ -50,16 +53,15 @@ const PolicyDefaultVersion = "2012-10-17"
 // Policy Struct is a collection of fields that form a valid AWS policy document
 type Policy struct {
 	clusterName               string
+	region                    string
 	unconditionalAction       sets.Set[string]
 	clusterTaggedAction       sets.Set[string]
 	clusterTaggedCreateAction sets.Set[string]
+	kmsDataPlaneAction        sets.Set[string]
+	kmsAWSResourceGrant       bool
 	Statement                 []*Statement
 	partition                 string
 	Version                   string
-}
-
-func (p *Policy) AddUnconditionalActions(actions ...string) {
-	p.unconditionalAction.Insert(actions...)
 }
 
 func (p *Policy) AddEC2CreateAction(actions, resources []string) {
@@ -106,17 +108,49 @@ func (p *Policy) AddEC2CreateAction(actions, resources []string) {
 	)
 }
 
-// AsJSON converts the policy document to JSON format (parsable by AWS)
+// AsJSON converts the policy document to JSON format (parsable by AWS), or to an empty string
+// if it has no statements, which AWS does not accept. The IAMRolePolicy task reads an empty
+// document as "no inline policy": it skips creating one and deletes one that already exists.
 func (p *Policy) AsJSON() (string, error) {
+	// Build the rendered statement list locally so that AsJSON does not mutate
+	// the receiver and can safely be called more than once.
+	statements := append([]*Statement(nil), p.Statement...)
+	if p.kmsAWSResourceGrant {
+		// kms:GrantIsForAWSResource only matches grants created by an AWS service on the principal's
+		// behalf, so this cannot be used to delegate access to arbitrary keys directly.
+		statements = append(statements, &Statement{
+			Effect:   StatementEffectAllow,
+			Action:   stringorset.String("kms:CreateGrant"),
+			Resource: stringorset.String("*"),
+			Condition: Condition{
+				"Bool": map[string]string{
+					"kms:GrantIsForAWSResource": "true",
+				},
+			},
+		})
+	}
+	if len(p.kmsDataPlaneAction) > 0 {
+		services := kmsViaServices(p.region)
+		statements = append(statements, &Statement{
+			Effect:   StatementEffectAllow,
+			Action:   stringorset.Of(sets.List(p.kmsDataPlaneAction)...),
+			Resource: stringorset.String("*"),
+			Condition: Condition{
+				"StringLike": map[string][]string{
+					"kms:ViaService": services,
+				},
+			},
+		})
+	}
 	if len(p.unconditionalAction) > 0 {
-		p.Statement = append(p.Statement, &Statement{
+		statements = append(statements, &Statement{
 			Effect:   StatementEffectAllow,
 			Action:   stringorset.Of(sets.List(p.unconditionalAction)...),
 			Resource: stringorset.String("*"),
 		})
 	}
 	if len(p.clusterTaggedAction) > 0 {
-		p.Statement = append(p.Statement, &Statement{
+		statements = append(statements, &Statement{
 			Effect:   StatementEffectAllow,
 			Action:   stringorset.Of(sets.List(p.clusterTaggedAction)...),
 			Resource: stringorset.String("*"),
@@ -128,7 +162,7 @@ func (p *Policy) AsJSON() (string, error) {
 		})
 	}
 	if len(p.clusterTaggedCreateAction) > 0 {
-		p.Statement = append(p.Statement, &Statement{
+		statements = append(statements, &Statement{
 			Effect:   StatementEffectAllow,
 			Action:   stringorset.Of(sets.List(p.clusterTaggedCreateAction)...),
 			Resource: stringorset.String("*"),
@@ -141,18 +175,18 @@ func (p *Policy) AsJSON() (string, error) {
 		// ec2:CreateSecurityGroup needs some special care as it also interacts with vpc, which do not support RequestTag.
 		// We also do not require VPCs to be tagged, so we are not sending any conditions, allowing SGs to be created in any VPC.
 		if p.clusterTaggedCreateAction.Has("ec2:CreateSecurityGroup") {
-			p.Statement = append(p.Statement, &Statement{
+			statements = append(statements, &Statement{
 				Effect:   StatementEffectAllow,
 				Action:   stringorset.Of("ec2:CreateSecurityGroup"),
 				Resource: stringorset.String(fmt.Sprintf("arn:%s:ec2:*:*:vpc/*", p.partition)),
 			})
 		}
 	}
-	if len(p.Statement) == 0 {
-		return "", fmt.Errorf("policy contains no statement")
+	if len(statements) == 0 {
+		return "", nil
 	}
 
-	j, err := json.MarshalIndent(p, "", "  ")
+	j, err := json.MarshalIndent(&Policy{Statement: statements, Version: p.Version}, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("error marshaling policy to JSON: %v", err)
 	}
@@ -305,6 +339,7 @@ func (l *Statement) Equal(r *Statement) bool {
 // AWS IAM policy document for a given instance group role.
 type PolicyBuilder struct {
 	Cluster                               *kops.Cluster
+	AllInstanceGroups                     []*kops.InstanceGroup
 	HostedZoneID                          string
 	KMSKeys                               []string
 	Region                                string
@@ -334,13 +369,15 @@ func (b *PolicyBuilder) BuildAWSPolicy() (*Policy, error) {
 	return p, nil
 }
 
-func NewPolicy(clusterName, partition string) *Policy {
+func NewPolicy(clusterName, partition, region string) *Policy {
 	p := &Policy{
 		Version:                   PolicyDefaultVersion,
 		clusterName:               clusterName,
+		region:                    region,
 		unconditionalAction:       sets.New[string](),
 		clusterTaggedAction:       sets.New[string](),
 		clusterTaggedCreateAction: sets.New[string](),
+		kmsDataPlaneAction:        sets.New[string](),
 		partition:                 partition,
 	}
 	return p
@@ -348,7 +385,7 @@ func NewPolicy(clusterName, partition string) *Policy {
 
 // BuildAWSPolicy generates a custom policy for a Kubernetes master.
 func (r *NodeRoleAPIServer) BuildAWSPolicy(b *PolicyBuilder) (*Policy, error) {
-	p := NewPolicy(b.Cluster.GetName(), b.Partition)
+	p := NewPolicy(b.Cluster.GetName(), b.Partition, b.Region)
 
 	b.addNodeupPermissions(p, r.warmPool)
 
@@ -356,17 +393,24 @@ func (r *NodeRoleAPIServer) BuildAWSPolicy(b *PolicyBuilder) (*Policy, error) {
 		return nil, fmt.Errorf("failed to generate AWS IAM S3 access statements: %v", err)
 	}
 
-	addKMSIAMPolicies(p)
+	// The API server role may host a kms-plugin sidecar wired to the instance role
+	// when EncryptionConfig is enabled; bypass kms:ViaService so that direct KMS
+	// calls from kube-apiserver are not denied.
+	addKMSIAMPolicies(p, fi.ValueOf(b.Cluster.Spec.EncryptionConfig))
 
 	if b.Cluster.Spec.IAM != nil && b.Cluster.Spec.IAM.AllowContainerRegistry {
 		addECRPermissions(p)
+	}
+
+	if b.Cluster.Spec.Containerd != nil && b.Cluster.Spec.Containerd.UseECRCredentialsForMirrors {
+		addECRPullThroughPermissions(p)
 	}
 
 	if b.Cluster.Spec.Networking.AmazonVPC != nil {
 		addAmazonVPCCNIPermissions(p)
 	}
 
-	if b.Cluster.Spec.Networking.Cilium != nil && b.Cluster.Spec.Networking.Cilium.IPAM == kops.CiliumIpamEni {
+	if b.Cluster.Spec.IsCiliumENIIPAM() {
 		addCiliumEniPermissions(p)
 	}
 
@@ -385,9 +429,10 @@ func (r *NodeRoleAPIServer) BuildAWSPolicy(b *PolicyBuilder) (*Policy, error) {
 func (r *NodeRoleMaster) BuildAWSPolicy(b *PolicyBuilder) (*Policy, error) {
 	clusterName := b.Cluster.GetName()
 
-	p := NewPolicy(clusterName, b.Partition)
+	p := NewPolicy(clusterName, b.Partition, b.Region)
 
 	addEtcdManagerPermissions(p)
+	addKopsControllerPermissions(p)
 	b.addNodeupPermissions(p, false)
 
 	if b.Cluster.Spec.IsKopsControllerIPAM() {
@@ -398,17 +443,24 @@ func (r *NodeRoleMaster) BuildAWSPolicy(b *PolicyBuilder) (*Policy, error) {
 		return nil, fmt.Errorf("failed to generate AWS IAM S3 access statements: %v", err)
 	}
 
-	addKMSIAMPolicies(p)
-
-	// Protokube needs dns-controller permissions in instance role even if UseServiceAccountExternalPermissions.
-	AddDNSControllerPermissions(b, p)
+	// The combined master role hosts kube-apiserver, so a user-supplied kms-plugin
+	// for EncryptionConfig will call KMS directly from this role. Bypass ViaService
+	// in that case.
+	addKMSIAMPolicies(p, fi.ValueOf(b.Cluster.Spec.EncryptionConfig))
 
 	if !b.UseServiceAccountExternalPermisssions {
+		// dns-controller and external-dns use dedicated service account roles
+		AddDNSControllerPermissions(b, p)
+
 		esc := b.Cluster.Spec.SnapshotController != nil &&
 			fi.ValueOf(b.Cluster.Spec.SnapshotController.Enabled)
-		AddAWSEBSCSIDriverPermissions(p, esc)
+		AddAWSEBSCSIDriverPermissions(b, p, esc)
 
-		AddCCMPermissions(p, b.Cluster.Spec.Networking.Kubenet != nil)
+		// Only inject NLBSecurityMode=Managed specific IAM permissions if enabled
+		nlbSecurityGroupMode := b.Cluster.Spec.CloudProvider.AWS.NLBSecurityGroupMode
+		nlbSecurityGroupModeManaged := nlbSecurityGroupMode != nil && *nlbSecurityGroupMode == "Managed"
+
+		AddCCMPermissions(p, b.Cluster.Spec.Networking.Kubenet != nil, nlbSecurityGroupModeManaged)
 
 		if c := b.Cluster.Spec.CloudProvider.AWS.LoadBalancerController; c != nil && fi.ValueOf(b.Cluster.Spec.CloudProvider.AWS.LoadBalancerController.Enabled) {
 			AddAWSLoadbalancerControllerPermissions(p, c.EnableWAF, c.EnableWAFv2, c.EnableShield)
@@ -430,11 +482,15 @@ func (r *NodeRoleMaster) BuildAWSPolicy(b *PolicyBuilder) (*Policy, error) {
 		addECRPermissions(p)
 	}
 
+	if b.Cluster.Spec.Containerd != nil && b.Cluster.Spec.Containerd.UseECRCredentialsForMirrors {
+		addECRPullThroughPermissions(p)
+	}
+
 	if b.Cluster.Spec.Networking.AmazonVPC != nil {
 		addAmazonVPCCNIPermissions(p)
 	}
 
-	if b.Cluster.Spec.Networking.Cilium != nil && b.Cluster.Spec.Networking.Cilium.IPAM == kops.CiliumIpamEni {
+	if b.Cluster.Spec.IsCiliumENIIPAM() {
 		addCiliumEniPermissions(p)
 	}
 
@@ -451,18 +507,16 @@ func (r *NodeRoleMaster) BuildAWSPolicy(b *PolicyBuilder) (*Policy, error) {
 
 // BuildAWSPolicy generates a custom policy for a Kubernetes node.
 func (r *NodeRoleNode) BuildAWSPolicy(b *PolicyBuilder) (*Policy, error) {
-	p := NewPolicy(b.Cluster.GetName(), b.Partition)
+	p := NewPolicy(b.Cluster.GetName(), b.Partition, b.Region)
 
 	b.addNodeupPermissions(p, r.enableLifecycleHookPermissions)
 
-	if !b.Cluster.UsesNoneDNS() {
-		if err := b.AddS3Permissions(p); err != nil {
-			return nil, fmt.Errorf("failed to generate AWS IAM S3 access statements: %v", err)
-		}
-	}
-
 	if b.Cluster.Spec.IAM != nil && b.Cluster.Spec.IAM.AllowContainerRegistry {
 		addECRPermissions(p)
+	}
+
+	if b.Cluster.Spec.Containerd != nil && b.Cluster.Spec.Containerd.UseECRCredentialsForMirrors {
+		addECRPullThroughPermissions(p)
 	}
 
 	if b.Cluster.Spec.Networking.AmazonVPC != nil {
@@ -486,12 +540,46 @@ func (r *NodeRoleNode) BuildAWSPolicy(b *PolicyBuilder) (*Policy, error) {
 
 // BuildAWSPolicy generates a custom policy for a bastion host.
 func (r *NodeRoleBastion) BuildAWSPolicy(b *PolicyBuilder) (*Policy, error) {
-	p := NewPolicy(b.Cluster.GetName(), b.Partition)
+	// Bastion hosts don't require any permissions.
+	return NewPolicy(b.Cluster.GetName(), b.Partition, b.Region), nil
+}
 
-	// Bastion hosts currently don't require any specific permissions.
-	// A trivial permission is granted, because empty policies are not allowed.
-	p.unconditionalAction.Insert("ec2:DescribeRegions")
+// BuildAWSPolicy generates a custom policy for an etcd node.
+func (r *NodeRoleEtcd) BuildAWSPolicy(b *PolicyBuilder) (*Policy, error) {
+	p := NewPolicy(b.Cluster.GetName(), b.Partition, b.Region)
+	b.addNodeupPermissions(p, false)
+	if err := b.AddS3Permissions(p); err != nil {
+		return nil, fmt.Errorf("failed to generate AWS IAM S3 access statements: %v", err)
+	}
+	if b.Cluster.Spec.IAM != nil && b.Cluster.Spec.IAM.AllowContainerRegistry {
+		addECRPermissions(p)
+	}
+	return p, nil
+}
 
+// BuildAWSPolicy generates a custom policy for a scheduler node.
+func (r *NodeRoleScheduler) BuildAWSPolicy(b *PolicyBuilder) (*Policy, error) {
+	p := NewPolicy(b.Cluster.GetName(), b.Partition, b.Region)
+	b.addNodeupPermissions(p, false)
+	if err := b.AddS3Permissions(p); err != nil {
+		return nil, fmt.Errorf("failed to generate AWS IAM S3 access statements: %v", err)
+	}
+	if b.Cluster.Spec.IAM != nil && b.Cluster.Spec.IAM.AllowContainerRegistry {
+		addECRPermissions(p)
+	}
+	return p, nil
+}
+
+// BuildAWSPolicy generates a custom policy for a kube-controller-manager node.
+func (r *NodeRoleKubeControllerManager) BuildAWSPolicy(b *PolicyBuilder) (*Policy, error) {
+	p := NewPolicy(b.Cluster.GetName(), b.Partition, b.Region)
+	b.addNodeupPermissions(p, false)
+	if err := b.AddS3Permissions(p); err != nil {
+		return nil, fmt.Errorf("failed to generate AWS IAM S3 access statements: %v", err)
+	}
+	if b.Cluster.Spec.IAM != nil && b.Cluster.Spec.IAM.AllowContainerRegistry {
+		addECRPermissions(p)
+	}
 	return p, nil
 }
 
@@ -666,7 +754,7 @@ func WriteableVFSPaths(cluster *kops.Cluster, role Subject) ([]vfs.Path, error) 
 
 	// etcd-manager needs write permissions to the backup store
 	switch role.(type) {
-	case *NodeRoleMaster:
+	case *NodeRoleMaster, *NodeRoleEtcd, *NodeRoleAPIServer:
 		backupStores := sets.NewString()
 		for _, c := range cluster.Spec.EtcdClusters {
 			if c.Backups == nil || c.Backups.BackupStore == "" || backupStores.Has(c.Backups.BackupStore) {
@@ -693,17 +781,8 @@ func ReadableStatePaths(cluster *kops.Cluster, role Subject) ([]string, error) {
 	var paths []string
 
 	switch role.(type) {
-	case *NodeRoleMaster, *NodeRoleAPIServer:
+	case *NodeRoleMaster, *NodeRoleAPIServer, *NodeRoleEtcd, *NodeRoleKubeControllerManager, *NodeRoleScheduler:
 		paths = append(paths, "/*")
-
-	case *NodeRoleNode:
-		// Give access to keys for client certificates as needed.
-		if !model.UseKopsControllerForNodeConfig(cluster) {
-			paths = append(paths,
-				"/cluster-completed.spec",
-				"/igconfig/node/*",
-			)
-		}
 	}
 	return paths, nil
 }
@@ -736,6 +815,14 @@ func (b *PolicyResource) Open() (io.Reader, error) {
 
 	if b.DNSZone != nil {
 		hostedZoneID := fi.ValueOf(b.DNSZone.ZoneID)
+		if hostedZoneID == "" {
+			// ZoneID is normally populated by DNSZone.Find before this runs. In dry-run modes that
+			// skip Find (e.g. `kops get assets`), it may still be empty; fall back to the DNS name
+			// so the policy renders. The resulting ARN is not a valid Route53 ARN, but the policy
+			// is not applied in that mode.
+			hostedZoneID = fi.ValueOf(b.DNSZone.DNSName)
+			klog.V(4).Infof("Falling back to DNS name %q for IAM policy because ZoneID is empty", hostedZoneID)
+		}
 		if hostedZoneID == "" {
 			// Dependency analysis failure?
 			return nil, fmt.Errorf("DNS ZoneID not set")
@@ -776,6 +863,17 @@ func addECRPermissions(p *Policy) {
 	)
 }
 
+func addECRPullThroughPermissions(p *Policy) {
+	// Permissions needed for ECR pull-through cache functionality
+	// These permissions are only needed when UseECRCredentialsForMirrors is enabled
+	p.unconditionalAction.Insert(
+		"ecr:ReplicateImage",
+		"ecr:BatchImportUpstreamImage",
+		"ecr:CreateRepository",
+		"ecr:TagResource",
+	)
+}
+
 func addCalicoSrcDstCheckPermissions(p *Policy) {
 	p.unconditionalAction.Insert(
 		"ec2:DescribeInstances",
@@ -784,26 +882,28 @@ func addCalicoSrcDstCheckPermissions(p *Policy) {
 }
 
 func addKubeRouterSrcDstCheckPermissions(p *Policy) {
-	p.unconditionalAction.Insert(
+	p.clusterTaggedAction.Insert(
 		"ec2:ModifyInstanceAttribute",
 	)
 }
 
 func addKindnetSrcDstCheckPermissions(p *Policy) {
-	p.unconditionalAction.Insert(
+	p.clusterTaggedAction.Insert(
 		"ec2:ModifyInstanceAttribute",
 	)
 }
 
 func (b *PolicyBuilder) addNodeupPermissions(p *Policy, enableHookSupport bool) {
-	addCertIAMPolicies(p)
-	addKMSGenerateRandomPolicies(p)
 	addASLifecyclePolicies(p, enableHookSupport)
-	p.unconditionalAction.Insert(
-		"ec2:DescribeRegions",
-		"ec2:DescribeInstances", // aws.go
-		"ec2:DescribeInstanceTypes",
-	)
+
+	// ec2:DescribeInstanceTypes is called on the instance itself, by nodeup to detect Nvidia GPU
+	// support (upup/pkg/fi/nodeup/command.go) and by the kubelet builder to compute MaxPods for ENI
+	// based IPAM (nodeup/pkg/model/kubelet.go), whose condition is mirrored here.
+	if b.nvidiaGPUEnabled() || b.Cluster.Spec.Networking.AmazonVPC != nil || b.Cluster.Spec.IsCiliumENIIPAM() {
+		p.unconditionalAction.Insert(
+			"ec2:DescribeInstanceTypes",
+		)
+	}
 
 	if b.Cluster.Spec.IsKopsControllerIPAM() {
 		p.unconditionalAction.Insert(
@@ -812,15 +912,62 @@ func (b *PolicyBuilder) addNodeupPermissions(p *Policy, enableHookSupport bool) 
 	}
 }
 
+// nvidiaGPUEnabled returns true if Nvidia GPU support is enabled for the cluster or for any
+// instance group with the role being built. An instance group level disable is ignored, because
+// all instance groups with the same role share one IAM role.
+func (b *PolicyBuilder) nvidiaGPUEnabled() bool {
+	if hasNvidiaGPU(b.Cluster.Spec.Containerd) {
+		return true
+	}
+
+	var igRole kops.InstanceGroupRole
+	switch b.Role.(type) {
+	case *NodeRoleMaster:
+		igRole = kops.InstanceGroupRoleControlPlane
+	case *NodeRoleAPIServer:
+		igRole = kops.InstanceGroupRoleAPIServer
+	case *NodeRoleNode:
+		igRole = kops.InstanceGroupRoleNode
+	default:
+		return false
+	}
+
+	for _, ig := range b.AllInstanceGroups {
+		if ig.Spec.Role == igRole && hasNvidiaGPU(ig.Spec.Containerd) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func hasNvidiaGPU(c *kops.ContainerdConfig) bool {
+	return c != nil && c.NvidiaGPU != nil && fi.ValueOf(c.NvidiaGPU.Enabled)
+}
+
+// addKopsControllerPermissions adds the permissions used by kops-controller: node verification
+// (pkg/bootstrap/awsbootstrap/verifier.go) and node identification for labels
+// (pkg/nodeidentity/aws/identify.go) both call ec2:DescribeInstances. etcd-manager calls it too,
+// but kops-controller needs it on its own.
+func addKopsControllerPermissions(p *Policy) {
+	p.unconditionalAction.Insert(
+		"ec2:DescribeInstances",
+	)
+}
+
 func addKopsControllerIPAMPermissions(p *Policy) {
 	p.unconditionalAction.Insert(
 		"ec2:DescribeNetworkInterfaces",
 	)
 }
 
+// addEtcdManagerPermissions adds the permissions used by etcd-manager to find and attach the etcd
+// volumes. It does not need ec2:DescribeRegions, because it reads the region from the instance
+// metadata service.
 func addEtcdManagerPermissions(p *Policy) {
 	p.unconditionalAction.Insert(
-		"ec2:DescribeVolumes", // aws.go
+		"ec2:DescribeInstances",
+		"ec2:DescribeVolumes",
 	)
 
 	p.Statement = append(p.Statement,
@@ -840,7 +987,7 @@ func addEtcdManagerPermissions(p *Policy) {
 	)
 }
 
-func AddCCMPermissions(p *Policy, cloudRoutes bool) {
+func AddCCMPermissions(p *Policy, cloudRoutes bool, nlbSecurityGroupModeManaged bool) {
 	p.unconditionalAction.Insert(
 		"autoscaling:DescribeAutoScalingGroups",
 		"autoscaling:DescribeTags",
@@ -851,11 +998,13 @@ func AddCCMPermissions(p *Policy, cloudRoutes bool) {
 		"ec2:DescribeSecurityGroups",
 		"ec2:DescribeSubnets",
 		"ec2:DescribeVpcs",
+		"ec2:DescribeInstanceTopology",
 		"elasticloadbalancing:DescribeLoadBalancers",
 		"elasticloadbalancing:DescribeLoadBalancerAttributes",
 		"elasticloadbalancing:DescribeListeners",
 		"elasticloadbalancing:DescribeLoadBalancerPolicies",
 		"elasticloadbalancing:DescribeTargetGroups",
+		"elasticloadbalancing:DescribeTargetGroupAttributes",
 		"elasticloadbalancing:DescribeTargetHealth",
 		"iam:CreateServiceLinkedRole",
 		"kms:DescribeKey",
@@ -883,10 +1032,17 @@ func AddCCMPermissions(p *Policy, cloudRoutes bool) {
 		"elasticloadbalancing:DeleteTargetGroup",
 		"elasticloadbalancing:ModifyListener",
 		"elasticloadbalancing:ModifyTargetGroup",
+		"elasticloadbalancing:ModifyTargetGroupAttributes",
 		"elasticloadbalancing:RegisterTargets",
 		"elasticloadbalancing:DeregisterTargets",
 		"elasticloadbalancing:SetLoadBalancerPoliciesOfListener",
 	)
+
+	if nlbSecurityGroupModeManaged {
+		p.clusterTaggedAction.Insert(
+			"elasticloadbalancing:SetSecurityGroups",
+		)
+	}
 
 	p.clusterTaggedCreateAction.Insert(
 		"elasticloadbalancing:CreateLoadBalancer",
@@ -928,8 +1084,11 @@ func AddAWSLoadbalancerControllerPermissions(p *Policy, enableWAF, enableWAFv2, 
 		"ec2:DescribeVpcPeeringConnections",
 		"ec2:DescribeVpcs",
 		"ec2:DescribeAccountAttributes",
+		"ec2:GetSecurityGroupsForVpc",
 
+		"elasticloadbalancing:DescribeCapacityReservation",
 		"elasticloadbalancing:DescribeListeners",
+		"elasticloadbalancing:DescribeListenerAttributes",
 		"elasticloadbalancing:DescribeListenerCertificates",
 		"elasticloadbalancing:DescribeLoadBalancers",
 		"elasticloadbalancing:DescribeLoadBalancerAttributes",
@@ -938,6 +1097,7 @@ func AddAWSLoadbalancerControllerPermissions(p *Policy, enableWAF, enableWAFv2, 
 		"elasticloadbalancing:DescribeTargetGroups",
 		"elasticloadbalancing:DescribeTargetGroupAttributes",
 		"elasticloadbalancing:DescribeTargetHealth",
+		"elasticloadbalancing:DescribeTrustStores",
 	)
 	if enableWAF {
 		p.unconditionalAction.Insert(
@@ -979,7 +1139,9 @@ func AddAWSLoadbalancerControllerPermissions(p *Policy, enableWAF, enableWAFv2, 
 		"elasticloadbalancing:DeleteRule",
 		"elasticloadbalancing:DeleteTargetGroup",
 		"elasticloadbalancing:DeregisterTargets",
+		"elasticloadbalancing:ModifyCapacityReservation",
 		"elasticloadbalancing:ModifyListener",
+		"elasticloadbalancing:ModifyListenerAttributes",
 		"elasticloadbalancing:ModifyLoadBalancerAttributes",
 		"elasticloadbalancing:ModifyRule",
 		"elasticloadbalancing:ModifyTargetGroup",
@@ -996,6 +1158,9 @@ func AddAWSLoadbalancerControllerPermissions(p *Policy, enableWAF, enableWAFv2, 
 		"elasticloadbalancing:CreateLoadBalancer",
 		"elasticloadbalancing:CreateRule",
 		"elasticloadbalancing:CreateTargetGroup",
+	)
+	p.unconditionalAction.Insert(
+		"elasticloadbalancing:SetRulePriorities",
 	)
 	p.AddEC2CreateAction(
 		[]string{
@@ -1018,7 +1183,6 @@ func AddClusterAutoscalerPermissions(p *Policy, useStaticInstanceList bool) {
 		"autoscaling:DescribeLaunchConfigurations",
 		"autoscaling:DescribeScalingActivities",
 		"ec2:DescribeImages",
-		"ec2:DescribeInstanceTypes",
 		"ec2:DescribeLaunchTemplateVersions",
 		"ec2:GetInstanceTypesFromInstanceRequirements",
 	)
@@ -1029,33 +1193,234 @@ func AddClusterAutoscalerPermissions(p *Policy, useStaticInstanceList bool) {
 	}
 }
 
+// AddKarpenterPermissions adds the permissions needed by the Karpenter controller.
+// The mutating actions are scoped like in the upstream reference policy:
+// https://karpenter.sh/v1.6/getting-started/migrating-from-cas/#create-iam-roles
+// with the KubernetesCluster tag taking the place of the upstream cluster ownership tag, as it is
+// the tag kOps applies to the resources that Karpenter manages. The comments reference the Sids
+// of the corresponding upstream statements. Unlike upstream, no instance profile management
+// permissions are granted: kOps supplies the instance profile through the EC2NodeClass spec, so
+// Karpenter never creates or mutates instance profiles.
+// useCustomInstanceProfiles indicates that instance groups use custom IAM instance profiles,
+// which contain roles with names that kOps cannot predict.
+// useCustomerManagedKeys indicates that instance groups encrypt their root volume with a
+// customer managed KMS key, which Karpenter has to be authorized to use.
+func AddKarpenterPermissions(p *Policy, useCustomInstanceProfiles bool, useCustomerManagedKeys bool) error {
+	ec2Service, err := IAMServiceEC2(p.region)
+	if err != nil {
+		return err
+	}
+
+	// Launching an instance whose root volume is encrypted with a customer managed key requires the
+	// launching principal to be authorized on that key; EC2 makes the KMS calls on Karpenter's
+	// behalf. The key policy also has to allow this role; kOps does not manage the key policy.
+	if useCustomerManagedKeys {
+		addKMSIAMPolicies(p, false)
+	}
+
+	// AllowRegionalReadActions, AllowSSMReadActions, AllowPricingReadActions and
+	// AllowInstanceProfileReadActions; ssm:GetParameter is not limited to AWS-owned parameters,
+	// as kOps also supports user-owned SSM parameters as instance group images.
+	p.unconditionalAction.Insert(
+		"ec2:DescribeCapacityReservations",
+		"ec2:DescribeImages",
+		"ec2:DescribeInstanceStatus",
+		"ec2:DescribeInstanceTypeOfferings",
+		"ec2:DescribeInstanceTypes",
+		"ec2:DescribeInstances",
+		"ec2:DescribeLaunchTemplates",
+		"ec2:DescribePlacementGroups",
+		"ec2:DescribeSecurityGroups",
+		"ec2:DescribeSpotPriceHistory",
+		"ec2:DescribeSubnets",
+		"iam:GetInstanceProfile",
+		"iam:ListInstanceProfiles",
+		"pricing:GetProducts",
+		"ssm:GetParameter",
+	)
+
+	instanceARN := fmt.Sprintf("arn:%s:ec2:*:*:instance/*", p.partition)
+	launchTemplateARN := fmt.Sprintf("arn:%s:ec2:*:*:launch-template/*", p.partition)
+
+	// The EC2 resources that Karpenter creates and tags when launching instances.
+	taggableResources := []string{
+		fmt.Sprintf("arn:%s:ec2:*:*:fleet/*", p.partition),
+		instanceARN,
+		launchTemplateARN,
+		fmt.Sprintf("arn:%s:ec2:*:*:network-interface/*", p.partition),
+		fmt.Sprintf("arn:%s:ec2:*:*:spot-instances-request/*", p.partition),
+		fmt.Sprintf("arn:%s:ec2:*:*:volume/*", p.partition),
+	}
+
+	// The resources that Karpenter created for this cluster carry both the cluster tag and its
+	// own nodepool tag.
+	karpenterOwnedCondition := Condition{
+		"StringEquals": map[string]string{
+			"aws:ResourceTag/KubernetesCluster": p.clusterName,
+		},
+		"StringLike": map[string]string{
+			"aws:ResourceTag/karpenter.sh/nodepool": "*",
+		},
+	}
+
+	// Karpenter only manages worker node instance groups, which use the worker node role,
+	// named as in KopsModelContext.IAMName.
+	nodeRole := truncate.TruncateString("nodes."+p.clusterName, truncate.TruncateStringOptions{MaxLength: MaxLengthIAMRoleName, AlwaysAddHash: false})
+	passRoleResource := fmt.Sprintf("arn:%s:iam::*:role/%s", p.partition, nodeRole)
+	if useCustomInstanceProfiles {
+		passRoleResource = fmt.Sprintf("arn:%s:iam::*:role/*", p.partition)
+	}
+
+	p.Statement = append(p.Statement,
+		// AllowScopedEC2InstanceAccessActions: RunInstances and CreateFleet also reference
+		// resources that do not receive tags in the request: the AMI, its snapshots and the
+		// subnets, security groups and capacity reservations to launch into.
+		&Statement{
+			Effect: StatementEffectAllow,
+			Action: stringorset.Of(
+				"ec2:CreateFleet",
+				"ec2:RunInstances",
+			),
+			Resource: stringorset.Set([]string{
+				fmt.Sprintf("arn:%s:ec2:*:*:capacity-reservation/*", p.partition),
+				fmt.Sprintf("arn:%s:ec2:*::image/*", p.partition),
+				fmt.Sprintf("arn:%s:ec2:*::snapshot/*", p.partition),
+				fmt.Sprintf("arn:%s:ec2:*:*:security-group/*", p.partition),
+				fmt.Sprintf("arn:%s:ec2:*:*:subnet/*", p.partition),
+			}),
+		},
+		// AllowScopedEC2LaunchTemplateAccessActions: launching from an existing launch template
+		// is only allowed for launch templates that Karpenter created for this cluster, as the
+		// launch template itself is not tagged by the request.
+		&Statement{
+			Effect: StatementEffectAllow,
+			Action: stringorset.Of(
+				"ec2:CreateFleet",
+				"ec2:RunInstances",
+			),
+			Resource:  stringorset.Set([]string{launchTemplateARN}),
+			Condition: karpenterOwnedCondition,
+		},
+		// AllowScopedEC2InstanceActionsWithTags: launching instances is only allowed when the
+		// request tags the created resources with the cluster tag and the karpenter.sh/nodepool
+		// tag; Karpenter tags everything it creates with the EC2NodeClass tags, which include
+		// the cluster tag, and with its own nodepool tag.
+		&Statement{
+			Effect: StatementEffectAllow,
+			Action: stringorset.Of(
+				"ec2:CreateFleet",
+				"ec2:CreateLaunchTemplate",
+				"ec2:RunInstances",
+			),
+			Resource: stringorset.Set(taggableResources),
+			Condition: Condition{
+				"StringEquals": map[string]string{
+					"aws:RequestTag/KubernetesCluster": p.clusterName,
+				},
+				"StringLike": map[string]string{
+					"aws:RequestTag/karpenter.sh/nodepool": "*",
+				},
+			},
+		},
+		// AllowScopedResourceCreationTagging: tagging the created resources as part of the
+		// create actions above.
+		&Statement{
+			Effect:   StatementEffectAllow,
+			Action:   stringorset.String("ec2:CreateTags"),
+			Resource: stringorset.Set(taggableResources),
+			Condition: Condition{
+				"StringEquals": map[string]interface{}{
+					"aws:RequestTag/KubernetesCluster": p.clusterName,
+					"ec2:CreateAction": []string{
+						"CreateFleet",
+						"CreateLaunchTemplate",
+						"RunInstances",
+					},
+				},
+				"StringLike": map[string]string{
+					"aws:RequestTag/karpenter.sh/nodepool": "*",
+				},
+			},
+		},
+		// AllowScopedResourceTagging: re-tagging the resources that Karpenter manages, without
+		// changing the cluster tag.
+		&Statement{
+			Effect: StatementEffectAllow,
+			Action: stringorset.Of(
+				"ec2:CreateTags",
+				"ec2:DeleteTags",
+			),
+			Resource: stringorset.Set(taggableResources),
+			Condition: Condition{
+				"Null": map[string]string{
+					"aws:RequestTag/KubernetesCluster": "true",
+				},
+				"StringEquals": map[string]string{
+					"aws:ResourceTag/KubernetesCluster": p.clusterName,
+				},
+				"StringLike": map[string]string{
+					"aws:ResourceTag/karpenter.sh/nodepool": "*",
+				},
+			},
+		},
+		// AllowScopedDeletion: deleting is only allowed for the instances and launch templates
+		// that Karpenter created for this cluster.
+		&Statement{
+			Effect: StatementEffectAllow,
+			Action: stringorset.Of(
+				"ec2:DeleteLaunchTemplate",
+				"ec2:TerminateInstances",
+			),
+			Resource:  stringorset.Set([]string{instanceARN, launchTemplateARN}),
+			Condition: karpenterOwnedCondition,
+		},
+		// AllowPassingInstanceRole: Karpenter may only pass the node role, and only to EC2.
+		// Instance groups with custom instance profiles contain roles with names that kOps
+		// cannot predict, so any role may be passed when they are used.
+		&Statement{
+			Effect:   StatementEffectAllow,
+			Action:   stringorset.String("iam:PassRole"),
+			Resource: stringorset.String(passRoleResource),
+			Condition: Condition{
+				"StringEquals": map[string]string{
+					"iam:PassedToService": ec2Service,
+				},
+			},
+		},
+	)
+
+	return nil
+}
+
 // AddAWSEBSCSIDriverPermissions appens policy statements that the AWS EBS CSI Driver needs to operate.
-func AddAWSEBSCSIDriverPermissions(p *Policy, appendSnapshotPermissions bool) {
-	addKMSIAMPolicies(p)
+func AddAWSEBSCSIDriverPermissions(b *PolicyBuilder, p *Policy, appendSnapshotPermissions bool) {
+	// EBS CSI's data-plane KMS calls flow through EC2, so kms:ViaService applies.
+	addKMSIAMPolicies(p, false)
 
 	if appendSnapshotPermissions {
-		addSnapshotPersmissions(p)
+		addSnapshotPermissions(b, p)
 	}
 
 	p.unconditionalAction.Insert(
-		"ec2:DescribeAccountAttributes",    // aws.go
+		"ec2:DescribeAvailabilityZones",    // aws.go
 		"ec2:DescribeInstances",            // aws.go
+		"ec2:DescribeInstanceTypes",        // aws.go
+		"ec2:DescribeTags",                 // aws.go
 		"ec2:DescribeVolumes",              // aws.go
 		"ec2:DescribeVolumesModifications", // aws.go
-		"ec2:DescribeTags",                 // aws.go
+		"ec2:DescribeVolumeStatus",         // aws.go
 	)
 	p.clusterTaggedAction.Insert(
-		"ec2:ModifyVolume",            // aws.go
-		"ec2:ModifyInstanceAttribute", // aws.go
-		"ec2:AttachVolume",            // aws.go
-		"ec2:DeleteVolume",            // aws.go
-		"ec2:DetachVolume",            // aws.go
+		"ec2:AttachVolume", // aws.go
+		"ec2:DeleteVolume", // aws.go
+		"ec2:DetachVolume", // aws.go
+		"ec2:ModifyVolume", // aws.go
 	)
 
 	p.AddEC2CreateAction(
 		[]string{
+			"CopyVolumes",
 			"CreateVolume",
-			"CreateSnapshot",
 		},
 		[]string{
 			"volume",
@@ -1064,7 +1429,7 @@ func AddAWSEBSCSIDriverPermissions(p *Policy, appendSnapshotPermissions bool) {
 	)
 }
 
-func addSnapshotPersmissions(p *Policy) {
+func addSnapshotPermissions(b *PolicyBuilder, p *Policy) {
 	p.unconditionalAction.Insert(
 		"ec2:CreateSnapshot",
 		"ec2:DescribeAvailabilityZones",
@@ -1072,6 +1437,31 @@ func addSnapshotPersmissions(p *Policy) {
 	)
 	p.clusterTaggedAction.Insert(
 		"ec2:DeleteSnapshot",
+		"ec2:EnableFastSnapshotRestores",
+	)
+
+	p.AddEC2CreateAction(
+		[]string{
+			"CreateSnapshot",
+		},
+		[]string{
+			"volume",
+			"snapshot",
+		},
+	)
+	p.Statement = append(p.Statement,
+		&Statement{
+			Effect: StatementEffectAllow,
+			Action: stringorset.Of(
+				"ec2:CreateVolume",
+			),
+			Resource: stringorset.Set([]string{fmt.Sprintf("arn:%v:ec2:*:*:snapshot/*", b.Partition)}),
+			Condition: Condition{
+				"StringEquals": map[string]string{
+					"aws:ResourceTag/KubernetesCluster": p.clusterName,
+				},
+			},
+		},
 	)
 }
 
@@ -1118,23 +1508,76 @@ func AddKubeRouterPermissions(b *PolicyBuilder, p *Policy) {
 	)
 }
 
-func addKMSIAMPolicies(p *Policy) {
-	// TODO could use "kms:ViaService" Condition Key here?
-	p.unconditionalAction.Insert(
-		"kms:CreateGrant",
+// addKMSIAMPolicies grants the KMS permissions for customer managed keys used for EBS encryption
+// (etcd, EBS CSI, and Karpenter root volumes) and state store SSE-KMS. AWS services make the KMS
+// calls on the role's behalf, so kms:CreateGrant requires kms:GrantIsForAWSResource and all other
+// actions require kms:ViaService.
+func addKMSIAMPolicies(p *Policy, bypassViaService bool) {
+	// Even a kms-plugin calling KMS directly (bypassViaService) never creates grants; only EC2 does.
+	p.kmsAWSResourceGrant = true
+
+	dataActions := []string{
 		"kms:Decrypt",
 		"kms:DescribeKey",
 		"kms:Encrypt",
 		"kms:GenerateDataKey*",
 		"kms:ReEncrypt*",
-	)
+	}
+
+	// bypassViaService is set for control-plane roles when EncryptionConfig is enabled: a
+	// user-supplied kms-plugin then calls KMS directly from kube-apiserver, where kms:ViaService
+	// never matches. An empty region also falls back to unconditional actions, as kmsViaServices
+	// needs the region to build the service endpoint strings.
+	if bypassViaService || p.region == "" {
+		p.unconditionalAction.Insert(dataActions...)
+		return
+	}
+
+	p.kmsDataPlaneAction.Insert(dataActions...)
 }
 
-func addKMSGenerateRandomPolicies(p *Policy) {
-	// For nodeup to seed the instance's random number generator.
-	p.unconditionalAction.Insert(
-		"kms:GenerateRandom",
-	)
+// kmsViaServices returns the kms:ViaService endpoint patterns that AWS services
+// present to KMS when acting on behalf of an IAM principal. Used to bound the
+// data-plane KMS actions (Decrypt/Encrypt/GenerateDataKey*/ReEncrypt*) to the
+// services we actually use them through: EC2 (for EBS volume encryption) and
+// S3 (for SSE-KMS on the state-store bucket).
+//
+// Per AWS KMS docs the value is "<service>.<region>.amazonaws.com" — the
+// ".amazonaws.com" suffix is used in all partitions (including aws-cn,
+// aws-us-gov, aws-iso, aws-iso-b); the partition-specific suffixes used for
+// service endpoints do NOT apply to kms:ViaService.
+// See: https://docs.aws.amazon.com/kms/latest/developerguide/conditions-kms.html
+//
+// EC2 is pinned to the cluster's region (EBS is always in-region). S3 uses a
+// region wildcard because kops supports cross-region state-store buckets; the
+// caller must therefore evaluate the values under StringLike, not StringEquals.
+// IAMServiceEC2 returns the name of the IAM service for EC2 in the current region.
+// It is ec2.amazonaws.com in the default aws partition, but different in other isolated/custom partitions
+func IAMServiceEC2(region string) (string, error) {
+	ctx := context.TODO()
+	resolver := ec2.NewDefaultEndpointResolverV2()
+	ep, err := resolver.ResolveEndpoint(ctx, ec2.EndpointParameters{Region: aws.String(region)})
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve endpoint: %v", err)
+	}
+	if ep.URI.Host != "" {
+		// Remove the region from the hostname. Examples:
+		// ec2.us-east-1.amazonaws.com     -> ec2.amazonaws.com
+		// ec2.cn-west-1.amazonaws.com.cn  -> ec2.amazonaws.com.cn
+		// ec2.us-gov-west-1.amazonaws.com -> ec2.amazonaws.com
+		return strings.ReplaceAll(ep.URI.Host, fmt.Sprintf("%v.", region), ""), nil
+	}
+	return "ec2.amazonaws.com", nil
+}
+
+func kmsViaServices(region string) []string {
+	if region == "" {
+		return nil
+	}
+	return []string{
+		fmt.Sprintf("ec2.%s.amazonaws.com", region),
+		"s3.*.amazonaws.com",
+	}
 }
 
 func addASLifecyclePolicies(p *Policy, enableHookSupport bool) {
@@ -1146,20 +1589,6 @@ func addASLifecyclePolicies(p *Policy, enableHookSupport bool) {
 			"autoscaling:DescribeLifecycleHooks",
 		)
 	}
-	// TODO: remove this after k8s 1.29 support is removed
-	// It is no longer needed as of kops 1.29 but to prevent node bootstrap issues
-	// during kops upgrades we keep the permission until it is guaranteed to not be needed.
-	p.unconditionalAction.Insert(
-		"autoscaling:DescribeAutoScalingInstances",
-	)
-}
-
-func addCertIAMPolicies(p *Policy) {
-	// TODO: Make optional only if using IAM SSL Certs on ELBs
-	p.unconditionalAction.Insert(
-		"iam:ListServerCertificates",
-		"iam:GetServerCertificate",
-	)
 }
 
 func addCiliumEniPermissions(p *Policy) {
@@ -1170,13 +1599,14 @@ func addCiliumEniPermissions(p *Policy) {
 		"ec2:UnassignPrivateIpAddresses",
 		"ec2:CreateNetworkInterface",
 		"ec2:DescribeNetworkInterfaces",
-		"ec2:DescribeVpcPeeringConnections",
 		"ec2:DescribeSecurityGroups",
-		"ec2:DetachNetworkInterface",
 		"ec2:DeleteNetworkInterface",
 		"ec2:ModifyNetworkInterfaceAttribute",
 		"ec2:DescribeVpcs",
 		"ec2:CreateTags",
+		"ec2:DescribeRouteTables",
+		"ec2:DescribeTags",
+		"ec2:DescribeInstances",
 	)
 }
 
@@ -1184,15 +1614,17 @@ func addAmazonVPCCNIPermissions(p *Policy) {
 	p.unconditionalAction.Insert(
 		"ec2:AssignPrivateIpAddresses",
 		"ec2:AttachNetworkInterface",
+		"ec2:CreateNetworkInterface",
 		"ec2:DeleteNetworkInterface",
 		"ec2:DescribeInstances",
-		"ec2:DescribeInstanceTypes",
 		"ec2:DescribeTags",
 		"ec2:DescribeNetworkInterfaces",
+		"ec2:DescribeInstanceTypes",
+		"ec2:DescribeSecurityGroups",
+		"ec2:DescribeSubnets",
 		"ec2:DetachNetworkInterface",
 		"ec2:ModifyNetworkInterfaceAttribute",
 		"ec2:UnassignPrivateIpAddresses",
-		"ec2:CreateNetworkInterface",
 	)
 
 	p.Statement = append(p.Statement,

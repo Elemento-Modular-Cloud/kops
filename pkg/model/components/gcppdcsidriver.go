@@ -18,7 +18,6 @@ package components
 
 import (
 	"k8s.io/kops/pkg/apis/kops"
-	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/loader"
 )
 
@@ -36,9 +35,16 @@ func (b *GCPPDCSIDriverOptionsBuilder) BuildOptions(o *kops.Cluster) error {
 	}
 
 	if gce.PDCSIDriver == nil {
-		gce.PDCSIDriver = &kops.PDCSIDriver{
-			Enabled: fi.PtrTo(true),
-		}
+		gce.PDCSIDriver = &kops.PDCSIDriver{}
+	}
+	if gce.PDCSIDriver.Enabled == nil {
+		gce.PDCSIDriver.Enabled = new(true)
+	}
+	if gce.PDCSIDriver.DefaultStorageClassName == nil {
+		gce.PDCSIDriver.DefaultStorageClassName = new("balanced-csi")
+	}
+	if gce.PDCSIDriver.Version == nil {
+		gce.PDCSIDriver.Version = new("v1.26.0")
 	}
 
 	return nil

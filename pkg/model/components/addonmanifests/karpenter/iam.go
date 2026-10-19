@@ -20,9 +20,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"k8s.io/kops/pkg/model/iam"
+	"k8s.io/kops/upup/pkg/fi"
 )
 
-// ServiceAccount represents the service-account used by the dns-controller.
+// ServiceAccount represents the service-account used by Karpenter.
 // It implements iam.Subject to get AWS IAM permissions.
 type ServiceAccount struct{}
 
@@ -31,9 +32,31 @@ var _ iam.Subject = &ServiceAccount{}
 // BuildAWSPolicy generates a custom policy for a ServiceAccount IAM role.
 func (r *ServiceAccount) BuildAWSPolicy(b *iam.PolicyBuilder) (*iam.Policy, error) {
 	clusterName := b.Cluster.ObjectMeta.Name
-	p := iam.NewPolicy(clusterName, b.Partition)
+	p := iam.NewPolicy(clusterName, b.Partition, b.Region)
 
-	addKarpenterPermissions(p)
+	// Instance groups with custom IAM instance profiles contain roles with names that kOps
+	// cannot predict.
+	useCustomInstanceProfiles := false
+	// The generated EC2NodeClass block device mapping carries the root volume encryption key, which
+	// Karpenter has to be authorized to use.
+	useCustomerManagedKeys := false
+	for _, ig := range b.AllInstanceGroups {
+		if !ig.IsKarpenterManaged() {
+			continue
+		}
+		if ig.Spec.IAM != nil && ig.Spec.IAM.Profile != nil {
+			useCustomInstanceProfiles = true
+		}
+		if rootVolume := ig.Spec.RootVolume; rootVolume != nil {
+			if fi.ValueOf(rootVolume.Encryption) && fi.ValueOf(rootVolume.EncryptionKey) != "" {
+				useCustomerManagedKeys = true
+			}
+		}
+	}
+
+	if err := iam.AddKarpenterPermissions(p, useCustomInstanceProfiles, useCustomerManagedKeys); err != nil {
+		return nil, err
+	}
 
 	return p, nil
 }
@@ -44,29 +67,4 @@ func (r *ServiceAccount) ServiceAccount() (types.NamespacedName, bool) {
 		Namespace: "kube-system",
 		Name:      "karpenter",
 	}, true
-}
-
-func addKarpenterPermissions(p *iam.Policy) {
-	p.AddUnconditionalActions(
-		// Not included because we require Karpenter
-		// use existing kOps instance group launch templates
-		// "ec2:CreateLaunchTemplate",
-		// "ec2:DeleteLaunchTemplate",
-		"ec2:CreateFleet",
-		"ec2:CreateTags",
-		"ec2:DescribeAvailabilityZones",
-		"ec2:DescribeImages",
-		"ec2:DescribeInstanceTypeOfferings",
-		"ec2:DescribeInstanceTypes",
-		"ec2:DescribeInstances",
-		"ec2:DescribeLaunchTemplates",
-		"ec2:DescribeSecurityGroups",
-		"ec2:DescribeSpotPriceHistory",
-		"ec2:DescribeSubnets",
-		"ec2:RunInstances",
-		"ec2:TerminateInstances",
-		"iam:PassRole",
-		"pricing:GetProducts",
-		"ssm:GetParameter",
-	)
 }

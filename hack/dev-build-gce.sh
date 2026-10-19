@@ -31,17 +31,20 @@ export KOPS_ARCH
 # Build and upload to bucket
 UPLOAD_DEST_BUCKET="kops-dev-$(gcloud config get-value project)-${USER}"
 export UPLOAD_DEST=gs://${UPLOAD_DEST_BUCKET}
-gsutil ls "${UPLOAD_DEST}" || gsutil mb "${UPLOAD_DEST}" || return
+gcloud storage ls "${UPLOAD_DEST}" || gcloud storage buckets create "${UPLOAD_DEST}" || return
 make kops-install dev-upload-linux-${KOPS_ARCH} || return
 
 # Set KOPS_BASE_URL
 (tools/get_version.sh | grep VERSION | awk '{print $2}') || return
 KOPS_VERSION=$(tools/get_version.sh | grep VERSION | awk '{print $2}')
-export KOPS_BASE_URL=https://storage.googleapis.com/${UPLOAD_DEST_BUCKET}/kops/${KOPS_VERSION}/
+# Use the gs:// form so that nodes fetch artifacts with their service-account credentials; the
+# https:// form only works for publicly readable buckets. The service accounts of the cluster
+# need to be granted roles/storage.objectViewer on the bucket.
+export KOPS_BASE_URL=gs://${UPLOAD_DEST_BUCKET}/kops/${KOPS_VERSION}/
 
 # Create the state-store bucket if it doesn't exist
 KOPS_STATE_STORE="gs://kops-state-$(gcloud config get-value project)"
 export KOPS_STATE_STORE
-gsutil ls "${KOPS_STATE_STORE}" || gsutil mb "${KOPS_STATE_STORE}" || return
+gcloud storage ls "${KOPS_STATE_STORE}" || gcloud storage buckets create "${KOPS_STATE_STORE}" || return
 
 echo "SUCCESS"

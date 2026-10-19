@@ -18,12 +18,17 @@ package validation
 
 import (
 	"fmt"
+	"math"
+	"regexp"
 	"strings"
 
 	"k8s.io/kops/pkg/nodeidentity/aws"
 
 	"github.com/aws/aws-sdk-go-v2/aws/arn"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"k8s.io/apimachinery/pkg/api/resource"
+	contentvalidation "k8s.io/apimachinery/pkg/api/validate/content"
+	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
@@ -33,6 +38,20 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce"
 )
+
+// ValidateInstanceGroupName validates that an InstanceGroup name
+// is a valid Kubernetes ObjectMeta name (DNS subdomain).
+func ValidateInstanceGroupName(name string, fldPath *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+	if name == "" {
+		allErrs = append(allErrs, field.Required(fldPath, ""))
+		return allErrs
+	}
+	for _, msg := range apivalidation.NameIsDNSSubdomain(name, false) {
+		allErrs = append(allErrs, field.Invalid(fldPath, name, msg))
+	}
+	return allErrs
+}
 
 // ValidateInstanceGroup is responsible for validating the configuration of a instancegroup
 func ValidateInstanceGroup(g *kops.InstanceGroup, cloud fi.Cloud, strict bool) field.ErrorList {
@@ -58,6 +77,9 @@ func ValidateInstanceGroup(g *kops.InstanceGroup, cloud fi.Cloud, strict bool) f
 	case kops.InstanceGroupRoleNode:
 	case kops.InstanceGroupRoleBastion:
 	case kops.InstanceGroupRoleAPIServer:
+	case kops.InstanceGroupRoleEtcd:
+	case kops.InstanceGroupRoleScheduler:
+	case kops.InstanceGroupRoleKubeControllerManager:
 	default:
 		var supported []string
 		for _, role := range kops.AllInstanceGroupRoles {
@@ -84,6 +106,14 @@ func ValidateInstanceGroup(g *kops.InstanceGroup, cloud fi.Cloud, strict bool) f
 		if *g.Spec.MaxSize < *g.Spec.MinSize {
 			allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "maxSize"), "maxSize must be greater than or equal to minSize."))
 		}
+	}
+
+	if g.Spec.Containerd != nil && g.Spec.Containerd.GVisor != nil && fi.ValueOf(g.Spec.Containerd.GVisor.Enabled) && !g.Spec.Role.HasNode() {
+		allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "containerd", "gvisor"), "gVisor can only be enabled on instance groups with role Node"))
+	}
+
+	if g.Spec.Kubelet != nil && g.Spec.Kubelet.CgroupDriver != "" {
+		allErrs = append(allErrs, IsValidValue(field.NewPath("spec", "kubelet", "cgroupDriver"), &g.Spec.Kubelet.CgroupDriver, []string{"systemd", "cgroupfs"})...)
 	}
 
 	if strict && g.Spec.Image == "" {
@@ -152,7 +182,7 @@ func ValidateInstanceGroup(g *kops.InstanceGroup, cloud fi.Cloud, strict bool) f
 	}
 
 	if g.Spec.RollingUpdate != nil {
-		allErrs = append(allErrs, validateRollingUpdate(g.Spec.RollingUpdate, field.NewPath("spec", "rollingUpdate"), g.Spec.Role == kops.InstanceGroupRoleControlPlane)...)
+		allErrs = append(allErrs, validateRollingUpdate(g.Spec.RollingUpdate, field.NewPath("spec", "rollingUpdate"), g.Spec.Role.HasControlPlane())...)
 	}
 
 	if g.Spec.NodeLabels != nil {
@@ -234,16 +264,21 @@ func validateVolumeMountSpec(path *field.Path, spec kops.VolumeMountSpec) field.
 func CrossValidateInstanceGroup(g *kops.InstanceGroup, cluster *kops.Cluster, cloud fi.Cloud, strict bool) field.ErrorList {
 	allErrs := ValidateInstanceGroup(g, cloud, strict)
 
-	if g.Spec.Role == kops.InstanceGroupRoleControlPlane {
+	if g.Spec.Role.HasControlPlane() {
 		allErrs = append(allErrs, ValidateControlPlaneInstanceGroup(g, cluster)...)
 	}
 
-	if g.Spec.Role == kops.InstanceGroupRoleAPIServer {
-		if cluster.GetCloudProvider() != kops.CloudProviderAWS {
-			allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "role"), "APIServer role only supported on AWS"))
-		}
-		if cluster.UsesNoneDNS() {
-			allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "role"), "APIServer cannot be used with topology.dns.type=None"))
+	if g.Spec.Role.HasAPIServer() {
+		switch cluster.GetCloudProvider() {
+		case kops.CloudProviderGCE:
+			// Fully supported do nothing.
+		case kops.CloudProviderAWS:
+			// AWS only supports APIServer if DNS is not set to None
+			if cluster.UsesNoneDNS() {
+				allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "role"), "APIServer cannot be used with topology.dns.type=None"))
+			}
+		default:
+			allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "role"), "APIServer role only supported on AWS and GCE"))
 		}
 	}
 
@@ -269,11 +304,8 @@ func CrossValidateInstanceGroup(g *kops.InstanceGroup, cluster *kops.Cluster, cl
 
 		warmPool := cluster.Spec.CloudProvider.AWS.WarmPool.ResolveDefaults(g)
 		if warmPool.MaxSize == nil || *warmPool.MaxSize != 0 {
-			if g.Spec.Role != kops.InstanceGroupRoleNode && g.Spec.Role != kops.InstanceGroupRoleAPIServer {
+			if !g.Spec.Role.HasNode() && !g.Spec.Role.HasAPIServer() {
 				allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "warmPool"), "warm pool only allowed on instance groups with role Node or APIServer"))
-			}
-			if g.Spec.MixedInstancesPolicy != nil {
-				allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "warmPool"), "warm pool cannot be combined with a mixed instances policy"))
 			}
 			if g.Spec.MaxPrice != nil {
 				allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "warmPool"), "warm pool cannot be used with spot instances"))
@@ -291,6 +323,8 @@ func CrossValidateInstanceGroup(g *kops.InstanceGroup, cluster *kops.Cluster, cl
 		}
 	}
 
+	allErrs = append(allErrs, validateKarpenterInstanceGroup(g, cluster)...)
+
 	if g.Spec.Containerd != nil {
 		allErrs = append(allErrs, validateContainerdConfig(cluster, g.Spec.Containerd, field.NewPath("spec", "containerd"), false)...)
 	}
@@ -298,18 +332,211 @@ func CrossValidateInstanceGroup(g *kops.InstanceGroup, cluster *kops.Cluster, cl
 	return allErrs
 }
 
+func validateKarpenterInstanceGroup(g *kops.InstanceGroup, cluster *kops.Cluster) field.ErrorList {
+	allErrs := field.ErrorList{}
+	if g.Spec.Manager != kops.InstanceManagerKarpenter {
+		return allErrs
+	}
+
+	if cluster.GetCloudProvider() != kops.CloudProviderAWS {
+		allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "manager"), "Karpenter InstanceGroups are only supported on AWS"))
+	}
+	if cluster.Spec.Karpenter == nil || !cluster.Spec.Karpenter.Enabled {
+		allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "manager"), "Karpenter InstanceGroups require cluster.spec.karpenter.enabled"))
+	}
+	if !g.Spec.Role.HasNode() {
+		allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "role"), "Karpenter InstanceGroups must have role Node"))
+	}
+	if g.Spec.MaxSize != nil && *g.Spec.MaxSize <= 0 {
+		allErrs = append(allErrs, field.Invalid(field.NewPath("spec", "maxSize"), *g.Spec.MaxSize, "must be greater than zero"))
+	}
+	allErrs = append(allErrs, validateKarpenterAMISelectorImage(g.Spec.Image, field.NewPath("spec", "image"))...)
+	allErrs = append(allErrs, validateKarpenterStaticCapacity(g, cluster)...)
+	allErrs = append(allErrs, validateKarpenterInstanceRequirements(g)...)
+	return allErrs
+}
+
+func validateKarpenterInstanceRequirements(g *kops.InstanceGroup) field.ErrorList {
+	if g.Spec.MixedInstancesPolicy == nil || g.Spec.MixedInstancesPolicy.InstanceRequirements == nil {
+		return nil
+	}
+
+	requirements := g.Spec.MixedInstancesPolicy.InstanceRequirements
+	requirementsPath := field.NewPath("spec", "mixedInstancesPolicy", "instanceRequirements")
+	var allErrs field.ErrorList
+
+	if requirements.CPU != nil {
+		minValue, errs := validateKarpenterCPURequirement(requirements.CPU.Min, requirementsPath.Child("cpu", "min"))
+		allErrs = append(allErrs, errs...)
+		maxValue, errs := validateKarpenterCPURequirement(requirements.CPU.Max, requirementsPath.Child("cpu", "max"))
+		allErrs = append(allErrs, errs...)
+		allErrs = append(allErrs, validateKarpenterRequirementRange(minValue, maxValue, requirements.CPU.Max, requirementsPath.Child("cpu", "max"))...)
+	}
+
+	if requirements.Memory != nil {
+		minValue, errs := validateKarpenterMemoryRequirement(requirements.Memory.Min, requirementsPath.Child("memory", "min"), true)
+		allErrs = append(allErrs, errs...)
+		maxValue, errs := validateKarpenterMemoryRequirement(requirements.Memory.Max, requirementsPath.Child("memory", "max"), false)
+		allErrs = append(allErrs, errs...)
+		allErrs = append(allErrs, validateKarpenterRequirementRange(minValue, maxValue, requirements.Memory.Max, requirementsPath.Child("memory", "max"))...)
+	}
+
+	for i, configuredEntry := range requirements.ExcludedInstanceTypes {
+		entryPath := requirementsPath.Child("excludedInstanceTypes").Index(i)
+		entry := strings.TrimSpace(configuredEntry)
+		if entry == "" {
+			allErrs = append(allErrs, field.Invalid(entryPath, configuredEntry, "must not be empty"))
+			continue
+		}
+
+		value := entry
+		if match := karpenterExcludedInstanceFamily.FindStringSubmatch(entry); match != nil {
+			value = match[1]
+		} else if strings.Contains(entry, "*") {
+			allErrs = append(allErrs, field.Invalid(
+				entryPath,
+				configuredEntry,
+				"only an instance type or a \"<family>.*\" family wildcard can be expressed as a NodePool requirement",
+			))
+			continue
+		}
+		for _, msg := range contentvalidation.IsLabelValue(value) {
+			allErrs = append(allErrs, field.Invalid(entryPath, configuredEntry, msg))
+		}
+	}
+	return allErrs
+}
+
+var karpenterExcludedInstanceFamily = regexp.MustCompile(`^([a-z0-9][a-z0-9-]*)\.\*$`)
+
+func validateKarpenterCPURequirement(quantity *resource.Quantity, fldPath *field.Path) (*int64, field.ErrorList) {
+	if quantity == nil {
+		return nil, nil
+	}
+	if quantity.Sign() < 0 {
+		return nil, field.ErrorList{field.Invalid(fldPath, quantity, "must not be negative")}
+	}
+	value, ok := quantity.AsInt64()
+	if !ok {
+		return nil, field.ErrorList{field.Invalid(fldPath, quantity, "must be a whole number")}
+	}
+	if value > math.MaxInt32 {
+		return nil, field.ErrorList{field.Invalid(fldPath, quantity, "is too large")}
+	}
+	return &value, nil
+}
+
+func validateKarpenterMemoryRequirement(quantity *resource.Quantity, fldPath *field.Path, roundUp bool) (*int64, field.ErrorList) {
+	if quantity == nil {
+		return nil, nil
+	}
+	if quantity.Sign() < 0 {
+		return nil, field.ErrorList{field.Invalid(fldPath, quantity, "must not be negative")}
+	}
+
+	const mib = int64(1024 * 1024)
+	maxBytes := int64(math.MaxInt32) * mib
+	if !roundUp {
+		maxBytes += mib - 1
+	}
+	maxQuantity := resource.NewQuantity(maxBytes, resource.DecimalSI)
+	if quantity.Cmp(*maxQuantity) > 0 {
+		return nil, field.ErrorList{field.Invalid(fldPath, quantity, "is too large")}
+	}
+
+	bytes := quantity.Value()
+	value := bytes / mib
+	if roundUp && bytes%mib != 0 {
+		value++
+	}
+	return &value, nil
+}
+
+func validateKarpenterRequirementRange(minValue, maxValue *int64, maxQuantity *resource.Quantity, maxPath *field.Path) field.ErrorList {
+	if maxValue == nil {
+		return nil
+	}
+	if *maxValue == 0 {
+		return field.ErrorList{field.Invalid(maxPath, maxQuantity, "must resolve to a positive value")}
+	}
+	if minValue != nil && *minValue > *maxValue {
+		return field.ErrorList{field.Invalid(maxPath, maxQuantity, "must be greater than or equal to min")}
+	}
+	return nil
+}
+
+func validateKarpenterStaticCapacity(g *kops.InstanceGroup, cluster *kops.Cluster) field.ErrorList {
+	minPath := field.NewPath("spec", "minSize")
+
+	if g.Spec.MinSize == nil {
+		return nil
+	}
+	if *g.Spec.MinSize <= 0 {
+		return field.ErrorList{field.Invalid(minPath, *g.Spec.MinSize, "must be greater than zero for static capacity")}
+	}
+	if !karpenterStaticCapacityEnabled(cluster) {
+		return field.ErrorList{field.Forbidden(minPath, "static capacity requires StaticCapacity=true in cluster.spec.karpenter.featureGates")}
+	}
+	return nil
+}
+
+func karpenterStaticCapacityEnabled(cluster *kops.Cluster) bool {
+	if cluster.Spec.Karpenter == nil || cluster.Spec.Karpenter.FeatureGates == "" {
+		return true
+	}
+
+	enabled := false
+	for _, featureGate := range strings.Split(cluster.Spec.Karpenter.FeatureGates, ",") {
+		name, value, ok := strings.Cut(featureGate, "=")
+		if !ok || strings.TrimSpace(name) != "StaticCapacity" {
+			continue
+		}
+		enabled = strings.EqualFold(strings.TrimSpace(value), "true")
+	}
+	return enabled
+}
+
+func validateKarpenterAMISelectorImage(image string, fldPath *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+	image = strings.TrimSpace(image)
+	if image == "" {
+		return allErrs
+	}
+	if strings.Contains(image, "://") {
+		return append(allErrs, field.Invalid(fldPath, image, "must be ami-*, ssm:<parameter>, <name>, or <owner>/<name>"))
+	}
+	if strings.HasPrefix(image, "ami-") {
+		return allErrs
+	}
+	if strings.HasPrefix(image, "ssm:") {
+		if strings.TrimPrefix(image, "ssm:") == "" {
+			return append(allErrs, field.Invalid(fldPath, image, "ssm image parameter is required"))
+		}
+		return allErrs
+	}
+
+	tokens := strings.SplitN(image, "/", 2)
+	if len(tokens) == 2 && (tokens[0] == "" || tokens[1] == "") {
+		return append(allErrs, field.Invalid(fldPath, image, "must be ami-*, ssm:<parameter>, <name>, or <owner>/<name>"))
+	}
+	return allErrs
+}
+
 func ValidateControlPlaneInstanceGroup(g *kops.InstanceGroup, cluster *kops.Cluster) field.ErrorList {
 	allErrs := field.ErrorList{}
 	for _, etcd := range cluster.Spec.EtcdClusters {
 		hasEtcd := false
+		last := ""
 		for _, m := range etcd.Members {
 			if fi.ValueOf(m.InstanceGroup) == g.ObjectMeta.Name {
 				hasEtcd = true
 				break
+			} else {
+				last = fi.ValueOf(m.InstanceGroup)
 			}
 		}
 		if !hasEtcd {
-			allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "metadata", "name"), fmt.Sprintf("InstanceGroup \"%s\" with role ControlPlane must have a member in etcd cluster \"%s\"", g.ObjectMeta.Name, etcd.Name)))
+			allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "metadata", "name"), fmt.Sprintf("InstanceGroup \"%s\" with role ControlPlane must have a member in etcd (IG: \"%s\") cluster \"%s\"", g.ObjectMeta.Name, last, etcd.Name)))
 		}
 	}
 	return allErrs

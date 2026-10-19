@@ -28,12 +28,12 @@ import (
 	dns "google.golang.org/api/dns/v1"
 	"google.golang.org/api/option"
 	gcfg "gopkg.in/gcfg.v1"
-	"k8s.io/cloud-provider-gcp/providers/gce"
 	"k8s.io/klog/v2"
 
 	"k8s.io/kops/dnsprovider/pkg/dnsprovider"
 	"k8s.io/kops/dnsprovider/pkg/dnsprovider/providers/google/clouddns/internal"
 	"k8s.io/kops/dnsprovider/pkg/dnsprovider/providers/google/clouddns/internal/stubs"
+	"k8s.io/kops/third_party/forked/gcetokensource"
 )
 
 const (
@@ -70,7 +70,7 @@ func newCloudDns(config io.Reader) (*Interface, error) {
 			projectID = cfg.Global.ProjectID
 		}
 		if cfg.Global.TokenURL != "" {
-			tokenSource = gce.NewAltTokenSource(cfg.Global.TokenURL, cfg.Global.TokenBody)
+			tokenSource = gcetokensource.NewAltTokenSource(cfg.Global.TokenURL, cfg.Global.TokenBody)
 		}
 	}
 	return CreateInterface(projectID, tokenSource)

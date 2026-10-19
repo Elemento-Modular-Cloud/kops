@@ -212,7 +212,7 @@ func TestVMScaleSetFind(t *testing.T) {
 		PrivateIPAddressVersion: to.Ptr(compute.IPVersionIPv4),
 	}
 	ipConfigProperties.PublicIPAddressConfiguration = &compute.VirtualMachineScaleSetPublicIPAddressConfiguration{
-		Name: to.Ptr("vmss-publicipconfig"),
+		Name: to.Ptr("vmss"),
 		Properties: &compute.VirtualMachineScaleSetPublicIPAddressConfigurationProperties{
 			PublicIPAddressVersion: to.Ptr(compute.IPVersionIPv4),
 		},
@@ -223,13 +223,13 @@ func TestVMScaleSetFind(t *testing.T) {
 		},
 	}
 	networkConfig := &compute.VirtualMachineScaleSetNetworkConfiguration{
-		Name: to.Ptr("vmss-netconfig"),
+		Name: to.Ptr("vmss"),
 		Properties: &compute.VirtualMachineScaleSetNetworkConfigurationProperties{
 			Primary:            to.Ptr(true),
 			EnableIPForwarding: to.Ptr(true),
 			IPConfigurations: []*compute.VirtualMachineScaleSetIPConfiguration{
 				{
-					Name:       to.Ptr("vmss-ipconfig"),
+					Name:       to.Ptr("vmss"),
 					Properties: ipConfigProperties,
 				},
 			},
@@ -320,7 +320,7 @@ func TestVMScaleSetRun(t *testing.T) {
 		t.Fatalf("unexpected error: %s", err)
 	}
 	expectedTags := map[string]*string{
-		azure.TagClusterName: fi.PtrTo(testClusterName),
+		azure.TagClusterName: new(testClusterName),
 	}
 	if a, e := vmss.Tags, expectedTags; !reflect.DeepEqual(a, e) {
 		t.Errorf("unexpected tags: expected %+v, but got %+v", e, a)

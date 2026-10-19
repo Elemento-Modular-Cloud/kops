@@ -96,10 +96,12 @@ metadata:
     kops.k8s.io/cluster: minimal.k8s.local
   name: control-plane-us-test1-1
 spec:
-  image: ubuntu-20.04
+  image: ubuntu-26.04
   machineType: n1-standard-1
   maxSize: 1
   minSize: 1
+  nodeLabels:
+    kops.k8s.io/instancegroup: control-plane-us-test1-1
   role: Master
   subnets:
   - us-test1
@@ -114,10 +116,12 @@ metadata:
     kops.k8s.io/cluster: minimal.k8s.local
   name: control-plane-us-test1-2
 spec:
-  image: ubuntu-20.04
+  image: ubuntu-26.04
   machineType: n1-standard-1
   maxSize: 1
   minSize: 1
+  nodeLabels:
+    kops.k8s.io/instancegroup: control-plane-us-test1-2
   role: Master
   subnets:
   - us-test1
@@ -132,10 +136,12 @@ metadata:
     kops.k8s.io/cluster: minimal.k8s.local
   name: control-plane-us-test1-3
 spec:
-  image: ubuntu-20.04
+  image: ubuntu-26.04
   machineType: n1-standard-1
   maxSize: 1
   minSize: 1
+  nodeLabels:
+    kops.k8s.io/instancegroup: control-plane-us-test1-3
   role: Master
   subnets:
   - us-test1
@@ -150,10 +156,12 @@ metadata:
     kops.k8s.io/cluster: minimal.k8s.local
   name: nodes-us-test1
 spec:
-  image: ubuntu-20.04
+  image: ubuntu-26.04
   machineType: n1-standard-1
   maxSize: 1
   minSize: 1
+  nodeLabels:
+    kops.k8s.io/instancegroup: nodes-us-test1
   role: Node
   subnets:
   - us-test1

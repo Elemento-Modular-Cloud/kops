@@ -17,24 +17,75 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 70
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           path: ${{ env.GOPATH }}/src/k8s.io/kops
+          fetch-depth: 3
 
       - name: Set up go
-        uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version-file: '${{ env.GOPATH }}/src/k8s.io/kops/go.mod'
+
+      - name: dev/tasks/free-disk-space-on-github-actions-runner
+        working-directory: ${{ env.GOPATH }}/src/k8s.io/kops
+        run: |
+          dev/tasks/free-disk-space-on-github-actions-runner
 
       - name: tests/e2e/scenarios/bare-metal/run-test
         working-directory: ${{ env.GOPATH }}/src/k8s.io/kops
         run: |
-          timeout 60m tests/e2e/scenarios/bare-metal/run-test
+          CHANGED_VERSION=$(git diff --name-only HEAD~2 | grep -E '^kops-version\.go$' || true)
+          if [ -z "${CHANGED_VERSION}" ]
+          then
+            timeout 60m tests/e2e/scenarios/bare-metal/run-test
+          else
+            echo "kops-version.go has been modified, skipping test"
+          fi
+        env:
+          ARTIFACTS: /tmp/artifacts
+
+      - name: Archive production artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: tests-e2e-scenarios-bare-metal
+          path: /tmp/artifacts/
+
+  tests-e2e-scenarios-bare-metal-ipv6:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          path: ${{ env.GOPATH }}/src/k8s.io/kops
+          fetch-depth: 3
+
+      - name: Set up go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: '${{ env.GOPATH }}/src/k8s.io/kops/go.mod'
+
+      - name: dev/tasks/free-disk-space-on-github-actions-runner
+        working-directory: ${{ env.GOPATH }}/src/k8s.io/kops
+        run: |
+          dev/tasks/free-disk-space-on-github-actions-runner
+
+      - name: tests/e2e/scenarios/bare-metal/run-test
+        working-directory: ${{ env.GOPATH }}/src/k8s.io/kops
+        run: |
+          CHANGED_VERSION=$(git diff --name-only HEAD~2 | grep -E '^kops-version\.go$' || true)
+          if [ -z "${CHANGED_VERSION}" ]
+          then
+            timeout 60m tests/e2e/scenarios/bare-metal/scenario-ipv6
+          else
+            echo "kops-version.go has been modified, skipping test"
+          fi
         env:
           ARTIFACTS: /tmp/artifacts
       - name: Archive production artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: tests-e2e-scenarios-bare-metal
+          name: tests-e2e-scenarios-bare-metal-ipv6
           path: /tmp/artifacts/

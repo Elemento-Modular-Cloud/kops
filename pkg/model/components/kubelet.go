@@ -55,12 +55,12 @@ func (b *KubeletOptionsBuilder) BuildOptions(cluster *kops.Cluster) error {
 
 	// We _do_ allow debugging handlers, so we can do logs
 	// This does allow more access than we would like though
-	cluster.Spec.ControlPlaneKubelet.EnableDebuggingHandlers = fi.PtrTo(true)
+	cluster.Spec.ControlPlaneKubelet.EnableDebuggingHandlers = new(true)
 
 	// IsolateControlPlane enables the legacy behaviour, where master pods on a separate network
 	// In newer versions of kubernetes, most of that functionality has been removed though
 	if fi.ValueOf(cluster.Spec.Networking.IsolateControlPlane) {
-		cluster.Spec.ControlPlaneKubelet.EnableDebuggingHandlers = fi.PtrTo(false)
+		cluster.Spec.ControlPlaneKubelet.EnableDebuggingHandlers = new(false)
 		cluster.Spec.ControlPlaneKubelet.HairpinMode = "none"
 	}
 
@@ -69,9 +69,9 @@ func (b *KubeletOptionsBuilder) BuildOptions(cluster *kops.Cluster) error {
 
 func (b *KubeletOptionsBuilder) configureKubelet(cluster *kops.Cluster, kubelet *kops.KubeletConfigSpec, kubernetesVersion model.KubernetesVersion) error {
 	// Standard options
-	kubelet.EnableDebuggingHandlers = fi.PtrTo(true)
+	kubelet.EnableDebuggingHandlers = new(true)
 	kubelet.PodManifestPath = "/etc/kubernetes/manifests"
-	kubelet.LogLevel = fi.PtrTo(int32(2))
+	kubelet.LogLevel = new(int32(2))
 	kubelet.ClusterDomain = cluster.Spec.ClusterDNSDomain
 
 	// AllowPrivileged is deprecated and removed in v1.14.
@@ -112,7 +112,7 @@ func (b *KubeletOptionsBuilder) configureKubelet(cluster *kops.Cluster, kubelet 
 				"imagefs.available<10%",
 				"imagefs.inodesFree<5%",
 			}
-			kubelet.EvictionHard = fi.PtrTo(strings.Join(evictionHard, ","))
+			kubelet.EvictionHard = new(strings.Join(evictionHard, ","))
 		}
 	}
 
@@ -120,84 +120,39 @@ func (b *KubeletOptionsBuilder) configureKubelet(cluster *kops.Cluster, kubelet 
 	const kubeconfigPath = "/var/lib/kubelet/kubeconfig"
 	kubelet.KubeconfigPath = kubeconfigPath
 
-	cloudProvider := cluster.GetCloudProvider()
-
 	kubelet.CgroupRoot = "/"
 
+	cloudProvider := cluster.GetCloudProvider()
 	klog.V(1).Infof("Cloud Provider: %s", cloudProvider)
-	if cloudProvider == kops.CloudProviderAWS {
-		kubelet.CloudProvider = "aws"
-	}
-
-	if cloudProvider == kops.CloudProviderDO {
+	if cloudProvider == kops.CloudProviderMetal {
+		// metal does not (yet) have a cloud-controller-manager, so we don't need to set the cloud-provider flag
+		// If we do set it to external, kubelet will taint the node with the node.kops.k8s.io/uninitialized taint
+		// and there is no cloud-controller-manager to remove it
+		kubelet.CloudProvider = ""
+	} else {
 		kubelet.CloudProvider = "external"
 	}
 
 	if cloudProvider == kops.CloudProviderGCE {
-		kubelet.CloudProvider = "gce"
 		kubelet.HairpinMode = "promiscuous-bridge"
 
 		if cluster.Spec.CloudConfig == nil {
 			cluster.Spec.CloudConfig = &kops.CloudConfiguration{}
 		}
-		cluster.Spec.CloudProvider.GCE.Multizone = fi.PtrTo(true)
-		cluster.Spec.CloudProvider.GCE.NodeTags = fi.PtrTo(gce.TagForRole(b.ClusterName, kops.InstanceGroupRoleNode))
+		cluster.Spec.CloudProvider.GCE.Multizone = new(true)
+		cluster.Spec.CloudProvider.GCE.NodeTags = new(gce.TagForRole(b.ClusterName, kops.InstanceGroupRoleNode))
 	}
 
-	if cloudProvider == kops.CloudProviderHetzner {
-		kubelet.CloudProvider = "external"
-	}
-
-	if cloudProvider == kops.CloudProviderOpenstack {
-		kubelet.CloudProvider = "openstack"
-	}
-
-	if cloudProvider == kops.CloudProviderAzure {
-		kubelet.CloudProvider = "azure"
-	}
-
-	if cloudProvider == kops.CloudProviderScaleway {
-		kubelet.CloudProvider = "external"
-	}
-
-	if cloudProvider == kops.CloudProviderElemento {
-		kubelet.CloudProvider = "external"
-	}
-
-	if cluster.Spec.ExternalCloudControllerManager != nil {
-		kubelet.CloudProvider = "external"
-	}
-
-	// Prevent image GC from pruning the pause image
-	// https://github.com/kubernetes/enhancements/tree/master/keps/sig-node/2040-kubelet-cri#pinned-images
-	image := "registry.k8s.io/pause:3.9"
-	var err error
-	if image, err = b.AssetBuilder.RemapImage(image); err != nil {
-		return err
-	}
-	kubelet.PodInfraContainerImage = image
-
-	if kubelet.FeatureGates == nil {
-		kubelet.FeatureGates = make(map[string]string)
-	}
-
-	if cluster.Spec.CloudProvider.AWS != nil {
-		if _, found := kubelet.FeatureGates["InTreePluginAWSUnregister"]; !found && kubernetesVersion.IsLT("1.31") {
-			kubelet.FeatureGates["InTreePluginAWSUnregister"] = "true"
-		}
-
-		if _, found := kubelet.FeatureGates["CSIMigrationAWS"]; !found && kubernetesVersion.IsLT("1.27") {
-			kubelet.FeatureGates["CSIMigrationAWS"] = "true"
-		}
-	}
-
-	// Set systemd as the default cgroup driver for kubelet
+	// Set systemd as the default cgroup driver for kubelet, unless the user opted in to cgroupfs.
+	// nodeup configures containerd with the same driver (SystemdCgroup in the runc options), so that
+	// a kubelet that detects the driver from the runtime (KubeletCgroupDriverFromCRI) gets the same answer
+	// as the cgroupDriver setting in its own configuration.
 	if kubelet.CgroupDriver == "" {
 		kubelet.CgroupDriver = "systemd"
 	}
 
 	if kubelet.ProtectKernelDefaults == nil {
-		kubelet.ProtectKernelDefaults = fi.PtrTo(true)
+		kubelet.ProtectKernelDefaults = new(true)
 	}
 
 	// We do not enable graceful shutdown when using amazonaws due to leaking ENIs.
@@ -210,7 +165,9 @@ func (b *KubeletOptionsBuilder) configureKubelet(cluster *kops.Cluster, kubelet 
 		kubelet.ShutdownGracePeriodCriticalPods = &metav1.Duration{Duration: 0}
 	}
 
-	kubelet.RegisterSchedulable = fi.PtrTo(true)
+	if kubernetesVersion.IsLT("1.34") {
+		kubelet.RegisterSchedulable = new(true)
+	}
 
 	return nil
 }

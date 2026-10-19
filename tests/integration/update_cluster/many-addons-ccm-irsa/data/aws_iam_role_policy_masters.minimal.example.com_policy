@@ -66,36 +66,6 @@
     },
     {
       "Action": [
-        "route53:ChangeResourceRecordSets",
-        "route53:GetHostedZone",
-        "route53:ListResourceRecordSets"
-      ],
-      "Effect": "Allow",
-      "Resource": [
-        "arn:aws-test:route53:::hostedzone/Z1AFAKE1ZON3YO"
-      ]
-    },
-    {
-      "Action": [
-        "route53:GetChange"
-      ],
-      "Effect": "Allow",
-      "Resource": [
-        "arn:aws-test:route53:::change/*"
-      ]
-    },
-    {
-      "Action": [
-        "route53:ListHostedZones",
-        "route53:ListTagsForResource"
-      ],
-      "Effect": "Allow",
-      "Resource": [
-        "*"
-      ]
-    },
-    {
-      "Action": [
         "ec2:CreateTags"
       ],
       "Effect": "Allow",
@@ -104,8 +74,36 @@
       ]
     },
     {
+      "Action": "kms:CreateGrant",
+      "Condition": {
+        "Bool": {
+          "kms:GrantIsForAWSResource": "true"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "*"
+    },
+    {
       "Action": [
-        "autoscaling:DescribeAutoScalingInstances",
+        "kms:Decrypt",
+        "kms:DescribeKey",
+        "kms:Encrypt",
+        "kms:GenerateDataKey*",
+        "kms:ReEncrypt*"
+      ],
+      "Condition": {
+        "StringLike": {
+          "kms:ViaService": [
+            "ec2.us-test-1.amazonaws.com",
+            "s3.*.amazonaws.com"
+          ]
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "*"
+    },
+    {
+      "Action": [
         "ec2:AssignPrivateIpAddresses",
         "ec2:AttachNetworkInterface",
         "ec2:CreateNetworkInterface",
@@ -113,21 +111,13 @@
         "ec2:DescribeInstanceTypes",
         "ec2:DescribeInstances",
         "ec2:DescribeNetworkInterfaces",
-        "ec2:DescribeRegions",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSubnets",
         "ec2:DescribeTags",
         "ec2:DescribeVolumes",
         "ec2:DetachNetworkInterface",
         "ec2:ModifyNetworkInterfaceAttribute",
-        "ec2:UnassignPrivateIpAddresses",
-        "iam:GetServerCertificate",
-        "iam:ListServerCertificates",
-        "kms:CreateGrant",
-        "kms:Decrypt",
-        "kms:DescribeKey",
-        "kms:Encrypt",
-        "kms:GenerateDataKey*",
-        "kms:GenerateRandom",
-        "kms:ReEncrypt*"
+        "ec2:UnassignPrivateIpAddresses"
       ],
       "Effect": "Allow",
       "Resource": "*"

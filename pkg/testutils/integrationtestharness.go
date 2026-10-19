@@ -57,8 +57,8 @@ import (
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/featureflag"
 	"k8s.io/kops/pkg/pki"
-	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
+	"k8s.io/kops/upup/pkg/fi/cloudup/azuretasks"
 	"k8s.io/kops/upup/pkg/fi/cloudup/openstack"
 	"k8s.io/kops/util/pkg/vfs"
 )
@@ -90,7 +90,7 @@ func NewIntegrationTestHarness(t *testing.T) *IntegrationTestHarness {
 
 	// Generate much smaller keys, as this is often the bottleneck for tests
 	h.originalPKIDefaultPrivateKeySize = pki.DefaultPrivateKeySize
-	pki.DefaultPrivateKeySize = 512
+	pki.DefaultPrivateKeySize = 1024
 
 	// Replace the default channel path with a local filesystem path, so we don't try to retrieve it from a server
 	{
@@ -131,6 +131,10 @@ func (h *IntegrationTestHarness) Close() {
 	if h.originalPKIDefaultPrivateKeySize != 0 {
 		pki.DefaultPrivateKeySize = h.originalPKIDefaultPrivateKeySize
 	}
+}
+
+func (h *IntegrationTestHarness) SetupMockAzure(resourceGroupName string) *azuretasks.MockAzureCloud {
+	return azuretasks.InstallMockAzureCloud("eastus", "sub-123", resourceGroupName)
 }
 
 func (h *IntegrationTestHarness) SetupMockAWS() *awsup.MockAWSCloud {
@@ -182,7 +186,7 @@ func (h *IntegrationTestHarness) SetupMockAWS() *awsup.MockAWSCloud {
 	mockEC2.Images = append(mockEC2.Images, &ec2types.Image{
 		CreationDate:   aws.String("2022-04-04T00:00:00.000Z"),
 		ImageId:        aws.String("ami-12345678"),
-		Name:           aws.String("images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20220404"),
+		Name:           aws.String("images/hvm-ssd-gp3/ubuntu-resolute-26.04-amd64-server-20220404"),
 		OwnerId:        aws.String(awsup.WellKnownAccountUbuntu),
 		RootDeviceName: aws.String("/dev/xvda"),
 		Architecture:   ec2types.ArchitectureValuesX8664,
@@ -320,11 +324,11 @@ func SetupMockOpenstack() *openstack.MockCloud {
 	extNetworkName := "external"
 	networkCreateOpts := networks.CreateOpts{
 		Name:         extNetworkName,
-		AdminStateUp: fi.PtrTo(true),
+		AdminStateUp: new(true),
 	}
 	extNetwork := external.CreateOptsExt{
 		CreateOptsBuilder: networkCreateOpts,
-		External:          fi.PtrTo(true),
+		External:          new(true),
 	}
 	c.CreateNetwork(extNetwork)
 	c.SetExternalNetwork(&extNetworkName)
@@ -333,27 +337,27 @@ func SetupMockOpenstack() *openstack.MockCloud {
 	extSubnet := subnets.CreateOpts{
 		Name:       extSubnetName,
 		NetworkID:  extNetworkName,
-		EnableDHCP: fi.PtrTo(true),
+		EnableDHCP: new(true),
 		CIDR:       "172.20.0.0/22",
 	}
 	c.CreateSubnet(extSubnet)
-	c.SetExternalSubnet(fi.PtrTo(extSubnetName))
-	c.SetLBFloatingSubnet(fi.PtrTo(extSubnetName))
+	c.SetExternalSubnet(new(extSubnetName))
+	c.SetLBFloatingSubnet(new(extSubnetName))
 	images.Create(context.TODO(), c.MockImageClient.ServiceClient(), images.CreateOpts{
-		Name:    "Ubuntu-20.04",
+		Name:    "Ubuntu-26.04",
 		MinDisk: 12,
 	})
 	flavors.Create(context.TODO(), c.MockNovaClient.ServiceClient(), flavors.CreateOpts{
 		Name:  "n1-standard-2",
 		RAM:   8192,
 		VCPUs: 8,
-		Disk:  fi.PtrTo(16),
+		Disk:  new(16),
 	})
 	flavors.Create(context.TODO(), c.MockNovaClient.ServiceClient(), flavors.CreateOpts{
 		Name:  "n1-standard-1",
 		RAM:   8192,
 		VCPUs: 4,
-		Disk:  fi.PtrTo(16),
+		Disk:  new(16),
 	})
 	zones.Create(context.TODO(), c.MockDNSClient.ServiceClient(), zones.CreateOpts{
 		Name: "minimal-openstack.k8s.local",

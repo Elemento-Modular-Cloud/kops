@@ -63,7 +63,7 @@ func (e *SecurityGroupRule) GetDependencies(tasks map[string]fi.CloudupTask) []f
 	return deps
 }
 
-var _ fi.CompareWithID = &SecurityGroupRule{}
+var _ fi.CompareWithID = (*SecurityGroupRule)(nil)
 
 func (r *SecurityGroupRule) CompareWithID() *string {
 	return r.ID
@@ -100,17 +100,17 @@ func (r *SecurityGroupRule) Find(context *fi.CloudupContext) (*SecurityGroupRule
 	}
 	rule := rs[0]
 	actual := &SecurityGroupRule{
-		ID:             fi.PtrTo(rule.ID),
-		Direction:      fi.PtrTo(rule.Direction),
-		EtherType:      fi.PtrTo(rule.EtherType),
+		ID:             new(rule.ID),
+		Direction:      new(rule.Direction),
+		EtherType:      new(rule.EtherType),
 		PortRangeMax:   Int(rule.PortRangeMax),
 		PortRangeMin:   Int(rule.PortRangeMin),
-		Protocol:       fi.PtrTo(rule.Protocol),
-		RemoteIPPrefix: fi.PtrTo(rule.RemoteIPPrefix),
+		Protocol:       new(rule.Protocol),
+		RemoteIPPrefix: new(rule.RemoteIPPrefix),
 		RemoteGroup:    r.RemoteGroup,
 		SecGroup:       r.SecGroup,
 		Lifecycle:      r.Lifecycle,
-		Delete:         fi.PtrTo(false),
+		Delete:         new(false),
 	}
 
 	r.ID = actual.ID
@@ -178,7 +178,7 @@ func (*SecurityGroupRule) RenderOpenstack(t *openstack.OpenstackAPITarget, a, e,
 			return fmt.Errorf("error creating SecurityGroupRule in SG %s: %v", fi.ValueOf(e.SecGroup.GetName()), err)
 		}
 
-		e.ID = fi.PtrTo(r.ID)
+		e.ID = new(r.ID)
 		return nil
 	}
 
@@ -186,7 +186,7 @@ func (*SecurityGroupRule) RenderOpenstack(t *openstack.OpenstackAPITarget, a, e,
 	return nil
 }
 
-var _ fi.HasLifecycle = &SecurityGroupRule{}
+var _ fi.HasLifecycle = (*SecurityGroupRule)(nil)
 
 // GetLifecycle returns the Lifecycle of the object, implementing fi.HasLifecycle
 func (o *SecurityGroupRule) GetLifecycle() fi.Lifecycle {
@@ -198,7 +198,7 @@ func (o *SecurityGroupRule) SetLifecycle(lifecycle fi.Lifecycle) {
 	o.Lifecycle = lifecycle
 }
 
-var _ fi.HasLifecycle = &SecurityGroupRule{}
+var _ fi.HasLifecycle = (*SecurityGroupRule)(nil)
 
 // GetName returns the Name of the object, implementing fi.HasName
 func (o *SecurityGroupRule) GetName() *string {

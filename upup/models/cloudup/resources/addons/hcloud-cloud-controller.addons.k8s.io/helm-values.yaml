@@ -1,0 +1,24 @@
+# Helm values for hcloud-cloud-controller-manager (chart version in kustomization.yaml)
+# To regenerate the manifest:
+#   cd upup/models/cloudup/resources/addons/hcloud-cloud-controller.addons.k8s.io
+#   ./regenerate.sh
+#
+# Only kops-specific overrides live here; everything else inherits the chart defaults.
+# Networking is left disabled in the chart (default) to keep hostNetwork off; kops supplies
+# allocate-node-cidrs / cluster-cidr / HCLOUD_NETWORK directly.
+
+args:
+  allocate-node-cidrs: "true"
+  cluster-cidr: "{{ .Networking.PodCIDR }}"
+  configure-cloud-routes: "false"
+  v: "{{ or .ExternalCloudControllerManager.LogLevel 2 }}"
+
+env:
+  HCLOUD_NETWORK:
+    valueFrom:
+      secretKeyRef:
+        name: hcloud
+        key: network
+  # Robot is not supported by kops; drop the chart's optional env entries.
+  ROBOT_USER: null
+  ROBOT_PASSWORD: null

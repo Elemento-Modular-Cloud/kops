@@ -34,7 +34,7 @@ type VPC struct {
 	Region    *string
 }
 
-var _ fi.CompareWithID = &VPC{}
+var _ fi.CompareWithID = (*VPC)(nil)
 
 func (v *VPC) CompareWithID() *string {
 	return v.ID
@@ -53,11 +53,11 @@ func (v *VPC) Find(c *fi.CloudupContext) (*VPC, error) {
 	for _, vpc := range vpcs {
 		if vpc.Name == fi.ValueOf(v.Name) {
 			return &VPC{
-				Name:      fi.PtrTo(vpc.Name),
-				ID:        fi.PtrTo(vpc.ID),
+				Name:      new(vpc.Name),
+				ID:        new(vpc.ID),
 				Lifecycle: v.Lifecycle,
-				IPRange:   fi.PtrTo(vpc.IPRange),
-				Region:    fi.PtrTo(vpc.RegionSlug),
+				IPRange:   new(vpc.IPRange),
+				Region:    new(vpc.RegionSlug),
 			}, nil
 		}
 	}

@@ -1,7 +1,7 @@
 locals {
   cluster_name                 = "externalpolicies.example.com"
   master_autoscaling_group_ids = [aws_autoscaling_group.master-us-test-1a-masters-externalpolicies-example-com.id]
-  master_security_group_ids    = [aws_security_group.masters-externalpolicies-example-com.id]
+  master_security_group_ids    = ["sg-exampleid3", "sg-exampleid4", aws_security_group.masters-externalpolicies-example-com.id]
   masters_role_arn             = aws_iam_role.masters-externalpolicies-example-com.arn
   masters_role_name            = aws_iam_role.masters-externalpolicies-example-com.name
   node_autoscaling_group_ids   = [aws_autoscaling_group.nodes-externalpolicies-example-com.id]
@@ -27,7 +27,7 @@ output "master_autoscaling_group_ids" {
 }
 
 output "master_security_group_ids" {
-  value = [aws_security_group.masters-externalpolicies-example-com.id]
+  value = ["sg-exampleid3", "sg-exampleid4", aws_security_group.masters-externalpolicies-example-com.id]
 }
 
 output "masters_role_arn" {
@@ -101,7 +101,6 @@ resource "aws_autoscaling_group" "master-us-test-1a-masters-externalpolicies-exa
     id      = aws_launch_template.master-us-test-1a-masters-externalpolicies-example-com.id
     version = aws_launch_template.master-us-test-1a-masters-externalpolicies-example-com.latest_version
   }
-  load_balancers        = [aws_elb.api-externalpolicies-example-com.id]
   max_instance_lifetime = 0
   max_size              = 1
   metrics_granularity   = "1Minute"
@@ -168,6 +167,7 @@ resource "aws_autoscaling_group" "master-us-test-1a-masters-externalpolicies-exa
     propagate_at_launch = true
     value               = "owned"
   }
+  target_group_arns   = [aws_lb_target_group.tcp-externalpolicies-exam-30lrbr.id]
   vpc_zone_identifier = [aws_subnet.us-test-1a-externalpolicies-example-com.id]
 }
 
@@ -354,36 +354,6 @@ resource "aws_ebs_volume" "us-test-1a-etcd-main-externalpolicies-example-com" {
   type       = "gp3"
 }
 
-resource "aws_elb" "api-externalpolicies-example-com" {
-  connection_draining         = true
-  connection_draining_timeout = 300
-  cross_zone_load_balancing   = false
-  health_check {
-    healthy_threshold   = 2
-    interval            = 10
-    target              = "SSL:443"
-    timeout             = 5
-    unhealthy_threshold = 2
-  }
-  idle_timeout = 300
-  listener {
-    instance_port     = 443
-    instance_protocol = "TCP"
-    lb_port           = 443
-    lb_protocol       = "TCP"
-  }
-  name            = "api-externalpolicies-exam-5cse45"
-  security_groups = ["sg-exampleid3", "sg-exampleid4", aws_security_group.api-elb-externalpolicies-example-com.id]
-  subnets         = [aws_subnet.us-test-1a-externalpolicies-example-com.id]
-  tags = {
-    "KubernetesCluster"                                  = "externalpolicies.example.com"
-    "Name"                                               = "api.externalpolicies.example.com"
-    "Owner"                                              = "John Doe"
-    "foo/bar"                                            = "fib+baz"
-    "kubernetes.io/cluster/externalpolicies.example.com" = "owned"
-  }
-}
-
 resource "aws_iam_instance_profile" "masters-externalpolicies-example-com" {
   name = "masters.externalpolicies.example.com"
   role = aws_iam_role.masters-externalpolicies-example-com.name
@@ -436,12 +406,6 @@ resource "aws_iam_role_policy" "masters-externalpolicies-example-com" {
   name   = "masters.externalpolicies.example.com"
   policy = file("${path.module}/data/aws_iam_role_policy_masters.externalpolicies.example.com_policy")
   role   = aws_iam_role.masters-externalpolicies-example-com.name
-}
-
-resource "aws_iam_role_policy" "nodes-externalpolicies-example-com" {
-  name   = "nodes.externalpolicies.example.com"
-  policy = file("${path.module}/data/aws_iam_role_policy_nodes.externalpolicies.example.com_policy")
-  role   = aws_iam_role.nodes-externalpolicies-example-com.name
 }
 
 resource "aws_iam_role_policy_attachment" "master-policyoverride-1544513530" {
@@ -516,7 +480,7 @@ resource "aws_launch_template" "master-us-test-1a-masters-externalpolicies-examp
     associate_public_ip_address = true
     delete_on_termination       = true
     ipv6_address_count          = 0
-    security_groups             = [aws_security_group.masters-externalpolicies-example-com.id]
+    security_groups             = [aws_security_group.masters-externalpolicies-example-com.id, "sg-exampleid3", "sg-exampleid4"]
   }
   tag_specifications {
     resource_type = "instance"
@@ -537,6 +501,23 @@ resource "aws_launch_template" "master-us-test-1a-masters-externalpolicies-examp
   }
   tag_specifications {
     resource_type = "volume"
+    tags = {
+      "KubernetesCluster"                                                                                     = "externalpolicies.example.com"
+      "Name"                                                                                                  = "master-us-test-1a.masters.externalpolicies.example.com"
+      "Owner"                                                                                                 = "John Doe"
+      "aws-node-termination-handler/managed"                                                                  = ""
+      "foo/bar"                                                                                               = "fib+baz"
+      "k8s.io/cluster-autoscaler/node-template/label/kops.k8s.io/kops-controller-pki"                         = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node-role.kubernetes.io/control-plane"                   = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node.kubernetes.io/exclude-from-external-load-balancers" = ""
+      "k8s.io/role/control-plane"                                                                             = "1"
+      "k8s.io/role/master"                                                                                    = "1"
+      "kops.k8s.io/instancegroup"                                                                             = "master-us-test-1a"
+      "kubernetes.io/cluster/externalpolicies.example.com"                                                    = "owned"
+    }
+  }
+  tag_specifications {
+    resource_type = "network-interface"
     tags = {
       "KubernetesCluster"                                                                                     = "externalpolicies.example.com"
       "Name"                                                                                                  = "master-us-test-1a.masters.externalpolicies.example.com"
@@ -634,6 +615,20 @@ resource "aws_launch_template" "nodes-externalpolicies-example-com" {
       "kubernetes.io/cluster/externalpolicies.example.com"                         = "owned"
     }
   }
+  tag_specifications {
+    resource_type = "network-interface"
+    tags = {
+      "KubernetesCluster"                                                          = "externalpolicies.example.com"
+      "Name"                                                                       = "nodes.externalpolicies.example.com"
+      "Owner"                                                                      = "John Doe"
+      "aws-node-termination-handler/managed"                                       = ""
+      "foo/bar"                                                                    = "fib+baz"
+      "k8s.io/cluster-autoscaler/node-template/label/node-role.kubernetes.io/node" = ""
+      "k8s.io/role/node"                                                           = "1"
+      "kops.k8s.io/instancegroup"                                                  = "nodes"
+      "kubernetes.io/cluster/externalpolicies.example.com"                         = "owned"
+    }
+  }
   tags = {
     "KubernetesCluster"                                                          = "externalpolicies.example.com"
     "Name"                                                                       = "nodes.externalpolicies.example.com"
@@ -646,6 +641,56 @@ resource "aws_launch_template" "nodes-externalpolicies-example-com" {
     "kubernetes.io/cluster/externalpolicies.example.com"                         = "owned"
   }
   user_data = filebase64("${path.module}/data/aws_launch_template_nodes.externalpolicies.example.com_user_data")
+}
+
+resource "aws_lb" "api-externalpolicies-example-com" {
+  enable_cross_zone_load_balancing = false
+  internal                         = false
+  load_balancer_type               = "network"
+  name                             = "api-externalpolicies-exam-5cse45"
+  security_groups                  = ["sg-exampleid3", "sg-exampleid4", aws_security_group.api-elb-externalpolicies-example-com.id]
+  subnet_mapping {
+    subnet_id = aws_subnet.us-test-1a-externalpolicies-example-com.id
+  }
+  tags = {
+    "KubernetesCluster"                                  = "externalpolicies.example.com"
+    "Name"                                               = "api.externalpolicies.example.com"
+    "Owner"                                              = "John Doe"
+    "foo/bar"                                            = "fib+baz"
+    "kubernetes.io/cluster/externalpolicies.example.com" = "owned"
+  }
+}
+
+resource "aws_lb_listener" "api-externalpolicies-example-com-443" {
+  default_action {
+    target_group_arn = aws_lb_target_group.tcp-externalpolicies-exam-30lrbr.id
+    type             = "forward"
+  }
+  load_balancer_arn = aws_lb.api-externalpolicies-example-com.id
+  port              = 443
+  protocol          = "TCP"
+}
+
+resource "aws_lb_target_group" "tcp-externalpolicies-exam-30lrbr" {
+  connection_termination = "true"
+  deregistration_delay   = "30"
+  health_check {
+    healthy_threshold   = 2
+    interval            = 10
+    protocol            = "TCP"
+    unhealthy_threshold = 2
+  }
+  name     = "tcp-externalpolicies-exam-30lrbr"
+  port     = 443
+  protocol = "TCP"
+  tags = {
+    "KubernetesCluster"                                  = "externalpolicies.example.com"
+    "Name"                                               = "tcp-externalpolicies-exam-30lrbr"
+    "Owner"                                              = "John Doe"
+    "foo/bar"                                            = "fib+baz"
+    "kubernetes.io/cluster/externalpolicies.example.com" = "owned"
+  }
+  vpc_id = aws_vpc.externalpolicies-example-com.id
 }
 
 resource "aws_route" "route-0-0-0-0--0" {
@@ -663,8 +708,8 @@ resource "aws_route" "route-__--0" {
 resource "aws_route53_record" "api-externalpolicies-example-com" {
   alias {
     evaluate_target_health = false
-    name                   = aws_elb.api-externalpolicies-example-com.dns_name
-    zone_id                = aws_elb.api-externalpolicies-example-com.zone_id
+    name                   = aws_lb.api-externalpolicies-example-com.dns_name
+    zone_id                = aws_lb.api-externalpolicies-example-com.zone_id
   }
   name    = "api.externalpolicies.example.com"
   type    = "A"
@@ -674,8 +719,8 @@ resource "aws_route53_record" "api-externalpolicies-example-com" {
 resource "aws_route53_record" "api-externalpolicies-example-com-AAAA" {
   alias {
     evaluate_target_health = false
-    name                   = aws_elb.api-externalpolicies-example-com.dns_name
-    zone_id                = aws_elb.api-externalpolicies-example-com.zone_id
+    name                   = aws_lb.api-externalpolicies-example-com.dns_name
+    zone_id                = aws_lb.api-externalpolicies-example-com.zone_id
   }
   name    = "api.externalpolicies.example.com"
   type    = "AAAA"
@@ -807,6 +852,14 @@ resource "aws_s3_object" "kops-version-txt" {
   bucket                 = "testingBucket"
   content                = file("${path.module}/data/aws_s3_object_kops-version.txt_content")
   key                    = "clusters.example.com/externalpolicies.example.com/kops-version.txt"
+  provider               = aws.files
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_object" "manifests-channels-kops-channels" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_object_manifests-channels-kops-channels_content")
+  key                    = "clusters.example.com/externalpolicies.example.com/manifests/channels/kops-channels.yaml"
   provider               = aws.files
   server_side_encryption = "AES256"
 }
@@ -1174,7 +1227,7 @@ terraform {
     aws = {
       "configuration_aliases" = [aws.files]
       "source"                = "hashicorp/aws"
-      "version"               = ">= 5.0.0"
+      "version"               = ">= 6.57.1"
     }
   }
 }

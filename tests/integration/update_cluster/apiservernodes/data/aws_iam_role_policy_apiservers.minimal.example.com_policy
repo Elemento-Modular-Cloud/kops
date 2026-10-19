@@ -9,6 +9,26 @@
     },
     {
       "Action": [
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion",
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Effect": "Allow",
+      "Resource": "arn:aws-test:s3:::placeholder-write-bucket/clusters.example.com/minimal.example.com/backups/etcd/main/*"
+    },
+    {
+      "Action": [
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion",
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Effect": "Allow",
+      "Resource": "arn:aws-test:s3:::placeholder-write-bucket/clusters.example.com/minimal.example.com/backups/etcd/events/*"
+    },
+    {
+      "Action": [
         "s3:GetBucketLocation",
         "s3:GetEncryptionConfiguration",
         "s3:ListBucket",
@@ -21,20 +41,42 @@
     },
     {
       "Action": [
-        "autoscaling:DescribeAutoScalingInstances",
-        "ec2:DescribeInstanceTypes",
-        "ec2:DescribeInstances",
-        "ec2:DescribeRegions",
-        "iam:GetServerCertificate",
-        "iam:ListServerCertificates",
-        "kms:CreateGrant",
+        "s3:GetBucketLocation",
+        "s3:GetEncryptionConfiguration",
+        "s3:ListBucket",
+        "s3:ListBucketVersions"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws-test:s3:::placeholder-write-bucket"
+      ]
+    },
+    {
+      "Action": "kms:CreateGrant",
+      "Condition": {
+        "Bool": {
+          "kms:GrantIsForAWSResource": "true"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "*"
+    },
+    {
+      "Action": [
         "kms:Decrypt",
         "kms:DescribeKey",
         "kms:Encrypt",
         "kms:GenerateDataKey*",
-        "kms:GenerateRandom",
         "kms:ReEncrypt*"
       ],
+      "Condition": {
+        "StringLike": {
+          "kms:ViaService": [
+            "ec2.us-test-1.amazonaws.com",
+            "s3.*.amazonaws.com"
+          ]
+        }
+      },
       "Effect": "Allow",
       "Resource": "*"
     }

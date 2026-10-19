@@ -64,11 +64,35 @@ func (_ *NodeRoleNode) ServiceAccount() (types.NamespacedName, bool) {
 	return types.NamespacedName{}, false
 }
 
-// NodeRoleNode represents the role of bastion nodes, and implements Subject.
+// NodeRoleBastion represents the role of bastion nodes, and implements Subject.
 type NodeRoleBastion struct{}
 
 // ServiceAccount implements Subject.
 func (_ *NodeRoleBastion) ServiceAccount() (types.NamespacedName, bool) {
+	return types.NamespacedName{}, false
+}
+
+// NodeRoleEtcd represents the role of etcd-only nodes, and implements Subject.
+type NodeRoleEtcd struct{}
+
+// ServiceAccount implements Subject.
+func (_ *NodeRoleEtcd) ServiceAccount() (types.NamespacedName, bool) {
+	return types.NamespacedName{}, false
+}
+
+// NodeRoleScheduler represents the role of scheduler-only nodes, and implements Subject.
+type NodeRoleScheduler struct{}
+
+// ServiceAccount implements Subject.
+func (_ *NodeRoleScheduler) ServiceAccount() (types.NamespacedName, bool) {
+	return types.NamespacedName{}, false
+}
+
+// NodeRoleKubeControllerManager represents the role of kube-controller-manager-only nodes, and implements Subject.
+type NodeRoleKubeControllerManager struct{}
+
+// ServiceAccount implements Subject.
+func (_ *NodeRoleKubeControllerManager) ServiceAccount() (types.NamespacedName, bool) {
 	return types.NamespacedName{}, false
 }
 
@@ -100,6 +124,12 @@ func BuildNodeRoleSubject(igRole kops.InstanceGroupRole, enableLifecycleHookPerm
 		}, nil
 	case kops.InstanceGroupRoleBastion:
 		return &NodeRoleBastion{}, nil
+	case kops.InstanceGroupRoleEtcd:
+		return &NodeRoleEtcd{}, nil
+	case kops.InstanceGroupRoleScheduler:
+		return &NodeRoleScheduler{}, nil
+	case kops.InstanceGroupRoleKubeControllerManager:
+		return &NodeRoleKubeControllerManager{}, nil
 	default:
 		return nil, fmt.Errorf("unknown instancegroup role %q", igRole)
 	}
@@ -124,7 +154,7 @@ func addServiceAccountRoleForAWS(context *IAMModelContext, podSpec *corev1.PodSp
 	}
 
 	awsRoleARN := "arn:" + context.AWSPartition + ":iam::" + context.AWSAccountID + ":role/" + roleName
-	tokenDir := "/var/run/secrets/amazonaws.com/"
+	tokenDir := "/var/run/secrets/amazonaws.com/" //nolint:gosec // This is the projected token directory path, not a credential.
 	tokenName := "token"
 
 	volume := corev1.Volume{

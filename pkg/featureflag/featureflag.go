@@ -69,14 +69,22 @@ var (
 	SpotinstController = new("SpotinstController", Bool(true))
 	// VPCSkipEnableDNSSupport if set will make that a VPC does not need DNSSupport enabled.
 	VPCSkipEnableDNSSupport = new("VPCSkipEnableDNSSupport", Bool(false))
-	// SkipEtcdVersionCheck will bypass the check that etcd-manager is using a supported etcd version
-	SkipEtcdVersionCheck = new("SkipEtcdVersionCheck", Bool(false))
+	// EtcdEventsHTTP enables HTTP (non-TLS) for the events etcd cluster.
+	// This matches the pattern used by GCE scale tests and can help with
+	// TLS handshake overhead for the ephemeral events data.
+	// The main etcd cluster always uses HTTPS for security.
+	EtcdEventsHTTP = new("EtcdEventsHTTP", Bool(false))
 	// ClusterAddons activates experimental cluster-addons support
 	ClusterAddons = new("ClusterAddons", Bool(false))
 	// Azure toggles the Azure support.
 	Azure = new("Azure", Bool(false))
+	// AzureTerraform toggles the Azure terraform support.
+	AzureTerraform = new("AzureTerraform", Bool(false))
 	// APIServerNodes enables ability to provision nodes that only run the kube-apiserver.
 	APIServerNodes = new("APIServerNodes", Bool(false))
+	// ExperimentalRoles enables the InstanceGroup Role field to have a comma delineated roles list.
+	// It also enables the etcd, scheduler, kube-controller-manager and cloud-controller-manager roles.
+	ExperimentalRoles = new("ExperimentalRoles", Bool(false))
 	// UseAddonOperators activates experimental addon operator support
 	UseAddonOperators = new("UseAddonOperators", Bool(false))
 	// TerraformManagedFiles enables rendering managed files into the Terraform configuration.
@@ -85,19 +93,26 @@ var (
 	ImageDigest = new("ImageDigest", Bool(true))
 	// Scaleway toggles the Scaleway Cloud support.
 	Scaleway = new("Scaleway", Bool(false))
-	// SELinuxMount configures AWS EBS and GCE PD CSI drivers for SELinuxMount support.
-	// It expects than Kubernetes feature gate SELinuxMountReadWriteOncePod is
-	// enabled or GA in the API server, KCM and kubelet.
-	// OS with SELinux support on all nodes is recommended, but not required
-	// - the feature won't do anything when the node OS does not support SELinux.
-	// TODO(jsafrane): add to all CSI drivers installed by kops.
-	SELinuxMount = new("SELinuxMount", Bool(false))
+	// SELinuxMount is an escape-hatch flag for CSI driver SELinux mount support
+	// (CSIDriver.spec.seLinuxMount and the host mounts it requires) in the AWS EBS
+	// and GCP PD CSI drivers. The feature is enabled per-cluster via
+	// spec.containerd.selinuxEnabled; this flag is a plain kill switch on top of
+	// that (set -SELinuxMount to disable the feature unconditionally, e.g. if it
+	// causes trouble in the field). See
+	// upup/pkg/fi/cloudup.TemplateFunctions.UseSELinuxMount.
+	SELinuxMount = new("SELinuxMount", Bool(true))
 	// DO Terraform toggles the DO terraform support.
 	DOTerraform = new("DOTerraform", Bool(false))
 	// Metal enables the experimental bare-metal support.
 	Metal = new("Metal", Bool(false))
 	// AWSSingleNodesInstanceGroup enables the creation of a single node instance group instead of one per availability zone.
 	AWSSingleNodesInstanceGroup = new("AWSSingleNodesInstanceGroup", Bool(false))
+	// ClusterAPI enables support for Cluster API (CAPI) resources.
+	ClusterAPI = new("ClusterAPI", Bool(false))
+	// DiscoveryService enables support for OIDC discovery via a hosted service.
+	DiscoveryService = new("DiscoveryService", Bool(false))
+	// Linode feature flag toggles Akamai (Linode) Cloud support.
+	Linode = new("Linode", Bool(false))
 )
 
 // FeatureFlag defines a feature flag
@@ -149,6 +164,7 @@ func ParseFlags(f string) {
 	defer flagsMutex.Unlock()
 
 	f = strings.TrimSpace(f)
+	var parsed, unknown int
 	for _, s := range strings.Split(f, ",") {
 		s = strings.TrimSpace(s)
 		if s == "" {
@@ -167,9 +183,14 @@ func ParseFlags(f string) {
 		if ff != nil {
 			klog.Infof("FeatureFlag %q=%v", ff.Key, enabled)
 			ff.enabled = &enabled
+			parsed++
 		} else {
 			klog.Infof("Unknown FeatureFlag %q", s)
+			unknown++
 		}
+	}
+	if f != "" {
+		klog.Infof("ParseFlags: parsed %d flags from %q (unknown=%d, registered=%d)", parsed, f, unknown, len(flags))
 	}
 }
 

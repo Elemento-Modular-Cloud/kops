@@ -30,12 +30,14 @@ kops delete instance INSTANCE|NODE [flags]
 ### Options
 
 ```
+      --api-server string             Override the API server used when communicating with the cluster kube-apiserver
       --cloudonly                     Perform deletion update without confirming progress with Kubernetes
       --fail-on-drain-error           Fail if draining a node fails (default true)
       --fail-on-validate-error        Fail if the cluster fails to validate (default true)
   -h, --help                          help for instance
       --post-drain-delay duration     Time to wait after draining each node (default 5s)
       --surge                         Surge by detaching the node from the ASG before deletion (default true)
+      --use-kubeconfig                Use the server endpoint from the local kubeconfig instead of inferring from cluster name
       --validate-count int32          Number of times that a cluster needs to be validated after single node update (default 2)
       --validation-timeout duration   Maximum time to wait for a cluster to validate (default 15m0s)
   -y, --yes                           Specify --yes to immediately delete the instance
@@ -44,10 +46,12 @@ kops delete instance INSTANCE|NODE [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   yaml config file (default is $HOME/.kops.yaml)
-      --name string     Name of cluster. Overrides KOPS_CLUSTER_NAME environment variable
-      --state string    Location of state storage (kops 'config' file). Overrides KOPS_STATE_STORE environment variable
-  -v, --v Level         number for the log level verbosity
+      --alsologtostderrthreshold severity   logs at or above this threshold go to stderr when -alsologtostderr=true (no effect when -logtostderr=true)
+      --config string                       yaml config file (default is $HOME/.kops.yaml)
+      --legacy_stderr_threshold_behavior    If true, stderrthreshold is ignored when logtostderr=true (legacy behavior). If false, stderrthreshold is honored even when logtostderr=true
+      --name string                         Name of cluster. Overrides KOPS_CLUSTER_NAME environment variable
+      --state string                        Location of state storage (kops 'config' file). Overrides KOPS_STATE_STORE environment variable
+  -v, --v Level                             number for the log level verbosity
 ```
 
 ### SEE ALSO

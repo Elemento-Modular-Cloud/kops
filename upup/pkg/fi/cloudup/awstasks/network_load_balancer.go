@@ -19,13 +19,13 @@ package awstasks
 import (
 	"context"
 	"fmt"
+	"maps"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	elb "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancing"
 	elbv2 "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
 	elbv2types "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
 	route53types "github.com/aws/aws-sdk-go-v2/service/route53/types"
@@ -39,7 +39,7 @@ import (
 )
 
 // NetworkLoadBalancer manages an NLB.  We find the existing NLB using the Name tag.
-var _ DNSTarget = &NetworkLoadBalancer{}
+var _ DNSTarget = (*NetworkLoadBalancer)(nil)
 
 // +kops:fitask
 type NetworkLoadBalancer struct {
@@ -52,10 +52,6 @@ type NetworkLoadBalancer struct {
 	// The full, stable name will be in the Name tag.
 	// (NLB is restricted as to names, so we have limited choices!)
 	LoadBalancerBaseName *string
-
-	// CLBName is the name of a ClassicLoadBalancer to delete, if found.
-	// This enables migration from CLB -> NLB
-	CLBName *string
 
 	DNSName      *string
 	HostedZoneId *string
@@ -97,9 +93,9 @@ func (e *NetworkLoadBalancer) SetWaitForLoadBalancerReady(v bool) {
 	e.waitForLoadBalancerReady = v
 }
 
-var _ fi.CompareWithID = &NetworkLoadBalancer{}
-var _ fi.CloudupTaskNormalize = &NetworkLoadBalancer{}
-var _ fi.CloudupProducesDeletions = &NetworkLoadBalancer{}
+var _ fi.CompareWithID = (*NetworkLoadBalancer)(nil)
+var _ fi.CloudupTaskNormalize = (*NetworkLoadBalancer)(nil)
+var _ fi.CloudupProducesDeletions = (*NetworkLoadBalancer)(nil)
 
 func (e *NetworkLoadBalancer) CompareWithID() *string {
 	return e.Name
@@ -207,7 +203,6 @@ func (e *NetworkLoadBalancer) Find(c *fi.CloudupContext) (*NetworkLoadBalancer, 
 
 	actual := &NetworkLoadBalancer{}
 	actual.Name = e.Name
-	actual.CLBName = e.CLBName
 	actual.DNSName = lb.DNSName
 	actual.HostedZoneId = lb.CanonicalHostedZoneId // CanonicalHostedZoneNameID
 	actual.Scheme = lb.Scheme
@@ -269,7 +264,7 @@ func (e *NetworkLoadBalancer) Find(c *fi.CloudupContext) (*NetworkLoadBalancer, 
 				if err != nil {
 					return nil, err
 				}
-				actual.CrossZoneLoadBalancing = fi.PtrTo(b)
+				actual.CrossZoneLoadBalancing = new(b)
 			case "access_logs.s3.enabled":
 				b, err := strconv.ParseBool(*value)
 				if err != nil {
@@ -278,7 +273,7 @@ func (e *NetworkLoadBalancer) Find(c *fi.CloudupContext) (*NetworkLoadBalancer, 
 				if actual.AccessLog == nil {
 					actual.AccessLog = &NetworkLoadBalancerAccessLog{}
 				}
-				actual.AccessLog.Enabled = fi.PtrTo(b)
+				actual.AccessLog.Enabled = new(b)
 			case "access_logs.s3.bucket":
 				if actual.AccessLog == nil {
 					actual.AccessLog = &NetworkLoadBalancerAccessLog{}
@@ -341,7 +336,7 @@ func (e *NetworkLoadBalancer) Find(c *fi.CloudupContext) (*NetworkLoadBalancer, 
 	return actual, nil
 }
 
-var _ fi.HasAddress = &NetworkLoadBalancer{}
+var _ fi.HasAddress = (*NetworkLoadBalancer)(nil)
 
 // GetWellKnownServices implements fi.HasAddress::GetWellKnownServices.
 // It indicates which services we support with this load balancer.
@@ -370,8 +365,9 @@ func (e *NetworkLoadBalancer) FindAddresses(c *fi.CloudupContext) ([]string, err
 				addresses = append(addresses, fi.ValueOf(lb.LoadBalancer.DNSName))
 			}
 
-			if cluster.UsesNoneDNS() {
-				nis, err := cloud.FindELBV2NetworkInterfacesByName(fi.ValueOf(e.VPC.ID), aws.ToString(lb.LoadBalancer.LoadBalancerName))
+			if cluster.UsesLoadBalancerForKopsController() {
+				// Terraform does not populate the VPC task's ID, so use the discovered NLB's VPC.
+				nis, err := cloud.FindELBV2NetworkInterfacesByName(aws.ToString(lb.LoadBalancer.VpcId), aws.ToString(lb.LoadBalancer.LoadBalancerName))
 				if err != nil {
 					return nil, fmt.Errorf("failed to find network interfaces matching %q: %w", aws.ToString(lb.LoadBalancer.LoadBalancerName), err)
 				}
@@ -441,17 +437,26 @@ func (*NetworkLoadBalancer) CheckChanges(a, e, changes *NetworkLoadBalancer) err
 		if len(changes.SubnetMappings) > 0 {
 			expectedSubnets := make(map[string]*string)
 			for _, s := range e.SubnetMappings {
+				subnetID := fi.ValueOf(s.Subnet.ID)
+				if subnetID == "" {
+					return fmt.Errorf("Subnet ID is required for subnet name=%v", fi.ValueOf(s.Subnet.Name))
+				}
 				if s.AllocationID != nil {
-					expectedSubnets[*s.Subnet.ID] = s.AllocationID
+					expectedSubnets[subnetID] = s.AllocationID
 				} else if s.PrivateIPv4Address != nil {
-					expectedSubnets[*s.Subnet.ID] = s.PrivateIPv4Address
+					expectedSubnets[subnetID] = s.PrivateIPv4Address
 				} else {
-					expectedSubnets[*s.Subnet.ID] = nil
+					expectedSubnets[subnetID] = nil
 				}
 			}
 
 			for _, s := range a.SubnetMappings {
-				eIP, ok := expectedSubnets[*s.Subnet.ID]
+				subnetID := fi.ValueOf(s.Subnet.ID)
+				if subnetID == "" {
+					return fmt.Errorf("Subnet ID is required for subnet name=%v", fi.ValueOf(s.Subnet.Name))
+				}
+
+				eIP, ok := expectedSubnets[subnetID]
 				if !ok {
 					return fmt.Errorf("network load balancers do not support detaching subnets")
 				}
@@ -471,10 +476,9 @@ func (_ *NetworkLoadBalancer) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *Ne
 
 	revision := e.revision
 
-	// TODO: Use maps.Clone when we are >= go1.21 on supported branches
-	tags := make(map[string]string)
-	for k, v := range e.Tags {
-		tags[k] = v
+	tags := maps.Clone(e.Tags)
+	if tags == nil {
+		tags = make(map[string]string)
 	}
 
 	// We removed revision for the diff/plan, but we want to set it
@@ -689,7 +693,7 @@ func (_ *NetworkLoadBalancer) RenderTerraform(t *terraform.TerraformTarget, a, e
 }
 
 func (e *NetworkLoadBalancer) TerraformName() string {
-	tfName := strings.Replace(fi.ValueOf(e.Name), ".", "-", -1)
+	tfName := strings.ReplaceAll(fi.ValueOf(e.Name), ".", "-")
 	return tfName
 }
 
@@ -701,62 +705,9 @@ func (e *NetworkLoadBalancer) TerraformLink(params ...string) *terraformWriter.L
 	return terraformWriter.LiteralProperty("aws_lb", e.TerraformName(), prop)
 }
 
-// FindDeletions schedules deletion of the corresponding legacy classic load balancer when it no longer has targets.
+// FindDeletions schedules deletion of load balancer revisions that are no longer in use.
 func (e *NetworkLoadBalancer) FindDeletions(context *fi.CloudupContext) ([]fi.CloudupDeletion, error) {
-	var deletions []fi.CloudupDeletion
-
-	deletions = append(deletions, e.deletions...)
-
-	if e.CLBName != nil {
-		cloud := context.T.Cloud.(awsup.AWSCloud)
-
-		lb, err := cloud.FindELBByNameTag(fi.ValueOf(e.CLBName))
-		if err != nil {
-			return nil, err
-		}
-
-		if lb != nil {
-			klog.V(4).Infof("Found CLB %v", aws.ToString(lb.LoadBalancerName))
-			deletions = append(deletions, &deleteClassicLoadBalancer{LoadBalancerName: e.CLBName})
-		}
-	}
-
-	return deletions, nil
-}
-
-type deleteClassicLoadBalancer struct {
-	// LoadBalancerName is the name in ELB, possibly different from our name
-	// (ELB is restricted as to names, so we have limited choices!)
-	LoadBalancerName *string
-}
-
-func (d deleteClassicLoadBalancer) TaskName() string {
-	return "ClassicLoadBalancer"
-}
-
-func (d deleteClassicLoadBalancer) Item() string {
-	return *d.LoadBalancerName
-}
-
-func (d deleteClassicLoadBalancer) DeferDeletion() bool {
-	return true
-}
-
-func (d deleteClassicLoadBalancer) Delete(t fi.CloudupTarget) error {
-	ctx := context.TODO()
-	awsTarget, ok := t.(*awsup.AWSAPITarget)
-	if !ok {
-		return fmt.Errorf("unexpected target type for deletion: %T", t)
-	}
-
-	_, err := awsTarget.Cloud.ELB().DeleteLoadBalancer(ctx, &elb.DeleteLoadBalancerInput{
-		LoadBalancerName: d.LoadBalancerName,
-	})
-	if err != nil {
-		return fmt.Errorf("deleting classic LoadBalancer: %w", err)
-	}
-
-	return nil
+	return e.deletions, nil
 }
 
 // deleteNLB tracks a NLB that we're going to delete
@@ -765,13 +716,7 @@ type deleteNLB struct {
 	obj *awsup.LoadBalancerInfo
 }
 
-func buildDeleteNLB(obj *awsup.LoadBalancerInfo) *deleteNLB {
-	d := &deleteNLB{}
-	d.obj = obj
-	return d
-}
-
-var _ fi.CloudupDeletion = &deleteNLB{}
+var _ fi.CloudupDeletion = (*deleteNLB)(nil)
 
 func (d *deleteNLB) Delete(t fi.CloudupTarget) error {
 	ctx := context.TODO()

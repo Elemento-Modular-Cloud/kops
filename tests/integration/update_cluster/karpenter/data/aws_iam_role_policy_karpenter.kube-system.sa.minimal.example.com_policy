@@ -3,19 +3,183 @@
     {
       "Action": [
         "ec2:CreateFleet",
+        "ec2:RunInstances"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws-test:ec2:*:*:capacity-reservation/*",
+        "arn:aws-test:ec2:*:*:security-group/*",
+        "arn:aws-test:ec2:*:*:subnet/*",
+        "arn:aws-test:ec2:*::image/*",
+        "arn:aws-test:ec2:*::snapshot/*"
+      ]
+    },
+    {
+      "Action": [
+        "ec2:CreateFleet",
+        "ec2:RunInstances"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/KubernetesCluster": "minimal.example.com"
+        },
+        "StringLike": {
+          "aws:ResourceTag/karpenter.sh/nodepool": "*"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws-test:ec2:*:*:launch-template/*"
+      ]
+    },
+    {
+      "Action": [
+        "ec2:CreateFleet",
+        "ec2:CreateLaunchTemplate",
+        "ec2:RunInstances"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/KubernetesCluster": "minimal.example.com"
+        },
+        "StringLike": {
+          "aws:RequestTag/karpenter.sh/nodepool": "*"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws-test:ec2:*:*:fleet/*",
+        "arn:aws-test:ec2:*:*:instance/*",
+        "arn:aws-test:ec2:*:*:launch-template/*",
+        "arn:aws-test:ec2:*:*:network-interface/*",
+        "arn:aws-test:ec2:*:*:spot-instances-request/*",
+        "arn:aws-test:ec2:*:*:volume/*"
+      ]
+    },
+    {
+      "Action": "ec2:CreateTags",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/KubernetesCluster": "minimal.example.com",
+          "ec2:CreateAction": [
+            "CreateFleet",
+            "CreateLaunchTemplate",
+            "RunInstances"
+          ]
+        },
+        "StringLike": {
+          "aws:RequestTag/karpenter.sh/nodepool": "*"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws-test:ec2:*:*:fleet/*",
+        "arn:aws-test:ec2:*:*:instance/*",
+        "arn:aws-test:ec2:*:*:launch-template/*",
+        "arn:aws-test:ec2:*:*:network-interface/*",
+        "arn:aws-test:ec2:*:*:spot-instances-request/*",
+        "arn:aws-test:ec2:*:*:volume/*"
+      ]
+    },
+    {
+      "Action": [
         "ec2:CreateTags",
-        "ec2:DescribeAvailabilityZones",
+        "ec2:DeleteTags"
+      ],
+      "Condition": {
+        "Null": {
+          "aws:RequestTag/KubernetesCluster": "true"
+        },
+        "StringEquals": {
+          "aws:ResourceTag/KubernetesCluster": "minimal.example.com"
+        },
+        "StringLike": {
+          "aws:ResourceTag/karpenter.sh/nodepool": "*"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws-test:ec2:*:*:fleet/*",
+        "arn:aws-test:ec2:*:*:instance/*",
+        "arn:aws-test:ec2:*:*:launch-template/*",
+        "arn:aws-test:ec2:*:*:network-interface/*",
+        "arn:aws-test:ec2:*:*:spot-instances-request/*",
+        "arn:aws-test:ec2:*:*:volume/*"
+      ]
+    },
+    {
+      "Action": [
+        "ec2:DeleteLaunchTemplate",
+        "ec2:TerminateInstances"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/KubernetesCluster": "minimal.example.com"
+        },
+        "StringLike": {
+          "aws:ResourceTag/karpenter.sh/nodepool": "*"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws-test:ec2:*:*:instance/*",
+        "arn:aws-test:ec2:*:*:launch-template/*"
+      ]
+    },
+    {
+      "Action": "iam:PassRole",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ec2.amazonaws.com"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "arn:aws-test:iam::*:role/nodes.minimal.example.com"
+    },
+    {
+      "Action": "kms:CreateGrant",
+      "Condition": {
+        "Bool": {
+          "kms:GrantIsForAWSResource": "true"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "*"
+    },
+    {
+      "Action": [
+        "kms:Decrypt",
+        "kms:DescribeKey",
+        "kms:Encrypt",
+        "kms:GenerateDataKey*",
+        "kms:ReEncrypt*"
+      ],
+      "Condition": {
+        "StringLike": {
+          "kms:ViaService": [
+            "ec2.us-test-1.amazonaws.com",
+            "s3.*.amazonaws.com"
+          ]
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "*"
+    },
+    {
+      "Action": [
+        "ec2:DescribeCapacityReservations",
         "ec2:DescribeImages",
+        "ec2:DescribeInstanceStatus",
         "ec2:DescribeInstanceTypeOfferings",
         "ec2:DescribeInstanceTypes",
         "ec2:DescribeInstances",
         "ec2:DescribeLaunchTemplates",
+        "ec2:DescribePlacementGroups",
         "ec2:DescribeSecurityGroups",
         "ec2:DescribeSpotPriceHistory",
         "ec2:DescribeSubnets",
-        "ec2:RunInstances",
-        "ec2:TerminateInstances",
-        "iam:PassRole",
+        "iam:GetInstanceProfile",
+        "iam:ListInstanceProfiles",
         "pricing:GetProducts",
         "ssm:GetParameter"
       ],

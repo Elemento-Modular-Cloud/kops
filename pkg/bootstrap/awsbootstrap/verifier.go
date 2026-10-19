@@ -1,0 +1,528 @@
+/*
+Copyright 2020 The Kubernetes Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package awsbootstrap
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/xml"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/kops/pkg/bootstrap"
+	"k8s.io/kops/pkg/wellknownports"
+)
+
+// cloudTagInstanceGroupName is the cloud tag that identifies the instance group an instance belongs to.
+// It must match nodeidentityaws.CloudTagInstanceGroupName; it is declared here because importing
+// pkg/nodeidentity/aws would store *ec2.Client in an interface, keeping every EC2 operation in the
+// nodeup binary.
+const cloudTagInstanceGroupName = "kops.k8s.io/instancegroup"
+
+type AWSVerifierOptions struct {
+	// NodesRoles are the IAM roles that worker nodes are permitted to have.
+	NodesRoles []string `json:"nodesRoles"`
+	// Region is the AWS region of the cluster.
+	Region string
+	// UseIPBasedNodeNames names nodes after the EC2 private DNS name instead of the instance ID.
+	UseIPBasedNodeNames bool `json:"useIPBasedNodeNames,omitempty"`
+}
+
+type awsVerifier struct {
+	accountId string
+	partition string
+	opt       AWSVerifierOptions
+
+	ec2    *ec2.Client
+	client http.Client
+
+	stsRequestValidator *stsRequestValidator
+}
+
+var _ bootstrap.Verifier = (*awsVerifier)(nil)
+
+func NewAWSVerifier(ctx context.Context, opt *AWSVerifierOptions) (bootstrap.Verifier, error) {
+	config, err := awsconfig.LoadDefaultConfig(
+		ctx,
+		awsconfig.WithRegion(opt.Region),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load aws config: %w", err)
+	}
+
+	stsClient := sts.NewFromConfig(config)
+	identity, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	if err != nil {
+		return nil, err
+	}
+
+	partition := strings.Split(aws.ToString(identity.Arn), ":")[1]
+
+	ec2Client := ec2.NewFromConfig(config)
+
+	stsRequestValidator, err := buildSTSRequestValidator(ctx, stsClient)
+	if err != nil {
+		return nil, err
+	}
+
+	return &awsVerifier{
+		accountId:           aws.ToString(identity.Account),
+		partition:           partition,
+		opt:                 *opt,
+		ec2:                 ec2Client,
+		stsRequestValidator: stsRequestValidator,
+		client: http.Client{
+			Transport: &http.Transport{
+				Proxy: http.ProxyFromEnvironment,
+				DialContext: (&net.Dialer{
+					Timeout: 30 * time.Second,
+				}).DialContext,
+				ForceAttemptHTTP2:     true,
+				DisableKeepAlives:     true,
+				MaxIdleConnsPerHost:   -1,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+			},
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+	}, nil
+}
+
+type GetCallerIdentityResponse struct {
+	XMLName                 xml.Name                  `xml:"GetCallerIdentityResponse"`
+	GetCallerIdentityResult []GetCallerIdentityResult `xml:"GetCallerIdentityResult"`
+	ResponseMetadata        []ResponseMetadata        `xml:"ResponseMetadata"`
+}
+
+type GetCallerIdentityResult struct {
+	Arn     string `xml:"Arn"`
+	UserId  string `xml:"UserId"`
+	Account string `xml:"Account"`
+}
+
+type ResponseMetadata struct {
+	RequestId string `xml:"RequestId"`
+}
+
+func (a awsVerifier) VerifyToken(ctx context.Context, rawRequest *http.Request, token string, body []byte) (*bootstrap.VerifyResult, error) {
+	if strings.HasPrefix(token, AWSAuthenticationTokenPrefixV1) {
+		return a.verifyTokenV1(ctx, token, body, a.verifyCallerIdentity)
+	}
+	if strings.HasPrefix(token, AWSAuthenticationTokenPrefixV2) {
+		return a.verifyTokenV2(ctx, token, body, a.verifyCallerIdentity)
+	}
+
+	return nil, bootstrap.ErrNotThisVerifier
+}
+
+func (a awsVerifier) verifyTokenV1(ctx context.Context, token string, body []byte, verifyCallerIdentity verifyCallerIdentityFunc) (*bootstrap.VerifyResult, error) {
+	token = strings.TrimPrefix(token, AWSAuthenticationTokenPrefixV1)
+
+	tokenBytes, err := base64.StdEncoding.DecodeString(token)
+	if err != nil {
+		return nil, fmt.Errorf("decoding authorization token: %w", err)
+	}
+	var decoded awsV1Token
+	if err := json.Unmarshal(tokenBytes, &decoded); err != nil {
+		return nil, fmt.Errorf("unmarshalling authorization token: %w", err)
+	}
+
+	// Verify the token has signed the body content.
+	sha := sha256.Sum256(body)
+	decodedHeaders := http.Header(decoded)
+
+	if decodedHeaders.Get("X-Kops-Request-SHA") != base64.RawStdEncoding.EncodeToString(sha[:]) {
+		return nil, fmt.Errorf("incorrect SHA")
+	}
+
+	authorization := decodedHeaders.Get("Authorization")
+	if !strings.HasPrefix(authorization, "AWS4-HMAC-SHA256 ") {
+		return nil, fmt.Errorf("incorrect authorization algorithm")
+	}
+
+	amzSignature := ""
+	amzCredential := ""
+	amzSignedHeaders := ""
+
+	for _, token := range strings.Split(strings.TrimPrefix(authorization, "AWS4-HMAC-SHA256 "), ", ") {
+		kv := strings.SplitN(token, "=", 2)
+		if len(kv) == 1 {
+			return nil, fmt.Errorf("incorrect authorization format")
+		}
+		got := kv[1]
+		switch kv[0] {
+		case "Signature":
+			amzSignature = got
+		case "Credential":
+			amzCredential = got
+		case "SignedHeaders":
+			amzSignedHeaders = got
+		}
+	}
+	signedHeaders := sets.New(strings.Split(amzSignedHeaders, ";")...)
+	if !signedHeaders.Has("x-kops-request-sha") {
+		return nil, fmt.Errorf("unexpected signed headers value")
+	}
+
+	if amzSignature == "" {
+		return nil, fmt.Errorf("unexpected signature value")
+	}
+	if amzCredential == "" {
+		return nil, fmt.Errorf("unexpected credential value")
+	}
+
+	callerIdentity, err := a.stsRequestValidator.getCallerIdentityV1(ctx, &a.client, decoded)
+	if err != nil {
+		return nil, err
+	}
+
+	return verifyCallerIdentity(ctx, callerIdentity)
+}
+
+func (a awsVerifier) verifyTokenV2(ctx context.Context, token string, body []byte, verifyCallerIdentity verifyCallerIdentityFunc) (*bootstrap.VerifyResult, error) {
+	token = strings.TrimPrefix(token, AWSAuthenticationTokenPrefixV2)
+
+	tokenBytes, err := base64.StdEncoding.DecodeString(token)
+	if err != nil {
+		return nil, fmt.Errorf("decoding authorization token: %v", err)
+	}
+	var decoded awsV2Token
+	if err := json.Unmarshal(tokenBytes, &decoded); err != nil {
+		return nil, fmt.Errorf("unmarshalling authorization token: %v", err)
+	}
+
+	// Verify the token has signed the body content.
+	sha := sha256.Sum256(body)
+	if decoded.SignedHeader.Get("X-Kops-Request-SHA") != base64.RawStdEncoding.EncodeToString(sha[:]) {
+		return nil, fmt.Errorf("incorrect SHA")
+	}
+
+	reqURL, err := url.Parse(decoded.URL)
+	if err != nil {
+		return nil, fmt.Errorf("parsing STS request URL: %v", err)
+	}
+	signedHeaders := sets.New(strings.Split(reqURL.Query().Get("X-Amz-SignedHeaders"), ";")...)
+	if !signedHeaders.Has("x-kops-request-sha") {
+		return nil, fmt.Errorf("unexpected signed headers value")
+	}
+
+	if !a.stsRequestValidator.isValidV2(reqURL) {
+		return nil, fmt.Errorf("invalid STS url: host=%q, path=%q", reqURL.Host, reqURL.Path)
+	}
+
+	callerIdentity, err := a.stsRequestValidator.getCallerIdentityV2(ctx, &a.client, &decoded)
+	if err != nil {
+		return nil, err
+	}
+
+	return verifyCallerIdentity(ctx, callerIdentity)
+}
+
+type verifyCallerIdentityFunc func(ctx context.Context, callerIdentity *GetCallerIdentityResponse) (*bootstrap.VerifyResult, error)
+
+func (a awsVerifier) verifyCallerIdentity(ctx context.Context, callerIdentity *GetCallerIdentityResponse) (*bootstrap.VerifyResult, error) {
+	if callerIdentity.GetCallerIdentityResult[0].Account != a.accountId {
+		return nil, fmt.Errorf("incorrect account %s", callerIdentity.GetCallerIdentityResult[0].Account)
+	}
+
+	arn := callerIdentity.GetCallerIdentityResult[0].Arn
+	parts := strings.Split(arn, ":")
+	if len(parts) != 6 {
+		return nil, fmt.Errorf("arn %q contains unexpected number of colons", arn)
+	}
+	if parts[0] != "arn" {
+		return nil, fmt.Errorf("arn %q doesn't start with \"arn:\"", arn)
+	}
+	if parts[1] != a.partition {
+		return nil, fmt.Errorf("arn %q not in partion %q", arn, a.partition)
+	}
+	if parts[2] != "iam" && parts[2] != "sts" {
+		return nil, fmt.Errorf("arn %q has unrecognized service", arn)
+	}
+	// parts[3] is region
+	// parts[4] is account
+	resource := strings.Split(parts[5], "/")
+	if resource[0] != "assumed-role" {
+		return nil, fmt.Errorf("arn %q has unrecognized type", arn)
+	}
+	if len(resource) < 3 {
+		return nil, fmt.Errorf("arn %q contains too few slashes", arn)
+	}
+	found := false
+	for _, role := range a.opt.NodesRoles {
+		if resource[1] == role {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("arn %q does not contain acceptable node role", arn)
+	}
+
+	instanceID := resource[2]
+	instances, err := a.ec2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		InstanceIds: []string{instanceID},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("describing instance for arn %q", arn)
+	}
+
+	if len(instances.Reservations) <= 0 || len(instances.Reservations[0].Instances) <= 0 {
+		return nil, fmt.Errorf("missing instance id: %s", instanceID)
+	}
+	if len(instances.Reservations[0].Instances) > 1 {
+		return nil, fmt.Errorf("found multiple instances with instance id: %s", instanceID)
+	}
+
+	instance := instances.Reservations[0].Instances[0]
+
+	addrs, err := GetInstanceCertificateNames(instances)
+	if err != nil {
+		return nil, err
+	}
+
+	var challengeEndpoints []string
+	for _, nic := range instance.NetworkInterfaces {
+		if ip := aws.ToString(nic.PrivateIpAddress); ip != "" {
+			challengeEndpoints = append(challengeEndpoints, net.JoinHostPort(ip, strconv.Itoa(wellknownports.NodeupChallenge)))
+		}
+		for _, a := range nic.PrivateIpAddresses {
+			if ip := aws.ToString(a.PrivateIpAddress); ip != "" {
+				challengeEndpoints = append(challengeEndpoints, net.JoinHostPort(ip, strconv.Itoa(wellknownports.NodeupChallenge)))
+			}
+		}
+
+		for _, a := range nic.Ipv6Addresses {
+			if ip := aws.ToString(a.Ipv6Address); ip != "" {
+				challengeEndpoints = append(challengeEndpoints, net.JoinHostPort(ip, strconv.Itoa(wellknownports.NodeupChallenge)))
+			}
+		}
+	}
+
+	if len(challengeEndpoints) == 0 {
+		return nil, fmt.Errorf("cannot determine challenge endpoint for instance id: %s", instanceID)
+	}
+
+	nodeName := addrs[0]
+	if a.opt.UseIPBasedNodeNames {
+		// Derive the node name with the same formula nodeup uses, so that the certificates are
+		// issued for the exact name the node registers with, whatever the VPC DNS configuration.
+		privateIPv4 := aws.ToString(instance.PrivateIpAddress)
+		if privateIPv4 == "" {
+			return nil, fmt.Errorf("instance %q has no private IPv4 address", instanceID)
+		}
+		nodeName = PrivateDNSName(privateIPv4, a.opt.Region)
+		if !slices.Contains(addrs, nodeName) {
+			addrs = append(addrs, nodeName)
+		}
+	}
+
+	result := &bootstrap.VerifyResult{
+		NodeName:          nodeName,
+		CertificateNames:  addrs,
+		ChallengeEndpoint: challengeEndpoints[0],
+	}
+
+	for _, tag := range instance.Tags {
+		tagKey := aws.ToString(tag.Key)
+		if tagKey == cloudTagInstanceGroupName {
+			result.InstanceGroupName = aws.ToString(tag.Value)
+		}
+	}
+
+	return result, nil
+}
+
+// stsRequestValidator describes valid STS Presigned URLs, and is used to validate client authentication requests.
+type stsRequestValidator struct {
+	Host string
+}
+
+// IsValid performs some basic pre-validation of the request URL.
+func (s *stsRequestValidator) isValidV2(u *url.URL) bool {
+	// The URL comes from the (untrusted) token; without this check a crafted http:// URL would
+	// make us send the request in plaintext.
+	if u.Scheme != "https" {
+		return false
+	}
+	if u.Host != s.Host {
+		return false
+	}
+	if u.Path != "/" {
+		return false
+	}
+	if u.Query().Get("Action") != "GetCallerIdentity" {
+		return false
+	}
+	if len(u.Query()["Action"]) != 1 {
+		return false
+	}
+
+	return true
+}
+
+// getCallerIdentityV2 will request the presigned token URL, and decode the returned identity.
+func (s *stsRequestValidator) getCallerIdentityV2(ctx context.Context, httpClient *http.Client, decoded *awsV2Token) (*GetCallerIdentityResponse, error) {
+	reqURL, err := url.Parse(decoded.URL)
+	if err != nil {
+		return nil, fmt.Errorf("parsing STS request URL: %w", err)
+	}
+
+	if !s.isValidV2(reqURL) {
+		return nil, fmt.Errorf("url not valid for STS request")
+	}
+
+	req := &http.Request{
+		URL:    reqURL,
+		Method: decoded.Method,
+		Header: decoded.SignedHeader,
+	}
+	response, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("sending STS request: %v", err)
+	}
+	if response != nil {
+		defer response.Body.Close()
+	}
+
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading STS response: %v", err)
+	}
+	if response.StatusCode != 200 {
+		return nil, fmt.Errorf("received status code %d from STS: %s", response.StatusCode, string(responseBody))
+	}
+
+	callerIdentity := &GetCallerIdentityResponse{}
+	err = xml.NewDecoder(bytes.NewReader(responseBody)).Decode(callerIdentity)
+	if err != nil {
+		return nil, fmt.Errorf("decoding STS response: %v", err)
+	}
+
+	return callerIdentity, nil
+}
+
+// GetCallerIdentityV1 will request the presigned token URL, and decode the returned identity.
+func (s *stsRequestValidator) getCallerIdentityV1(ctx context.Context, httpClient *http.Client, decoded awsV1Token) (*GetCallerIdentityResponse, error) {
+	// Well-known V1 request body
+	body := []byte("Action=GetCallerIdentity&Version=2011-06-15")
+
+	// The host is not passed in V1 (a shortcoming of V1)
+	host := s.Host
+	stsURL := "https://" + host + "/"
+
+	req, err := http.NewRequest("POST", stsURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build STS request: %w", err)
+	}
+	req.Header = http.Header(decoded)
+
+	response, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("sending STS request: %v", err)
+	}
+	if response != nil {
+		defer response.Body.Close()
+	}
+
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading STS response: %v", err)
+	}
+	if response.StatusCode != 200 {
+		return nil, fmt.Errorf("received status code %d from STS: %s", response.StatusCode, string(responseBody))
+	}
+
+	callerIdentity := &GetCallerIdentityResponse{}
+	err = xml.NewDecoder(bytes.NewReader(responseBody)).Decode(callerIdentity)
+	if err != nil {
+		return nil, fmt.Errorf("decoding STS response: %v", err)
+	}
+
+	return callerIdentity, nil
+}
+
+// buildSTSRequestValidator determines the form of a valid STS presigned URL.
+func buildSTSRequestValidator(ctx context.Context, stsClient *sts.Client) (*stsRequestValidator, error) {
+	// We build a presigned token ourselves, primarily to get the expected hostname for the endpoint.
+	signed, err := sts.NewPresignClient(stsClient).PresignGetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	if err != nil {
+		return nil, fmt.Errorf("building presigned request: %w", err)
+	}
+	u, err := url.Parse(signed.URL)
+	if err != nil {
+		return nil, fmt.Errorf("parsing presigned url: %w", err)
+	}
+	return &stsRequestValidator{Host: u.Host}, nil
+}
+
+// GetInstanceCertificateNames returns the instance names and addresses that should go into
+// certificates: the instance ID, the private DNS name and the IP addresses.
+func GetInstanceCertificateNames(instances *ec2.DescribeInstancesOutput) (addrs []string, err error) {
+	if len(instances.Reservations) != 1 {
+		return nil, fmt.Errorf("too many reservations returned for the single instance-id")
+	}
+
+	if len(instances.Reservations[0].Instances) != 1 {
+		return nil, fmt.Errorf("too many instances returned for the single instance-id")
+	}
+
+	instance := instances.Reservations[0].Instances[0]
+
+	addrs = append(addrs, *instance.InstanceId)
+
+	if instance.PrivateDnsName != nil {
+		addrs = append(addrs, *instance.PrivateDnsName)
+	}
+
+	// We only use data for the first interface, and only the first IP
+	for _, iface := range instance.NetworkInterfaces {
+		if iface.Attachment == nil {
+			continue
+		}
+		if *iface.Attachment.DeviceIndex != 0 {
+			continue
+		}
+		if iface.PrivateIpAddress != nil {
+			addrs = append(addrs, *iface.PrivateIpAddress)
+		}
+		if len(iface.Ipv6Addresses) > 0 {
+			addrs = append(addrs, *iface.Ipv6Addresses[0].Ipv6Address)
+		}
+		if iface.Association != nil && iface.Association.PublicIp != nil {
+			addrs = append(addrs, *iface.Association.PublicIp)
+		}
+	}
+	return addrs, nil
+}

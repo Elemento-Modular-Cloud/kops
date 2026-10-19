@@ -42,24 +42,24 @@ func (m *MockELBV2) DescribeTargetGroups(ctx context.Context, request *elbv2.Des
 	var tgs []elbv2types.TargetGroup
 	for _, tg := range m.TargetGroups {
 		match := false
-
-		if len(request.TargetGroupArns) > 0 {
+		switch {
+		case len(request.TargetGroupArns) > 0:
 			for _, name := range request.TargetGroupArns {
 				if aws.ToString(tg.description.TargetGroupArn) == name {
 					match = true
 				}
 			}
-		} else if request.LoadBalancerArn != nil {
+		case request.LoadBalancerArn != nil:
 			if len(tg.description.LoadBalancerArns) > 0 && tg.description.LoadBalancerArns[0] == aws.ToString(request.LoadBalancerArn) {
 				match = true
 			}
-		} else if len(request.Names) > 0 {
+		case len(request.Names) > 0:
 			for _, name := range request.Names {
 				if aws.ToString(tg.description.TargetGroupName) == name {
 					match = true
 				}
 			}
-		} else {
+		default:
 			match = true
 		}
 
@@ -90,6 +90,7 @@ func (m *MockELBV2) CreateTargetGroup(ctx context.Context, request *elbv2.Create
 		VpcId:                   request.VpcId,
 		HealthyThresholdCount:   request.HealthyThresholdCount,
 		UnhealthyThresholdCount: request.UnhealthyThresholdCount,
+		HealthCheckProtocol:     request.HealthCheckProtocol,
 	}
 
 	m.tgCount++
@@ -141,4 +142,38 @@ func (m *MockELBV2) ModifyTargetGroupAttributes(ctx context.Context, request *el
 	arn := aws.ToString(request.TargetGroupArn)
 	m.TargetGroups[arn].attributes = request.Attributes
 	return &elbv2.ModifyTargetGroupAttributesOutput{Attributes: request.Attributes}, nil
+}
+
+func (m *MockELBV2) ModifyTargetGroup(ctx context.Context, request *elbv2.ModifyTargetGroupInput, optFns ...func(*elbv2.Options)) (*elbv2.ModifyTargetGroupOutput, error) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	klog.Infof("ModifyTargetGroup %v", request)
+
+	// Layer 7 health checks require a path and a return code, matching the AWS API validation.
+	proto := request.HealthCheckProtocol
+	if proto == elbv2types.ProtocolEnumHttp || proto == elbv2types.ProtocolEnumHttps {
+		if request.HealthCheckPath == nil || request.Matcher == nil {
+			return nil, fmt.Errorf("ValidationError: Path and return code are required for layer 7 health checks")
+		}
+	}
+
+	arn := aws.ToString(request.TargetGroupArn)
+	tg := m.TargetGroups[arn]
+	if request.HealthCheckProtocol != "" {
+		tg.description.HealthCheckProtocol = request.HealthCheckProtocol
+	}
+	if request.HealthCheckPath != nil {
+		tg.description.HealthCheckPath = request.HealthCheckPath
+	}
+	if request.Matcher != nil {
+		tg.description.Matcher = request.Matcher
+	}
+	if request.HealthyThresholdCount != nil {
+		tg.description.HealthyThresholdCount = request.HealthyThresholdCount
+	}
+	if request.UnhealthyThresholdCount != nil {
+		tg.description.UnhealthyThresholdCount = request.UnhealthyThresholdCount
+	}
+	return &elbv2.ModifyTargetGroupOutput{TargetGroups: []elbv2types.TargetGroup{tg.description}}, nil
 }

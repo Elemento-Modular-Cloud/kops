@@ -65,7 +65,7 @@ type forwardingRulePruneSpec struct {
 	Name string
 }
 
-var _ fi.CompareWithID = &ForwardingRule{}
+var _ fi.CompareWithID = (*ForwardingRule)(nil)
 
 func (e *ForwardingRule) CompareWithID() *string {
 	return e.Name
@@ -90,7 +90,7 @@ func (e *ForwardingRule) Find(c *fi.CloudupContext) (*ForwardingRule, error) {
 	}
 
 	actual := &ForwardingRule{
-		Name:       fi.PtrTo(r.Name),
+		Name:       new(r.Name),
 		IPProtocol: r.IPProtocol,
 	}
 	if r.PortRange != "" {
@@ -102,7 +102,7 @@ func (e *ForwardingRule) Find(c *fi.CloudupContext) (*ForwardingRule, error) {
 
 	if r.Target != "" {
 		actual.TargetPool = &TargetPool{
-			Name: fi.PtrTo(lastComponent(r.Target)),
+			Name: new(lastComponent(r.Target)),
 		}
 	}
 	if r.IPAddress != "" {
@@ -114,20 +114,20 @@ func (e *ForwardingRule) Find(c *fi.CloudupContext) (*ForwardingRule, error) {
 	}
 	if r.BackendService != "" {
 		actual.BackendService = &BackendService{
-			Name: fi.PtrTo(lastComponent(r.BackendService)),
+			Name: new(lastComponent(r.BackendService)),
 		}
 	}
 	if r.LoadBalancingScheme != "" {
-		actual.LoadBalancingScheme = fi.PtrTo(r.LoadBalancingScheme)
+		actual.LoadBalancingScheme = new(r.LoadBalancingScheme)
 	}
 	if r.Network != "" {
 		actual.Network = &Network{
-			Name: fi.PtrTo(lastComponent(r.Network)),
+			Name: new(lastComponent(r.Network)),
 		}
 	}
 	if r.Subnetwork != "" {
 		actual.Subnetwork = &Subnet{
-			Name: fi.PtrTo(lastComponent(r.Subnetwork)),
+			Name: new(lastComponent(r.Subnetwork)),
 		}
 	}
 
@@ -338,7 +338,7 @@ func (e *ForwardingRule) TerraformLink() *terraformWriter.Literal {
 	return terraformWriter.LiteralSelfLink("google_compute_forwarding_rule", name)
 }
 
-var _ fi.CloudupProducesDeletions = &ForwardingRule{}
+var _ fi.CloudupProducesDeletions = (*ForwardingRule)(nil)
 
 // FindDeletions implements fi.HasDeletions
 func (e *ForwardingRule) FindDeletions(c *fi.CloudupContext) ([]fi.CloudupDeletion, error) {
@@ -377,7 +377,7 @@ type deleteForwardingRule struct {
 	forwardingRule *compute.ForwardingRule
 }
 
-var _ fi.CloudupDeletion = &deleteForwardingRule{}
+var _ fi.CloudupDeletion = (*deleteForwardingRule)(nil)
 
 // TaskName returns the task name
 func (d *deleteForwardingRule) TaskName() string {

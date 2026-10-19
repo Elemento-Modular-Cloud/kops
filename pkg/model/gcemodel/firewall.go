@@ -52,6 +52,10 @@ func (b *FirewallModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		if err != nil {
 			return err
 		}
+		cpTags := append(
+			b.GCETagsForAPIServerTargets(),
+			b.GCETagForRole(kops.InstanceGroupRoleEtcd),
+		)
 		c.AddTask(&gcetasks.FirewallRule{
 			Name:      s(b.NameForFirewallRule("lb-health-checks")),
 			Lifecycle: b.Lifecycle,
@@ -65,7 +69,7 @@ func (b *FirewallModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 				"209.85.204.0/22",
 				"209.85.152.0/22",
 			},
-			TargetTags: []string{b.GCETagForRole(kops.InstanceGroupRoleControlPlane)},
+			TargetTags: cpTags,
 			Allowed:    []string{"tcp"},
 		})
 	}
@@ -93,12 +97,19 @@ func (b *FirewallModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		if err != nil {
 			return err
 		}
+		cpTags := append(
+			b.GCETagsForAPIServerTargets(),
+			b.GCETagForRole(kops.InstanceGroupRoleEtcd),
+			b.GCETagForRole(kops.InstanceGroupRoleScheduler),
+			b.GCETagForRole(kops.InstanceGroupRoleKubeControllerManager),
+			b.GCETagForRole("Master"),
+		)
 		t := &gcetasks.FirewallRule{
 			Name:       s(b.NameForFirewallRule("master-to-master")),
 			Lifecycle:  b.Lifecycle,
 			Network:    network,
-			SourceTags: []string{b.GCETagForRole(kops.InstanceGroupRoleControlPlane), b.GCETagForRole("Master")},
-			TargetTags: []string{b.GCETagForRole(kops.InstanceGroupRoleControlPlane), b.GCETagForRole("Master")},
+			SourceTags: cpTags,
+			TargetTags: cpTags,
 			Allowed:    allProtocols,
 		}
 		c.AddTask(t)
@@ -114,11 +125,35 @@ func (b *FirewallModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			Name:       s(b.NameForFirewallRule("master-to-node")),
 			Lifecycle:  b.Lifecycle,
 			Network:    network,
-			SourceTags: []string{b.GCETagForRole(kops.InstanceGroupRoleControlPlane), b.GCETagForRole("Master")},
+			SourceTags: append(b.GCETagsForAPIServerTargets(), b.GCETagForRole("Master")),
 			TargetTags: []string{b.GCETagForRole(kops.InstanceGroupRoleNode)},
 			Allowed:    allProtocols,
 		}
 		c.AddTask(t)
+	}
+
+	// Ports that nodes (and pods) are allowed to reach on control plane instances.
+	nodeToMasterAllowed := []string{
+		fmt.Sprintf("tcp:%d", wellknownports.KubeAPIServer),
+		fmt.Sprintf("tcp:%d", wellknownports.KubeletAPI),
+		fmt.Sprintf("tcp:%d", wellknownports.KopsControllerPort),
+		// Metrics ports for control plane components, so they can be scraped from nodes.
+		fmt.Sprintf("tcp:%d", wellknownports.KubeControllerManagerMetricsPort),
+		fmt.Sprintf("tcp:%d", wellknownports.KubeSchedulerMetricsPort),
+		fmt.Sprintf("tcp:%d", wellknownports.KubeProxyMetricsPort),
+		fmt.Sprintf("tcp:%d", wellknownports.EtcdMetricsPort),
+		fmt.Sprintf("tcp:%d", wellknownports.EtcdEventsMetricsPort),
+		fmt.Sprintf("tcp:%d", wellknownports.NodeExporterMetricsPort),
+	}
+	if b.NetworkingIsCalico() {
+		nodeToMasterAllowed = append(nodeToMasterAllowed, "ipip")
+		nodeToMasterAllowed = append(nodeToMasterAllowed, fmt.Sprintf("tcp:%d", wellknownports.BGP))
+	}
+	if b.NetworkingIsCilium() {
+		nodeToMasterAllowed = append(nodeToMasterAllowed, fmt.Sprintf("udp:%d", wellknownports.VxlanUDP))
+		if model.UseCiliumEtcd(b.Cluster) {
+			nodeToMasterAllowed = append(nodeToMasterAllowed, fmt.Sprintf("tcp:%d", wellknownports.EtcdCiliumClientPort))
+		}
 	}
 
 	// Allow limited traffic from nodes -> masters
@@ -132,27 +167,8 @@ func (b *FirewallModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			Lifecycle:  b.Lifecycle,
 			Network:    network,
 			SourceTags: []string{b.GCETagForRole(kops.InstanceGroupRoleNode)},
-			TargetTags: []string{b.GCETagForRole(kops.InstanceGroupRoleControlPlane), b.GCETagForRole("Master")},
-			Allowed: []string{
-				fmt.Sprintf("tcp:%d", wellknownports.KubeAPIServer),
-				fmt.Sprintf("tcp:%d", wellknownports.KubeletAPI),
-				fmt.Sprintf("tcp:%d", wellknownports.KopsControllerPort),
-			},
-		}
-		if b.Cluster.UsesLegacyGossip() {
-			t.Allowed = append(t.Allowed, fmt.Sprintf("udp:%d", wellknownports.DNSControllerGossipMemberlist))
-			t.Allowed = append(t.Allowed, fmt.Sprintf("tcp:%d", wellknownports.DNSControllerGossipMemberlist))
-			t.Allowed = append(t.Allowed, fmt.Sprintf("udp:%d", wellknownports.ProtokubeGossipMemberlist))
-			t.Allowed = append(t.Allowed, fmt.Sprintf("tcp:%d", wellknownports.ProtokubeGossipMemberlist))
-		}
-		if b.NetworkingIsCalico() {
-			t.Allowed = append(t.Allowed, "ipip")
-		}
-		if b.NetworkingIsCilium() {
-			t.Allowed = append(t.Allowed, fmt.Sprintf("udp:%d", wellknownports.VxlanUDP))
-			if model.UseCiliumEtcd(b.Cluster) {
-				t.Allowed = append(t.Allowed, fmt.Sprintf("tcp:%d", wellknownports.EtcdCiliumClientPort))
-			}
+			TargetTags: append(b.GCETagsForAPIServerTargets(), b.GCETagForRole("Master")),
+			Allowed:    nodeToMasterAllowed,
 		}
 		c.AddTask(t)
 	}
@@ -177,6 +193,17 @@ func (b *FirewallModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 				SourceRanges: []string{b.Cluster.Spec.Networking.PodCIDR},
 				TargetTags:   []string{b.GCETagForRole(kops.InstanceGroupRoleNode)},
 				Allowed:      allProtocols,
+			})
+
+			// Source tags cannot match pod-sourced traffic, so without this rule pods cannot
+			// reach pods hosted on control plane nodes. Grant the same restricted access as
+			// nodes so host ports such as etcd stay protected.
+			b.AddFirewallRulesTasks(c, "pod-cidrs-to-master", &gcetasks.FirewallRule{
+				Lifecycle:    b.Lifecycle,
+				Network:      network,
+				SourceRanges: []string{b.Cluster.Spec.Networking.PodCIDR},
+				TargetTags:   append(b.GCETagsForAPIServerTargets(), b.GCETagForRole("Master")),
+				Allowed:      nodeToMasterAllowed,
 			})
 		}
 	}

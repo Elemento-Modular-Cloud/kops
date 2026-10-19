@@ -34,6 +34,10 @@ The additional permissions are:
     "ecr:GetAuthorizationToken",
     "ecr:GetDownloadUrlForLayer",
     "ecr:GetRepositoryPolicy",
+    "ecr:ReplicateImage",
+    "ecr:BatchImportUpstreamImage",
+    "ecr:CreateRepository",
+    "ecr:TagResource",
     "ecr:ListImages"
   ],
   "Resource": [
@@ -114,9 +118,11 @@ spec:
   networkCIDR: 10.100.0.0/16
   networkID: vpc-a80734c1
   nonMasqueradeCIDR: 100.64.0.0/10
-  zones:
+  subnets:
   - cidr: 10.100.32.0/19
     name: eu-central-1a
+    type: Public
+    zone: eu-central-1a
   additionalPolicies:
     node: |
       [

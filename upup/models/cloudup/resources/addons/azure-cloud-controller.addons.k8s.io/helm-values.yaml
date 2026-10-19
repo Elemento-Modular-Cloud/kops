@@ -1,0 +1,29 @@
+# Helm values for cloud-provider-azure (chart version in kustomization.yaml)
+# To regenerate the manifest:
+#   cd upup/models/cloudup/resources/addons/azure-cloud-controller.addons.k8s.io
+#   ./regenerate.sh
+
+infra:
+  # Placeholder; replaced with actual cluster name via Go template in k8s-1.31.yaml.template.
+  clusterName: "{{ ClusterName }}"
+
+cloudControllerManager:
+  # Overridden by kustomize patch.
+  imageTag: "v0.0.0"
+  # KCM allocates pod CIDRs; CCM only writes UDRs into the route table.
+  allocateNodeCidrs: "false"
+  # Enabled for kubenet/kindnet, which require UDRs to forward pod-CIDR traffic across nodes.
+  configureCloudRoutes: "{{ WithDefaultBool .ExternalCloudControllerManager.ConfigureCloudRoutes false }}"
+  clusterCIDR: "{{ .Networking.PodCIDR }}"
+  leaderElect: "{{ .ExternalCloudControllerManager.LeaderElection.LeaderElect }}"
+  logVerbosity: "{{ .ExternalCloudControllerManager.LogLevel }}"
+  # Load cloud config from the azure-cloud-provider Secret. enableDynamicReloading
+  # activates the Secret code path; without it cloudConfigSecretName is ignored.
+  # cloudConfig must be empty or a non-empty --cloud-config path wins over the Secret.
+  cloudConfig: ""
+  cloudConfigSecretName: "azure-cloud-provider"
+  enableDynamicReloading: "true"
+
+cloudNodeManager:
+  # Overridden by kustomize patch.
+  imageTag: "v0.0.0"

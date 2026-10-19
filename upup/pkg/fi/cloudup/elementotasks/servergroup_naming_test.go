@@ -5,12 +5,11 @@ import (
 	"testing"
 
 	"github.com/Elemento-Modular-Cloud/ecloud-go/ecloud"
-	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
 )
 
 func TestServerGroupGlobalNamesAndOwnership(t *testing.T) {
-	group := &ServerGroup{Name: fi.PtrTo("control-plane-europe-2"), ServerNames: []string{"control-plane-europe-2"}}
+	group := &ServerGroup{Name: new("control-plane-europe-2"), ServerNames: []string{"control-plane-europe-2"}}
 	server := &ecloud.Server{Name: "control-plane-europe-2", Labels: map[string]string{
 		elemento.TagKubernetesClusterName: "test.k8s", elemento.TagKubernetesInstanceGroup: "control-plane-europe-2",
 	}}

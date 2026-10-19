@@ -39,7 +39,7 @@ type Volume struct {
 	Tags   map[string]string
 }
 
-var _ fi.CompareWithID = &Volume{}
+var _ fi.CompareWithID = (*Volume)(nil)
 
 func (v *Volume) CompareWithID() *string {
 	return v.ID
@@ -60,11 +60,11 @@ func (v *Volume) Find(c *fi.CloudupContext) (*Volume, error) {
 	for _, volume := range volumes {
 		if volume.Name == fi.ValueOf(v.Name) {
 			return &Volume{
-				Name:      fi.PtrTo(volume.Name),
-				ID:        fi.PtrTo(volume.ID),
+				Name:      new(volume.Name),
+				ID:        new(volume.ID),
 				Lifecycle: v.Lifecycle,
-				SizeGB:    fi.PtrTo(volume.SizeGigaBytes),
-				Region:    fi.PtrTo(volume.Region.Slug),
+				SizeGB:    new(volume.SizeGigaBytes),
+				Region:    new(volume.Region.Slug),
 			}, nil
 		}
 	}

@@ -120,10 +120,15 @@ func NewServer(vfsContext *vfs.VFSContext, opt *config.Options, verifier bootstr
 	s.challengeClient = challengeClient
 
 	r := http.NewServeMux()
+	r.Handle("/healthz", http.HandlerFunc(healthCheck))
 	r.Handle("/bootstrap", http.HandlerFunc(s.bootstrap))
 	server.Handler = recovery(r)
 
 	return s, nil
+}
+
+func (s *Server) GetClientset() simple.Clientset {
+	return s.clientset
 }
 
 func (s *Server) NeedLeaderElection() bool {
@@ -150,6 +155,11 @@ func (s *Server) Start(ctx context.Context) error {
 	return s.server.ListenAndServeTLS(s.opt.Server.ServerCertificatePath, s.opt.Server.ServerKeyPath)
 }
 
+func healthCheck(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok"))
+}
+
 func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 	if r.Body == nil {
 		klog.Infof("bootstrap %s no body", r.RemoteAddr)
@@ -161,7 +171,7 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		klog.Infof("bootstrap %s read err: %v", r.RemoteAddr, err)
 		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(fmt.Sprintf("bootstrap %s failed to read body: %v", r.RemoteAddr, err)))
+		_, _ = fmt.Fprintf(w, "bootstrap %s failed to read body: %v", r.RemoteAddr, err)
 		return
 	}
 
@@ -208,7 +218,7 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 	if err := json.Unmarshal(body, req); err != nil {
 		klog.Infof("bootstrap %s decode err: %v", r.RemoteAddr, err)
 		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(fmt.Sprintf("failed to decode: %v", err)))
+		_, _ = fmt.Fprintf(w, "failed to decode: %v", err)
 		return
 	}
 
@@ -255,8 +265,10 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 	// Skew the certificate lifetime by up to 30 days based on information about the requesting node.
 	// This is so that different nodes created at the same time have the certificates they generated
 	// expire at different times, but all certificates on a given node expire around the same time.
+	// We salt on the verified NodeName so nodes sharing a NAT/load balancer (same RemoteAddr) still
+	// get independent skews.
 	hash := fnv.New32()
-	_, _ = hash.Write([]byte(r.RemoteAddr))
+	_, _ = hash.Write([]byte(id.NodeName))
 	validHours := (455 * 24) + (hash.Sum32() % (30 * 24))
 
 	for name, pubKey := range req.Certs {
@@ -264,7 +276,7 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			klog.Infof("bootstrap %s cert %q issue err: %v", r.RemoteAddr, name, err)
 			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(fmt.Sprintf("failed to issue %q: %v", name, err)))
+			_, _ = fmt.Fprintf(w, "failed to issue %q: %v", name, err)
 			return
 		}
 		resp.Certs[name] = cert
@@ -272,11 +284,14 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
-	klog.Infof("bootstrap %s %s success", r.RemoteAddr, id.NodeName)
+	klog.Infof("bootstrap %s (req.includeNodeConfig: %t, req.certs.#: %d, req.keypairs.#: %d) success", r.RemoteAddr, req.IncludeNodeConfig, len(req.Certs), len(req.KeypairIDs))
 }
 
 func (s *Server) issueCert(ctx context.Context, name string, pubKey string, id *bootstrap.VerifyResult, validHours uint32, keypairIDs map[string]string) (string, error) {
 	block, _ := pem.Decode([]byte(pubKey))
+	if block == nil {
+		return "", fmt.Errorf("decoding pem public key")
+	}
 	if block.Type != "RSA PUBLIC KEY" {
 		return "", fmt.Errorf("unexpected key type %q", block.Type)
 	}

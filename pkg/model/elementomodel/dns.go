@@ -43,7 +43,7 @@ func (b *DNSModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	}
 
 	dnsZoneTask := &elementotasks.DNSZone{
-		Name:      fi.PtrTo(b.ClusterName()),
+		Name:      new(b.ClusterName()),
 		Network:   b.LinkToNetwork(),
 		Lifecycle: b.Lifecycle,
 	}
@@ -54,7 +54,7 @@ func (b *DNSModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		// Its DNS records become prerequisites of ServerGroup tasks so bootstrap
 		// clients can resolve the shared API and kops-controller endpoints.
 		loadBalancer := &elementotasks.ExternalLoadBalancer{
-			Name:        fi.PtrTo(b.multicloudPlan.LoadBalancer.Name),
+			Name:        new(b.multicloudPlan.LoadBalancer.Name),
 			Plan:        b.multicloudPlan,
 			DNSZoneTask: dnsZoneTask,
 			Lifecycle:   b.Lifecycle,
@@ -67,14 +67,14 @@ func (b *DNSModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		b.loadBalancerDNSRecords = make([]*elementotasks.DNSRecord, 0, len(loadBalancerRecords))
 		for _, record := range loadBalancerRecords {
 			task := &elementotasks.DNSRecord{
-				Name:                 fi.PtrTo(record.Name),
-				Data:                 fi.PtrTo(record.Value),
-				DNSZone:              fi.PtrTo(b.ClusterName()),
+				Name:                 new(record.Name),
+				Data:                 new(record.Value),
+				DNSZone:              new(b.ClusterName()),
 				DNSZoneTask:          dnsZoneTask,
 				ExternalLoadBalancer: loadBalancer,
 				DependsOn:            previousDNSRecordTask,
-				Type:                 fi.PtrTo("A"),
-				TTL:                  fi.PtrTo(elementoDNSRecordTTL),
+				Type:                 new("A"),
+				TTL:                  new(elementoDNSRecordTTL),
 				Lifecycle:            b.Lifecycle,
 			}
 			c.EnsureTask(task)
@@ -87,14 +87,14 @@ func (b *DNSModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 				apiPublicName = "api." + b.ClusterName()
 			}
 			task := &elementotasks.DNSRecord{
-				Name:                  fi.PtrTo(trimElementoDNSZoneSuffix(apiPublicName, b.ClusterName())),
-				DNSZone:               fi.PtrTo(b.ClusterName()),
+				Name:                  new(trimElementoDNSZoneSuffix(apiPublicName, b.ClusterName())),
+				DNSZone:               new(b.ClusterName()),
 				DNSZoneTask:           dnsZoneTask,
 				ExternalLoadBalancer:  loadBalancer,
 				LoadBalancerPublicAPI: true,
 				DependsOn:             previousDNSRecordTask,
-				Type:                  fi.PtrTo("A"),
-				TTL:                   fi.PtrTo(elementoDNSRecordTTL),
+				Type:                  new("A"),
+				TTL:                   new(elementoDNSRecordTTL),
 				Lifecycle:             b.Lifecycle,
 			}
 			c.EnsureTask(task)
@@ -133,19 +133,19 @@ func (b *ElementoModelContext) elementoDNSRecordTasksForInstanceGroup(ig *kops.I
 	var tasks []*elementotasks.DNSRecord
 	addRecord := func(recordName string, reservation *elementotasks.DHCPReservation) {
 		task := &elementotasks.DNSRecord{
-			Name:            fi.PtrTo(trimElementoDNSZoneSuffix(recordName, zoneName)),
-			DNSZone:         fi.PtrTo(zoneName),
+			Name:            new(trimElementoDNSZoneSuffix(recordName, zoneName)),
+			DNSZone:         new(zoneName),
 			DNSZoneTask:     dnsZoneTask,
 			DHCPReservation: reservation,
-			Type:            fi.PtrTo("A"),
-			TTL:             fi.PtrTo(elementoDNSRecordTTL),
+			Type:            new("A"),
+			TTL:             new(elementoDNSRecordTTL),
 			Lifecycle:       lifecycle,
 		}
 		if reservation != nil {
 			// External nodes already have a planned tailnet IP and must not wait
 			// for an AtomOS DHCP reservation that will never be created for them.
 			if ip := b.externalNodeIPs[fi.ValueOf(reservation.Name)]; ip != "" {
-				task.Data = fi.PtrTo(ip)
+				task.Data = new(ip)
 				task.DHCPReservation = nil
 			}
 		}
@@ -158,12 +158,12 @@ func (b *ElementoModelContext) elementoDNSRecordTasksForInstanceGroup(ig *kops.I
 	}
 	for index, serverName := range names {
 		reservation := &elementotasks.DHCPReservation{
-			Name: fi.PtrTo(serverName),
+			Name: new(serverName),
 		}
 
 		addRecord(fmt.Sprintf("%s.%s", serverName, clusterName), reservation)
 
-		if !ig.HasAPIServer() || index != 0 {
+		if !ig.RunsAPIServer() || index != 0 {
 			continue
 		}
 
@@ -208,7 +208,7 @@ func (b *ElementoModelContext) elementoPrimaryAPIServerInstanceGroup(current *ko
 	sort.Slice(instanceGroups, func(i, j int) bool { return instanceGroups[i].Name < instanceGroups[j].Name })
 
 	for _, candidate := range instanceGroups {
-		if !candidate.HasAPIServer() || fi.ValueOf(candidate.Spec.MinSize) == 0 {
+		if !candidate.RunsAPIServer() || fi.ValueOf(candidate.Spec.MinSize) == 0 {
 			continue
 		}
 		return candidate.Name == current.Name, nil

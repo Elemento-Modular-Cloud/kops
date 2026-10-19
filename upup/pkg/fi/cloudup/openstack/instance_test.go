@@ -19,12 +19,12 @@ package openstack
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"time"
 
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers"
-	"k8s.io/kops/upup/pkg/fi"
 )
 
 type WaitForStatusActiveMock struct {
@@ -83,8 +83,18 @@ func Test_WaitForStatusActiveResultsInTimeout(t *testing.T) {
 	serverID := "mock-id"
 	c := createWaitForStatusActiveMock(serverID, "BUILD")
 
-	actualErr := waitForStatusActive(c, serverID, fi.PtrTo(time.Second))
+	actualErr := waitForStatusActive(c, serverID, new(time.Second))
 
 	expectedErr := context.DeadlineExceeded
 	assertTestResults(t, nil, expectedErr, actualErr)
+}
+
+func assertTestResults(t *testing.T, err error, expected interface{}, actual interface{}) {
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+
+	if !reflect.DeepEqual(expected, actual) {
+		t.Fatalf("expected %+v, but got %+v", expected, actual)
+	}
 }

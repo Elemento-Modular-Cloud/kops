@@ -200,8 +200,8 @@ func (d *DHCPReservation) Find(c *fi.CloudupContext) (*DHCPReservation, error) {
 
 	// Adopt an existing hostname reservation so rerunning kOps does not create
 	// a second reservation when the initially generated MAC is no longer known.
-	d.MACAddress = fi.PtrTo(reservation.MACAddress)
-	d.IPAddress = fi.PtrTo(reservation.IPAddress)
+	d.MACAddress = new(reservation.MACAddress)
+	d.IPAddress = new(reservation.IPAddress)
 
 	return &DHCPReservation{
 		Name:        d.Name,
@@ -248,8 +248,8 @@ func (_ *DHCPReservation) RenderElemento(t *elemento.ElementoAPITarget, actual, 
 		return fmt.Errorf("Elemento DHCP reservation for %q returned no IP address", fi.ValueOf(expected.Name))
 	}
 
-	expected.MACAddress = fi.PtrTo(reservation.MACAddress)
-	expected.IPAddress = fi.PtrTo(reservation.IPAddress)
+	expected.MACAddress = new(reservation.MACAddress)
+	expected.IPAddress = new(reservation.IPAddress)
 	ecloud.Log("debug", "ekops", fmt.Sprintf("Reserved DHCP address %q for server %q with MAC %q",
 		reservation.IPAddress, fi.ValueOf(expected.Name), reservation.MACAddress))
 	return nil

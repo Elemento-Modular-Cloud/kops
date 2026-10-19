@@ -33,14 +33,3 @@ type Info struct {
 	Addresses   []corev1.NodeAddress
 	Initialized bool
 }
-
-type LegacyIdentifier interface {
-	IdentifyNode(ctx context.Context, node *corev1.Node) (*LegacyInfo, error)
-}
-
-type LegacyInfo struct {
-	InstanceID    string
-	InstanceGroup string
-	// TODO: Remove
-	InstanceLifecycle string
-}

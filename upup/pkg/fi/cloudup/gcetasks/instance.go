@@ -57,7 +57,7 @@ type Instance struct {
 	metadataFingerprint string
 }
 
-var _ fi.CompareWithID = &Instance{}
+var _ fi.CompareWithID = (*Instance)(nil)
 
 func (e *Instance) CompareWithID() *string {
 	return e.Name
@@ -77,15 +77,15 @@ func (e *Instance) Find(c *fi.CloudupContext) (*Instance, error) {
 	actual := &Instance{}
 	actual.Name = &r.Name
 	actual.Tags = append(actual.Tags, r.Tags.Items...)
-	actual.Zone = fi.PtrTo(lastComponent(r.Zone))
-	actual.MachineType = fi.PtrTo(lastComponent(r.MachineType))
+	actual.Zone = new(lastComponent(r.Zone))
+	actual.MachineType = new(lastComponent(r.MachineType))
 	actual.CanIPForward = &r.CanIpForward
 	if r.Scheduling != nil {
 		actual.Preemptible = &r.Scheduling.Preemptible
 	}
 	if len(r.NetworkInterfaces) != 0 {
 		ni := r.NetworkInterfaces[0]
-		actual.Network = &Network{Name: fi.PtrTo(lastComponent(ni.Network))}
+		actual.Network = &Network{Name: new(lastComponent(ni.Network))}
 		actual.StackType = &ni.StackType
 		if len(ni.AccessConfigs) != 0 {
 			ac := ni.AccessConfigs[0]
@@ -127,7 +127,7 @@ func (e *Instance) Find(c *fi.CloudupContext) (*Instance, error) {
 			if err != nil {
 				return nil, fmt.Errorf("error parsing source image URL: %v", err)
 			}
-			actual.Image = fi.PtrTo(image)
+			actual.Image = new(image)
 		} else {
 			url, err := gce.ParseGoogleCloudURL(disk.Source)
 			if err != nil {
@@ -190,20 +190,12 @@ func scopeToShortForm(s string) string {
 func (e *Instance) mapToGCE(project string, ipAddressResolver func(*Address) (*string, error)) (*compute.Instance, error) {
 	zone := *e.Zone
 
-	var scheduling *compute.Scheduling
-	if fi.ValueOf(e.Preemptible) {
-		scheduling = &compute.Scheduling{
-			OnHostMaintenance: "TERMINATE",
-			Preemptible:       true,
-		}
-	} else {
-		scheduling = &compute.Scheduling{
-			AutomaticRestart: fi.PtrTo(true),
-			// TODO: Migrate or terminate?
-			OnHostMaintenance: "MIGRATE",
-			Preemptible:       false,
-		}
+	machineTypeInfo, err := guessMachineTypeInfo(fi.ValueOf(e.MachineType))
+	if err != nil {
+		return nil, fmt.Errorf("getting machine type info: %w", err)
 	}
+
+	scheduling := buildScheduling(machineTypeInfo, e.Preemptible, nil /* e.GCPProvisioningModel */, nil /* e.GuestAccelerators*/)
 
 	var disks []*compute.AttachedDisk
 	disks = append(disks, &compute.AttachedDisk{
@@ -285,7 +277,7 @@ func (e *Instance) mapToGCE(project string, ipAddressResolver func(*Address) (*s
 		}
 		metadataItems = append(metadataItems, &compute.MetadataItems{
 			Key:   key,
-			Value: fi.PtrTo(v),
+			Value: new(v),
 		})
 	}
 

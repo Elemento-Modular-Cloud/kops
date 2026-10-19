@@ -31,25 +31,15 @@ func UseChallengeCallback(cloudProvider kops.CloudProviderID) bool {
 		return true
 	case kops.CloudProviderAzure:
 		return true
+	case kops.CloudProviderLinode:
+		return true
+	case kops.CloudProviderElemento:
+		// Enrollment verification supplies the node identity; it does not
+		// implement the cloud-provider callback challenge protocol.
+		return false
 	default:
 		return false
 	}
-}
-
-// UseKopsControllerForNodeConfig checks if nodeup should use kops-controller to get nodeup.Config.
-func UseKopsControllerForNodeConfig(cluster *kops.Cluster) bool {
-	if cluster.UsesLegacyGossip() {
-		switch cluster.GetCloudProvider() {
-		case kops.CloudProviderGCE:
-			// We can use cloud-discovery here.
-		case kops.CloudProviderHetzner, kops.CloudProviderScaleway, kops.CloudProviderDO:
-			// We don't have a cloud-discovery mechanism implemented in nodeup for many clouds,
-			// but we assume that we're using a load balancer with a fixed IP address
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 // UseCiliumEtcd is true if we are using the Cilium etcd cluster.
@@ -65,16 +55,4 @@ func UseCiliumEtcd(cluster *kops.Cluster) bool {
 	}
 
 	return false
-}
-
-// Configures a Kubelet Credential Provider if Kubernetes is newer than a specific version
-func UseExternalKubeletCredentialProvider(k8sVersion *KubernetesVersion, cloudProvider kops.CloudProviderID) bool {
-	switch cloudProvider {
-	case kops.CloudProviderGCE:
-		return k8sVersion.IsGTE("1.29")
-	case kops.CloudProviderAWS:
-		return k8sVersion.IsGTE("1.27")
-	default:
-		return false
-	}
 }

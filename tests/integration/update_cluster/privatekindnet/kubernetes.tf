@@ -177,7 +177,6 @@ resource "aws_autoscaling_group" "master-us-test-1a-masters-privatekindnet-examp
     id      = aws_launch_template.master-us-test-1a-masters-privatekindnet-example-com.id
     version = aws_launch_template.master-us-test-1a-masters-privatekindnet-example-com.latest_version
   }
-  load_balancers        = [aws_elb.api-privatekindnet-example-com.id]
   max_instance_lifetime = 0
   max_size              = 1
   metrics_granularity   = "1Minute"
@@ -234,6 +233,7 @@ resource "aws_autoscaling_group" "master-us-test-1a-masters-privatekindnet-examp
     propagate_at_launch = true
     value               = "owned"
   }
+  target_group_arns   = [aws_lb_target_group.tcp-privatekindnet-exampl-ab4gi5.id]
   vpc_zone_identifier = [aws_subnet.us-test-1a-privatekindnet-example-com.id]
 }
 
@@ -414,34 +414,6 @@ resource "aws_eip" "us-test-1a-privatekindnet-example-com" {
   }
 }
 
-resource "aws_elb" "api-privatekindnet-example-com" {
-  connection_draining         = true
-  connection_draining_timeout = 300
-  cross_zone_load_balancing   = false
-  health_check {
-    healthy_threshold   = 2
-    interval            = 10
-    target              = "SSL:443"
-    timeout             = 5
-    unhealthy_threshold = 2
-  }
-  idle_timeout = 300
-  listener {
-    instance_port     = 443
-    instance_protocol = "TCP"
-    lb_port           = 443
-    lb_protocol       = "TCP"
-  }
-  name            = "api-privatekindnet-exampl-c5d4tf"
-  security_groups = [aws_security_group.api-elb-privatekindnet-example-com.id]
-  subnets         = [aws_subnet.utility-us-test-1a-privatekindnet-example-com.id]
-  tags = {
-    "KubernetesCluster"                                = "privatekindnet.example.com"
-    "Name"                                             = "api.privatekindnet.example.com"
-    "kubernetes.io/cluster/privatekindnet.example.com" = "owned"
-  }
-}
-
 resource "aws_iam_instance_profile" "bastions-privatekindnet-example-com" {
   name = "bastions.privatekindnet.example.com"
   role = aws_iam_role.bastions-privatekindnet-example-com.name
@@ -500,12 +472,6 @@ resource "aws_iam_role" "nodes-privatekindnet-example-com" {
     "Name"                                             = "nodes.privatekindnet.example.com"
     "kubernetes.io/cluster/privatekindnet.example.com" = "owned"
   }
-}
-
-resource "aws_iam_role_policy" "bastions-privatekindnet-example-com" {
-  name   = "bastions.privatekindnet.example.com"
-  policy = file("${path.module}/data/aws_iam_role_policy_bastions.privatekindnet.example.com_policy")
-  role   = aws_iam_role.bastions-privatekindnet-example-com.name
 }
 
 resource "aws_iam_role_policy" "masters-privatekindnet-example-com" {
@@ -598,6 +564,17 @@ resource "aws_launch_template" "bastion-privatekindnet-example-com" {
       "kubernetes.io/cluster/privatekindnet.example.com" = "owned"
     }
   }
+  tag_specifications {
+    resource_type = "network-interface"
+    tags = {
+      "KubernetesCluster"                                = "privatekindnet.example.com"
+      "Name"                                             = "bastion.privatekindnet.example.com"
+      "aws-node-termination-handler/managed"             = ""
+      "k8s.io/role/bastion"                              = "1"
+      "kops.k8s.io/instancegroup"                        = "bastion"
+      "kubernetes.io/cluster/privatekindnet.example.com" = "owned"
+    }
+  }
   tags = {
     "KubernetesCluster"                                = "privatekindnet.example.com"
     "Name"                                             = "bastion.privatekindnet.example.com"
@@ -666,6 +643,21 @@ resource "aws_launch_template" "master-us-test-1a-masters-privatekindnet-example
   }
   tag_specifications {
     resource_type = "volume"
+    tags = {
+      "KubernetesCluster"                                                                                     = "privatekindnet.example.com"
+      "Name"                                                                                                  = "master-us-test-1a.masters.privatekindnet.example.com"
+      "aws-node-termination-handler/managed"                                                                  = ""
+      "k8s.io/cluster-autoscaler/node-template/label/kops.k8s.io/kops-controller-pki"                         = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node-role.kubernetes.io/control-plane"                   = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node.kubernetes.io/exclude-from-external-load-balancers" = ""
+      "k8s.io/role/control-plane"                                                                             = "1"
+      "k8s.io/role/master"                                                                                    = "1"
+      "kops.k8s.io/instancegroup"                                                                             = "master-us-test-1a"
+      "kubernetes.io/cluster/privatekindnet.example.com"                                                      = "owned"
+    }
+  }
+  tag_specifications {
+    resource_type = "network-interface"
     tags = {
       "KubernetesCluster"                                                                                     = "privatekindnet.example.com"
       "Name"                                                                                                  = "master-us-test-1a.masters.privatekindnet.example.com"
@@ -755,6 +747,18 @@ resource "aws_launch_template" "nodes-privatekindnet-example-com" {
       "kubernetes.io/cluster/privatekindnet.example.com"                           = "owned"
     }
   }
+  tag_specifications {
+    resource_type = "network-interface"
+    tags = {
+      "KubernetesCluster"                                                          = "privatekindnet.example.com"
+      "Name"                                                                       = "nodes.privatekindnet.example.com"
+      "aws-node-termination-handler/managed"                                       = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node-role.kubernetes.io/node" = ""
+      "k8s.io/role/node"                                                           = "1"
+      "kops.k8s.io/instancegroup"                                                  = "nodes"
+      "kubernetes.io/cluster/privatekindnet.example.com"                           = "owned"
+    }
+  }
   tags = {
     "KubernetesCluster"                                                          = "privatekindnet.example.com"
     "Name"                                                                       = "nodes.privatekindnet.example.com"
@@ -765,6 +769,22 @@ resource "aws_launch_template" "nodes-privatekindnet-example-com" {
     "kubernetes.io/cluster/privatekindnet.example.com"                           = "owned"
   }
   user_data = filebase64("${path.module}/data/aws_launch_template_nodes.privatekindnet.example.com_user_data")
+}
+
+resource "aws_lb" "api-privatekindnet-example-com" {
+  enable_cross_zone_load_balancing = false
+  internal                         = false
+  load_balancer_type               = "network"
+  name                             = "api-privatekindnet-exampl-c5d4tf"
+  security_groups                  = [aws_security_group.api-elb-privatekindnet-example-com.id]
+  subnet_mapping {
+    subnet_id = aws_subnet.utility-us-test-1a-privatekindnet-example-com.id
+  }
+  tags = {
+    "KubernetesCluster"                                = "privatekindnet.example.com"
+    "Name"                                             = "api.privatekindnet.example.com"
+    "kubernetes.io/cluster/privatekindnet.example.com" = "owned"
+  }
 }
 
 resource "aws_lb" "bastion-privatekindnet-example-com" {
@@ -781,6 +801,16 @@ resource "aws_lb" "bastion-privatekindnet-example-com" {
     "Name"                                             = "bastion.privatekindnet.example.com"
     "kubernetes.io/cluster/privatekindnet.example.com" = "owned"
   }
+}
+
+resource "aws_lb_listener" "api-privatekindnet-example-com-443" {
+  default_action {
+    target_group_arn = aws_lb_target_group.tcp-privatekindnet-exampl-ab4gi5.id
+    type             = "forward"
+  }
+  load_balancer_arn = aws_lb.api-privatekindnet-example-com.id
+  port              = 443
+  protocol          = "TCP"
 }
 
 resource "aws_lb_listener" "bastion-privatekindnet-example-com-22" {
@@ -808,6 +838,26 @@ resource "aws_lb_target_group" "bastion-privatekindnet-ex-70mv5p" {
   tags = {
     "KubernetesCluster"                                = "privatekindnet.example.com"
     "Name"                                             = "bastion-privatekindnet-ex-70mv5p"
+    "kubernetes.io/cluster/privatekindnet.example.com" = "owned"
+  }
+  vpc_id = aws_vpc.privatekindnet-example-com.id
+}
+
+resource "aws_lb_target_group" "tcp-privatekindnet-exampl-ab4gi5" {
+  connection_termination = "true"
+  deregistration_delay   = "30"
+  health_check {
+    healthy_threshold   = 2
+    interval            = 10
+    protocol            = "TCP"
+    unhealthy_threshold = 2
+  }
+  name     = "tcp-privatekindnet-exampl-ab4gi5"
+  port     = 443
+  protocol = "TCP"
+  tags = {
+    "KubernetesCluster"                                = "privatekindnet.example.com"
+    "Name"                                             = "tcp-privatekindnet-exampl-ab4gi5"
     "kubernetes.io/cluster/privatekindnet.example.com" = "owned"
   }
   vpc_id = aws_vpc.privatekindnet-example-com.id
@@ -844,8 +894,8 @@ resource "aws_route" "route-private-us-test-1a-0-0-0-0--0" {
 resource "aws_route53_record" "api-privatekindnet-example-com" {
   alias {
     evaluate_target_health = false
-    name                   = aws_elb.api-privatekindnet-example-com.dns_name
-    zone_id                = aws_elb.api-privatekindnet-example-com.zone_id
+    name                   = aws_lb.api-privatekindnet-example-com.dns_name
+    zone_id                = aws_lb.api-privatekindnet-example-com.zone_id
   }
   name    = "api.privatekindnet.example.com"
   type    = "A"
@@ -855,8 +905,8 @@ resource "aws_route53_record" "api-privatekindnet-example-com" {
 resource "aws_route53_record" "api-privatekindnet-example-com-AAAA" {
   alias {
     evaluate_target_health = false
-    name                   = aws_elb.api-privatekindnet-example-com.dns_name
-    zone_id                = aws_elb.api-privatekindnet-example-com.zone_id
+    name                   = aws_lb.api-privatekindnet-example-com.dns_name
+    zone_id                = aws_lb.api-privatekindnet-example-com.zone_id
   }
   name    = "api.privatekindnet.example.com"
   type    = "AAAA"
@@ -921,6 +971,14 @@ resource "aws_s3_object" "kops-version-txt" {
   bucket                 = "testingBucket"
   content                = file("${path.module}/data/aws_s3_object_kops-version.txt_content")
   key                    = "clusters.example.com/privatekindnet.example.com/kops-version.txt"
+  provider               = aws.files
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_object" "manifests-channels-kops-channels" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_object_manifests-channels-kops-channels_content")
+  key                    = "clusters.example.com/privatekindnet.example.com/manifests/channels/kops-channels.yaml"
   provider               = aws.files
   server_side_encryption = "AES256"
 }
@@ -1461,7 +1519,7 @@ terraform {
     aws = {
       "configuration_aliases" = [aws.files]
       "source"                = "hashicorp/aws"
-      "version"               = ">= 5.0.0"
+      "version"               = ">= 6.57.1"
     }
   }
 }

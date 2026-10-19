@@ -60,7 +60,7 @@ type testTask struct {
 	Tags      map[string]string
 }
 
-var _ CloudupTask = &testTask{}
+var _ CloudupTask = (*testTask)(nil)
 
 func (*testTask) Run(_ *CloudupContext) error {
 	panic("not implemented")
@@ -69,15 +69,16 @@ func (*testTask) Run(_ *CloudupContext) error {
 func Test_DryrunTarget_PrintReport(t *testing.T) {
 	builder := assets.NewAssetBuilder(vfs.Context, nil, false)
 	var stdout bytes.Buffer
-	target := newDryRunTarget[CloudupSubContext](builder, &stdout)
+	checkExisting := true
+	target := newDryRunTarget[CloudupSubContext](builder, checkExisting, &stdout)
 	tasks := map[string]CloudupTask{}
 	a := &testTask{
-		Name:      PtrTo("TestName"),
+		Name:      new("TestName"),
 		Lifecycle: LifecycleSync,
 		Tags:      map[string]string{"key": "value"},
 	}
 	e := &testTask{
-		Name:      PtrTo("TestName"),
+		Name:      new("TestName"),
 		Lifecycle: LifecycleSync,
 		Tags:      map[string]string{"key": "value"},
 	}

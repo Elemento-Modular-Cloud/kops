@@ -19,6 +19,7 @@ package gce
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	compute "google.golang.org/api/compute/v1"
@@ -37,6 +38,9 @@ type dumpState struct {
 
 	// instances is a cache of instances by zone
 	instances map[string]map[string]*compute.Instance
+
+	// disks is a cache of disks by zone
+	disks map[string]map[string]*compute.Disk
 }
 
 // DumpManagedInstance is responsible for dumping a resource for a ManagedInstance
@@ -60,21 +64,56 @@ func DumpManagedInstance(op *resources.DumpOperation, r *resources.Resource) err
 
 	instanceDetails := instanceMap[u.Name]
 	if instanceDetails == nil {
-		klog.Warningf("instance %q not found", instance.Instance)
-	} else {
-		for _, ni := range instanceDetails.NetworkInterfaces {
-			if ni.NetworkIP != "" {
-				i.PrivateAddresses = append(i.PrivateAddresses, ni.NetworkIP)
-			}
-			if ni.Ipv6Address != "" {
-				i.PrivateAddresses = append(i.PrivateAddresses, ni.Ipv6Address)
-			}
-			for _, ac := range ni.AccessConfigs {
-				if ac.NatIP != "" {
-					i.PublicAddresses = append(i.PublicAddresses, ac.NatIP)
-				}
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "instance %q not found (currentAction=%q instanceStatus=%q)", instance.Instance, instance.CurrentAction, instance.InstanceStatus)
+		if instance.LastAttempt != nil && instance.LastAttempt.Errors != nil {
+			for _, e := range instance.LastAttempt.Errors.Errors {
+				fmt.Fprintf(&sb, "; lastAttempt.error code=%q location=%q message=%q", e.Code, e.Location, e.Message)
 			}
 		}
+		klog.Warning(sb.String())
+		return nil
+	}
+
+	for _, ni := range instanceDetails.NetworkInterfaces {
+		if ni == nil {
+			continue
+		}
+		if ni.NetworkIP != "" {
+			i.PrivateAddresses = append(i.PrivateAddresses, ni.NetworkIP)
+		}
+		if ni.Ipv6Address != "" {
+			i.PrivateAddresses = append(i.PrivateAddresses, ni.Ipv6Address)
+		}
+		for _, ac := range ni.AccessConfigs {
+			if ac == nil {
+				continue
+			}
+			if ac.NatIP != "" {
+				i.PublicAddresses = append(i.PublicAddresses, ac.NatIP)
+			}
+		}
+	}
+
+	isControlPlane := false
+	for key, value := range instanceDetails.Labels {
+		if !strings.HasPrefix(key, gce.GceLabelNameRolePrefix) {
+			continue
+		}
+		if value == "control-plane" {
+			isControlPlane = true
+		} else {
+			i.Roles = append(i.Roles, value)
+		}
+	}
+	if isControlPlane {
+		i.Roles = append(i.Roles, "control-plane")
+	}
+
+	if image, err := getDumpState(op).getBootDiskImage(op.Context, u.Zone, instanceDetails); err != nil {
+		klog.Warningf("unable to determine boot disk image for instance %q: %v", u.Name, err)
+	} else if image != "" {
+		i.SSHUser = gce.SSHUsernameForImage(image)
 	}
 
 	op.Dump.Instances = append(op.Dump.Instances, i)
@@ -117,4 +156,74 @@ func (s *dumpState) getInstances(ctx context.Context, zone string) (map[string]*
 	}
 	s.instances[zone] = instances
 	return instances, nil
+}
+
+// getDisks retrieves the list of disks from the cloud, using a cached copy if possible
+func (s *dumpState) getDisks(ctx context.Context, zone string) (map[string]*compute.Disk, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	if s.disks == nil {
+		s.disks = make(map[string]map[string]*compute.Disk)
+	}
+
+	if s.disks[zone] != nil {
+		return s.disks[zone], nil
+	}
+
+	l, err := s.cloud.Compute().Disks().List(ctx, s.cloud.Project(), zone)
+	if err != nil {
+		return nil, err
+	}
+	disks := make(map[string]*compute.Disk)
+	for _, d := range l {
+		disks[d.Name] = d
+	}
+	s.disks[zone] = disks
+	return disks, nil
+}
+
+// getBootDiskImage returns the source image of the instance's boot disk. The instance's attached
+// disks don't carry the source image, so we look it up on the disk resource itself. Returns "" if
+// the image cannot be determined (e.g. a disk created from a snapshot).
+func (s *dumpState) getBootDiskImage(ctx context.Context, zone string, instance *compute.Instance) (string, error) {
+	for _, d := range instance.Disks {
+		if d == nil || !d.Boot {
+			continue
+		}
+		disks, err := s.getDisks(ctx, zone)
+		if err != nil {
+			return "", err
+		}
+		disk := disks[gce.LastComponent(d.Source)]
+		if disk == nil {
+			return "", nil
+		}
+		return disk.SourceImage, nil
+	}
+	return "", nil
+}
+
+// DumpNetwork is responsible for dumping a resource for a Network
+func DumpNetwork(op *resources.DumpOperation, r *resources.Resource) error {
+	network := r.Obj.(*compute.Network)
+
+	vpc := &resources.VPC{
+		ID: gce.LastComponent(network.SelfLink),
+	}
+	op.Dump.VPC = vpc
+
+	return nil
+}
+
+// DumpSubnetwork is responsible for dumping a resource for a Subnetwork
+func DumpSubnetwork(op *resources.DumpOperation, r *resources.Resource) error {
+	obj := r.Obj.(*compute.Subnetwork)
+
+	subnet := &resources.Subnet{
+		ID: gce.LastComponent(obj.SelfLink),
+	}
+	op.Dump.Subnets = append(op.Dump.Subnets, subnet)
+
+	return nil
 }

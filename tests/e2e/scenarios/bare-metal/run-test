@@ -19,6 +19,9 @@ set -o nounset
 set -o pipefail
 set -o xtrace
 
+export CI=1
+echo "Running with CI=${CI:-}"
+
 REPO_ROOT=$(git rev-parse --show-toplevel)
 cd ${REPO_ROOT}
 
@@ -40,16 +43,24 @@ function cleanup() {
   fi
 }
 
-if [[ -z "${SKIP_CLEANUP:-}" ]]; then
-  trap cleanup EXIT
-fi
+trap cleanup EXIT
 
 # Create the directory that will back our mock s3 storage
 rm -rf ${WORKDIR}/s3
 mkdir -p ${WORKDIR}/s3/
 
+IPV4_PREFIX=10.123.45.
+
+VM0_IP=${IPV4_PREFIX}10
+VM1_IP=${IPV4_PREFIX}11
+VM2_IP=${IPV4_PREFIX}12
+
 # Start our VMs
 ${REPO_ROOT}/tests/e2e/scenarios/bare-metal/start-vms
+
+# Start an SSH agent; enroll assumes SSH connectivity to the VMs with the key in the agent
+eval $(ssh-agent)
+ssh-add ${REPO_ROOT}/.build/.ssh/id_ed25519
 
 . hack/dev-build-metal.sh
 
@@ -57,13 +68,14 @@ echo "Waiting 10 seconds for VMs to start"
 sleep 10
 
 # Remove from known-hosts in case of reuse
-ssh-keygen -f ~/.ssh/known_hosts -R 10.123.45.10 || true
-ssh-keygen -f ~/.ssh/known_hosts -R 10.123.45.11 || true
-ssh-keygen -f ~/.ssh/known_hosts -R 10.123.45.12 || true
+ssh-keygen -f ~/.ssh/known_hosts -R ${VM0_IP} || true
+ssh-keygen -f ~/.ssh/known_hosts -R ${VM1_IP} || true
+ssh-keygen -f ~/.ssh/known_hosts -R ${VM2_IP} || true
 
-ssh -o StrictHostKeyChecking=accept-new -i ${REPO_ROOT}/.build/.ssh/id_ed25519 root@10.123.45.10 uptime
-ssh -o StrictHostKeyChecking=accept-new -i ${REPO_ROOT}/.build/.ssh/id_ed25519 root@10.123.45.11 uptime
-ssh -o StrictHostKeyChecking=accept-new -i ${REPO_ROOT}/.build/.ssh/id_ed25519 root@10.123.45.12 uptime
+# Check SSH is working and accept the host keys
+ssh -o StrictHostKeyChecking=accept-new root@${VM0_IP} uptime
+ssh -o StrictHostKeyChecking=accept-new root@${VM1_IP} uptime
+ssh -o StrictHostKeyChecking=accept-new root@${VM2_IP} uptime
 
 cd ${REPO_ROOT}
 
@@ -93,14 +105,13 @@ ${KOPS} create cluster --cloud=metal metal.k8s.local --zones main --networking c
 
 # Set the IP ingress, required for metal cloud
 # TODO: is this the best option?
-${KOPS} edit cluster metal.k8s.local  --set spec.api.publicName=10.123.45.10
+${KOPS} edit cluster metal.k8s.local  --set spec.api.publicName=${VM0_IP}
 
 # Use latest etcd-manager image (while we're adding features)
-${KOPS} edit cluster metal.k8s.local --set 'spec.etcdClusters[*].manager.image=us-central1-docker.pkg.dev/k8s-staging-images/etcd-manager/etcd-manager-static:latest'
+#${KOPS} edit cluster metal.k8s.local --set 'spec.etcdClusters[*].manager.image=us-central1-docker.pkg.dev/k8s-staging-images/etcd-manager/etcd-manager-slim:v3.0.20250628-7-ga7be11fb'
 
-# Use 1.31 kubernetes so we get kube-apiserver fixes
+# Remove restrictions on K8s version
 export KOPS_RUN_TOO_NEW_VERSION=1
-"${KOPS}" edit cluster metal.k8s.local "--set=cluster.spec.kubernetesVersion=1.31.0"
 
 # List clusters
 ${KOPS} get cluster
@@ -114,28 +125,24 @@ ${KOPS} get ig --name metal.k8s.local -oyaml
 ${KOPS} update cluster metal.k8s.local
 ${KOPS} update cluster metal.k8s.local --yes --admin
 
-# Start an SSH agent; enroll assumes SSH connectivity to the VMs with the key in the agent
-eval $(ssh-agent)
-ssh-add ${REPO_ROOT}/.build/.ssh/id_ed25519
-
 # Enroll the control-plane VM
-${KOPS} toolbox enroll --cluster metal.k8s.local --instance-group control-plane-main --host 10.123.45.10 --v=2
+${KOPS} toolbox enroll --cluster metal.k8s.local --instance-group control-plane-main --host ${VM0_IP} --v=2
 
 # Manual creation of "volumes" for etcd, and setting up peer nodes
-cat <<EOF | ssh -o StrictHostKeyChecking=accept-new -i ${REPO_ROOT}/.build/.ssh/id_ed25519 root@10.123.45.10 tee -a /etc/hosts
+cat <<EOF | ssh root@${VM0_IP} tee -a /etc/hosts
 
 # Hosts added for etcd discovery
-10.123.45.10 node0.main.metal.k8s.local
-10.123.45.10 node0.events.metal.k8s.local
+${VM0_IP} node0.main.metal.k8s.local
+${VM0_IP} node0.events.metal.k8s.local
 EOF
 
-ssh -o StrictHostKeyChecking=accept-new -i ${REPO_ROOT}/.build/.ssh/id_ed25519 root@10.123.45.10 cat /etc/hosts
+ssh root@${VM0_IP} cat /etc/hosts
 
-ssh -o StrictHostKeyChecking=accept-new -i ${REPO_ROOT}/.build/.ssh/id_ed25519 root@10.123.45.10 mkdir -p /mnt/disks/metal.k8s.local--main--0/mnt
-ssh -o StrictHostKeyChecking=accept-new -i ${REPO_ROOT}/.build/.ssh/id_ed25519 root@10.123.45.10 touch    /mnt/disks/metal.k8s.local--main--0/mnt/please-create-new-cluster
+ssh root@${VM0_IP} mkdir -p /mnt/disks/metal.k8s.local--main--0/mnt
+ssh root@${VM0_IP} touch    /mnt/disks/metal.k8s.local--main--0/mnt/please-create-new-cluster
 
-ssh -o StrictHostKeyChecking=accept-new -i ${REPO_ROOT}/.build/.ssh/id_ed25519 root@10.123.45.10 mkdir -p /mnt/disks/metal.k8s.local--events--0/mnt
-ssh -o StrictHostKeyChecking=accept-new -i ${REPO_ROOT}/.build/.ssh/id_ed25519 root@10.123.45.10 touch    /mnt/disks/metal.k8s.local--events--0/mnt/please-create-new-cluster
+ssh root@${VM0_IP} mkdir -p /mnt/disks/metal.k8s.local--events--0/mnt
+ssh root@${VM0_IP} touch    /mnt/disks/metal.k8s.local--events--0/mnt/please-create-new-cluster
 
 
 echo "Waiting for kube to start"
@@ -204,18 +211,18 @@ function enroll_node() {
 
 # Manual "discovery" for control-plane endpoints
 # TODO: Replace with well-known IP
-cat <<EOF | ssh -o StrictHostKeyChecking=accept-new -i ${REPO_ROOT}/.build/.ssh/id_ed25519 root@${node_ip} tee -a /etc/hosts
+cat <<EOF | ssh root@${node_ip} tee -a /etc/hosts
 
 # Hosts added for leader discovery
-10.123.45.10 kops-controller.internal.metal.k8s.local
-10.123.45.10 api.internal.metal.k8s.local
+${VM0_IP} kops-controller.internal.metal.k8s.local
+${VM0_IP} api.internal.metal.k8s.local
 EOF
 
 timeout 10m ${KOPS} toolbox enroll --cluster metal.k8s.local --instance-group nodes-main --host ${node_ip} --v=2
 }
 
-enroll_node 10.123.45.11
-enroll_node 10.123.45.12
+enroll_node ${VM1_IP}
+enroll_node ${VM2_IP}
 
 echo "Waiting 30 seconds for nodes to be ready"
 sleep 30

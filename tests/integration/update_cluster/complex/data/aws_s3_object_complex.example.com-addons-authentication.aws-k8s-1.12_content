@@ -1,7 +1,6 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: authentication.aws
     app.kubernetes.io/managed-by: kops
@@ -53,7 +52,6 @@ spec:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: authentication.aws
     app.kubernetes.io/managed-by: kops
@@ -104,7 +102,6 @@ rules:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: authentication.aws
     app.kubernetes.io/managed-by: kops
@@ -117,7 +114,6 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: authentication.aws
     app.kubernetes.io/managed-by: kops
@@ -139,7 +135,6 @@ kind: DaemonSet
 metadata:
   annotations:
     seccomp.security.alpha.kubernetes.io/pod: runtime/default
-  creationTimestamp: null
   labels:
     addon.kops.k8s.io/name: authentication.aws
     app.kubernetes.io/managed-by: kops
@@ -153,7 +148,6 @@ spec:
       k8s-app: aws-iam-authenticator
   template:
     metadata:
-      creationTimestamp: null
       labels:
         k8s-app: aws-iam-authenticator
         kops.k8s.io/managed-by: kops
@@ -161,9 +155,10 @@ spec:
       containers:
       - args:
         - server
-        - --config=/etc/aws-iam-authenticator/config.yaml
+        - --cluster-id=complex.example.com
         - --state-dir=/var/aws-iam-authenticator
         - --kubeconfig-pregenerated=true
+        - --backend-mode=CRD
         image: public.ecr.aws/eks-distro/kubernetes-sigs/aws-iam-authenticator:v0.6.20-eks-1-30-7
         livenessProbe:
           httpGet:
@@ -186,8 +181,6 @@ spec:
           runAsGroup: 10000
           runAsUser: 10000
         volumeMounts:
-        - mountPath: /etc/aws-iam-authenticator/
-          name: config
         - mountPath: /var/aws-iam-authenticator/
           name: state
         - mountPath: /etc/kubernetes/aws-iam-authenticator/
@@ -196,6 +189,10 @@ spec:
       nodeSelector:
         node-role.kubernetes.io/control-plane: ""
       priorityClassName: system-node-critical
+      securityContext:
+        seLinuxOptions:
+          level: s0
+          type: spc_t
       serviceAccountName: aws-iam-authenticator
       tolerations:
       - effect: NoSchedule
@@ -209,9 +206,6 @@ spec:
       - key: CriticalAddonsOnly
         operator: Exists
       volumes:
-      - configMap:
-          name: aws-iam-authenticator
-        name: config
       - hostPath:
           path: /srv/kubernetes/aws-iam-authenticator/
         name: output
@@ -220,3 +214,20 @@ spec:
         name: state
   updateStrategy:
     type: RollingUpdate
+
+---
+
+apiVersion: iamauthenticator.k8s.aws/v1alpha1
+kind: IAMIdentityMapping
+metadata:
+  labels:
+    addon.kops.k8s.io/name: authentication.aws
+    app.kubernetes.io/managed-by: kops
+    k8s-app: aws-iam-authenticator
+    role.kubernetes.io/authentication: "1"
+  name: iam-identity-mapping-0
+spec:
+  arn: arn:aws-test:iam::000000000000:role/AWSReservedSSO_Developer_7de86b085b6056ae
+  groups:
+  - he:dev
+  username: dev:{{SessionNameRaw}}

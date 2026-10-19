@@ -40,7 +40,7 @@ func TestFileDependencies(t *testing.T) {
 				Home:  "/home/owner",
 			},
 			child: &File{
-				Owner:    fi.PtrTo("owner"),
+				Owner:    new("owner"),
 				Path:     childFileName,
 				Contents: fi.NewStringResource("I depend on an owner"),
 				Type:     FileType_File,
@@ -70,6 +70,18 @@ func TestFileDependencies(t *testing.T) {
 				Path:       childFileName,
 				Contents:   fi.NewStringResource("I depend on " + parentFileName),
 				Type:       FileType_File,
+			},
+		},
+		{
+			name: "afterPackages",
+			parent: &Package{
+				Name: "iptables",
+			},
+			child: &File{
+				AfterPackages: true,
+				Path:          childFileName,
+				Contents:      fi.NewStringResource("I depend on every package"),
+				Type:          FileType_File,
 			},
 		},
 	}

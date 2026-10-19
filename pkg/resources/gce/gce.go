@@ -25,7 +25,6 @@ import (
 	clouddns "google.golang.org/api/dns/v1"
 	"google.golang.org/api/iam/v1"
 	"k8s.io/klog/v2"
-	"k8s.io/kops/pkg/dns"
 	"k8s.io/kops/pkg/resources"
 	"k8s.io/kops/pkg/truncate"
 	"k8s.io/kops/upup/pkg/fi"
@@ -63,13 +62,10 @@ const maxGCERouteNameLength = 63
 
 func ListResourcesGCE(gceCloud gce.GCECloud, clusterInfo resources.ClusterInfo) (map[string]*resources.Resource, error) {
 	clusterName := clusterInfo.Name
-	clusterUsesNoneDNS := clusterInfo.UsesNoneDNS
 
 	ctx := context.TODO()
-
 	region := gceCloud.Region()
-
-	resources := make(map[string]*resources.Resource)
+	allResources := make(map[string]*resources.Resource)
 
 	d := &clusterDiscoveryGCE{
 		cloud:       gceCloud,
@@ -106,7 +102,6 @@ func ListResourcesGCE(gceCloud gce.GCECloud, clusterInfo resources.ClusterInfo) 
 		d.listForwardingRules,
 		d.listFirewallRules,
 		d.listGCEDisks,
-		// TODO: Find routes via instances (via instance groups)
 		d.listAddresses,
 		d.listSubnets,
 		d.listRouters,
@@ -114,8 +109,12 @@ func ListResourcesGCE(gceCloud gce.GCECloud, clusterInfo resources.ClusterInfo) 
 		d.listServiceAccounts,
 		d.listBackendServices,
 		d.listHealthchecks,
+		// Note: Order matters here..this is last because it depends on other resources to be listed.
+		func() ([]*resources.Resource, error) {
+			return d.listRoutes(ctx, allResources)
+		},
 	}
-	if !dns.IsGossipClusterName(clusterName) && !clusterUsesNoneDNS {
+	if clusterInfo.PublishesDNSRecords() {
 		listFunctions = append(listFunctions, d.listGCEDNSZone)
 	}
 
@@ -125,27 +124,16 @@ func ListResourcesGCE(gceCloud gce.GCECloud, clusterInfo resources.ClusterInfo) 
 			return nil, err
 		}
 		for _, t := range resourceTrackers {
-			resources[t.Type+":"+t.ID] = t
+			allResources[t.Type+":"+t.ID] = t
 		}
 	}
 
-	// We try to clean up orphaned routes.
-	{
-		resourceTrackers, err := d.listRoutes(ctx, resources)
-		if err != nil {
-			return nil, err
-		}
-		for _, t := range resourceTrackers {
-			resources[t.Type+":"+t.ID] = t
-		}
-	}
-
-	for k, t := range resources {
+	for k, t := range allResources {
 		if t.Done {
-			delete(resources, k)
+			delete(allResources, k)
 		}
 	}
-	return resources, nil
+	return allResources, nil
 }
 
 type clusterDiscoveryGCE struct {
@@ -492,6 +480,10 @@ func (d *clusterDiscoveryGCE) listForwardingRules() ([]*resources.Resource, erro
 			resourceTracker.Blocks = append(resourceTracker.Blocks, typeAddress+":"+gce.LastComponent(fr.IPAddress))
 		}
 
+		if fr.BackendService != "" {
+			resourceTracker.Blocks = append(resourceTracker.Blocks, typeBackendService+":"+gce.LastComponent(fr.BackendService))
+		}
+
 		klog.V(4).Infof("Found resource: %s", fr.SelfLink)
 		resourceTrackers = append(resourceTrackers, resourceTracker)
 	}
@@ -641,7 +633,10 @@ nextFirewallRule:
 				// l4 level healthchecks
 
 				healthCheckName := gce.LastComponent(healthCheckLink)
-				if !strings.HasPrefix(healthCheckName, "k8s-") || !strings.Contains(healthCheckLink, "/httpHealthChecks/") {
+				// The health check is named k8s-<clusterid>-node when it is the health check shared
+				// by all services, but is named for the load balancer itself when the service sets
+				// externalTrafficPolicy: Local.
+				if (!strings.HasPrefix(healthCheckName, "k8s-") && healthCheckName != forwardingRuleName) || !strings.Contains(healthCheckLink, "/httpHealthChecks/") {
 					klog.Warningf("found non-k8s healthcheck %q in targetPool %q, assuming firewallRule %q is not a k8s rule", healthCheckLink, targetPoolName, firewallRule.Name)
 					continue nextFirewallRule
 				}
@@ -670,8 +665,10 @@ nextFirewallRule:
 			resourceTrackers = append(resourceTrackers, k8sResources...)
 		}
 
-		// find the objects if this is a Kubernetes node health check
-		if strings.HasPrefix(firewallRule.Name, "k8s-") && strings.HasSuffix(firewallRule.Name, "-node-http-hc") {
+		// find the objects if this is a Kubernetes health check.  The rule is named
+		// k8s-<clusterid>-node-http-hc for the health check shared by all services, and
+		// k8s-<loadbalancer>-http-hc for a service with externalTrafficPolicy: Local.
+		if strings.HasPrefix(firewallRule.Name, "k8s-") && strings.HasSuffix(firewallRule.Name, "-http-hc") {
 			// TODO: Check port matches http health check (always 10256?)
 			// TODO: Check description - looks like '{"kubernetes.io/cluster-id":"cb2e931dec561053"}'
 
@@ -735,9 +732,13 @@ func (d *clusterDiscoveryGCE) listRoutes(ctx context.Context, resourceMap map[st
 	var resourceTrackers []*resources.Resource
 
 	instancesToDelete := make(map[string]*resources.Resource)
+	migsToDelete := make(map[string]*resources.Resource)
 	for _, resource := range resourceMap {
-		if resource.Type == typeInstance {
+		switch resource.Type {
+		case typeInstance:
 			instancesToDelete[resource.ID] = resource
+		case typeInstanceGroupManager:
+			migsToDelete[resource.ID] = resource
 		}
 	}
 
@@ -784,9 +785,13 @@ func (d *clusterDiscoveryGCE) listRoutes(ctx context.Context, resourceMap map[st
 			}
 
 			// To avoid race conditions where the control-plane re-adds the routes, we delete routes
-			// only after we have deleted all the instances.
+			// only after we have deleted all the instances, and the managed instance groups that
+			// would otherwise recreate a control-plane instance.
 			for _, instance := range instancesToDelete {
 				resourceTracker.Blocked = append(resourceTracker.Blocked, typeInstance+":"+instance.ID)
+			}
+			for _, mig := range migsToDelete {
+				resourceTracker.Blocked = append(resourceTracker.Blocked, typeInstanceGroupManager+":"+mig.ID)
 			}
 
 			klog.V(4).Infof("Found resource: %s", r.SelfLink)
@@ -1059,6 +1064,10 @@ func deleteServiceAccount(cloud fi.Cloud, r *resources.Resource) error {
 // containsOnlyListedIGMs returns true if all the given backend service's backends
 // are contained in the provided list of IGM resources.
 func containsOnlyListedIGMs(svc *compute.BackendService, igms []*resources.Resource) bool {
+	if len(svc.Backends) == 0 {
+		return false
+	}
+
 	for _, be := range svc.Backends {
 		listed := false
 		for _, igm := range igms {
@@ -1083,10 +1092,10 @@ func (d *clusterDiscoveryGCE) listBackendServices() ([]*resources.Resource, erro
 	svcs, err := c.Compute().RegionBackendServices().List(context.Background(), c.Project(), c.Region())
 	if err != nil {
 		if gce.IsNotFound(err) {
-			klog.Infof("backend services not found, assuming none exist in project: %q region: %q", c.Project(), c.Region())
+			klog.Infof("BackendService not found, assuming none exist in project: %q region: %q", c.Project(), c.Region())
 			return nil, nil
 		}
-		return nil, fmt.Errorf("Failed to list backend services: %w", err)
+		return nil, fmt.Errorf("failed to list backend services: %w", err)
 	}
 	// TODO: cache, for efficiency, if needed.
 	// Find all relevant backend services by finding all the cluster's IGMs, and then
@@ -1099,19 +1108,39 @@ func (d *clusterDiscoveryGCE) listBackendServices() ([]*resources.Resource, erro
 	var bs []*resources.Resource
 	for _, svc := range svcs {
 		if containsOnlyListedIGMs(svc, igms) {
-			bs = append(bs, &resources.Resource{
+			resourceTracker := &resources.Resource{
 				Name: svc.Name,
 				ID:   svc.Name,
 				Type: typeBackendService,
 				Deleter: func(cloud fi.Cloud, r *resources.Resource) error {
 					op, err := c.Compute().RegionBackendServices().Delete(c.Project(), c.Region(), svc.Name)
 					if err != nil {
+						if gce.IsNotFound(err) {
+							klog.Infof("BackendService not found, assuming deleted: %q", r.Name)
+							return nil
+						}
 						return err
 					}
 					return c.WaitForOp(op)
 				},
 				Obj: svc,
-			})
+			}
+
+			for _, hc := range svc.HealthChecks {
+				resourceTracker.Blocks = append(resourceTracker.Blocks, typeHealthcheck+":"+gce.LastComponent(hc))
+			}
+
+			// GCE refuses to delete an InstanceGroupManager while a BackendService still refers to
+			// its instance group; deleting them in the other order costs a full retry interval.
+			for _, be := range svc.Backends {
+				for _, igm := range igms {
+					if igm.Type == typeInstanceGroupManager && strings.HasSuffix(be.Group, "/"+igm.Name) {
+						resourceTracker.Blocks = append(resourceTracker.Blocks, typeInstanceGroupManager+":"+igm.ID)
+					}
+				}
+			}
+
+			bs = append(bs, resourceTracker)
 		}
 	}
 
@@ -1146,6 +1175,10 @@ func (d *clusterDiscoveryGCE) listHealthchecks() ([]*resources.Resource, error) 
 			Deleter: func(cloud fi.Cloud, r *resources.Resource) error {
 				op, err := c.Compute().RegionHealthChecks().Delete(c.Project(), c.Region(), gce.LastComponent(hc))
 				if err != nil {
+					if gce.IsNotFound(err) {
+						klog.Infof("Healthcheck not found, assuming deleted: %q", r.Name)
+						return nil
+					}
 					return err
 				}
 				return c.WaitForOp(op)
@@ -1221,7 +1254,7 @@ func deleteNetwork(cloud fi.Cloud, r *resources.Resource) error {
 	op, err := c.Compute().Networks().Delete(u.Project, u.Name)
 	if err != nil {
 		if gce.IsNotFound(err) {
-			klog.Infof("network not found, assuming deleted: %q", o.SelfLink)
+			klog.Infof("Network not found, assuming deleted: %q", o.SelfLink)
 			return nil
 		}
 		return fmt.Errorf("error deleting network %s: %v", o.SelfLink, err)

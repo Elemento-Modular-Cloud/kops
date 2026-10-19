@@ -31,10 +31,12 @@ import (
 	"path"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/bootstrap"
+	"k8s.io/kops/pkg/dns"
 	"k8s.io/kops/upup/pkg/fi"
-	"k8s.io/kops/upup/pkg/fi/cloudup"
+	"k8s.io/kops/util/pkg/vfs"
 )
 
 type Client struct {
@@ -46,36 +48,67 @@ type Client struct {
 	// BaseURL is the base URL for the server
 	BaseURL url.URL
 
+	// Backoff controls how long a single Query keeps retrying BaseURL before giving up.
+	// If unset, DefaultBackoff is used. Callers that have more than one server to try
+	// should set a shorter backoff, so that one unreachable server does not consume the
+	// whole budget.
+	Backoff wait.Backoff
+
 	httpClient *http.Client
 }
 
-func (b *Client) Query(ctx context.Context, req any, resp any) error {
-	if b.httpClient == nil {
-		certPool := x509.NewCertPool()
-		certPool.AppendCertsFromPEM(b.CAs)
+// DefaultBackoff is the retry behaviour of a Query whose caller has not set Client.Backoff.
+// The interval is capped so a control plane that takes a long time to become reachable does not
+// push the next attempt tens of minutes out. Without a cap, doubling from 1s reaches a 17
+// minute wait by attempt 11, so a node that has been failing for 17 minutes then sits idle
+// for another 17 even once kops-controller is serving.
+var DefaultBackoff = wait.Backoff{
+	Duration: 1 * time.Second,
+	Factor:   2,
+	Jitter:   0.1,
+	Cap:      30 * time.Second,
+	Steps:    100,
+}
 
-		transport := &http.Transport{
-			TLSClientConfig: &tls.Config{
-				RootCAs:    certPool,
-				MinVersion: tls.VersionTLS12,
-			},
-		}
+func New(authenticator bootstrap.Authenticator, cas []byte, baseURL url.URL) *Client {
+	return NewWithTLSServerName(authenticator, cas, baseURL, "")
+}
 
-		httpClient := &http.Client{
-			Timeout:   time.Duration(15) * time.Second,
-			Transport: transport,
-		}
-
-		b.httpClient = httpClient
+func NewWithTLSServerName(authenticator bootstrap.Authenticator, cas []byte, baseURL url.URL, tlsServerName string) *Client {
+	client := &Client{
+		Authenticator: authenticator,
+		CAs:           cas,
+		BaseURL:       baseURL,
 	}
 
+	certPool := x509.NewCertPool()
+	certPool.AppendCertsFromPEM(cas)
+	tlsConfig := &tls.Config{
+		RootCAs:    certPool,
+		MinVersion: tls.VersionTLS12,
+	}
+	if tlsServerName != "" {
+		tlsConfig.ServerName = tlsServerName
+	}
+	transport := &http.Transport{
+		TLSClientConfig: tlsConfig,
+	}
+	client.httpClient = &http.Client{
+		Timeout:   time.Duration(15) * time.Second,
+		Transport: transport,
+	}
+
+	return client
+}
+
+func (b *Client) Query(ctx context.Context, req any, resp any) error {
 	// Sanity-check DNS to provide clearer diagnostic messages.
 	if ips, err := net.LookupIP(b.BaseURL.Hostname()); err != nil {
 		if dnsErr, ok := err.(*net.DNSError); ok && dnsErr.IsNotFound {
 			return fi.NewTryAgainLaterError(fmt.Sprintf("kops-controller DNS not setup yet (not found: %v)", dnsErr))
 		}
 		return err
-	} else if len(ips) == 1 && (ips[0].String() == cloudup.PlaceholderIP || ips[0].String() == cloudup.PlaceholderIPv6) {
+	} else if len(ips) == 1 && (ips[0].String() == dns.PlaceholderIP || ips[0].String() == dns.PlaceholderIPv6) {
 		return fi.NewTryAgainLaterError(fmt.Sprintf("kops-controller DNS not setup yet (placeholder IP found: %v)", ips))
 	}
 
@@ -86,30 +119,52 @@ func (b *Client) Query(ctx context.Context, req any, resp any) error {
 
 	bootstrapURL := b.BaseURL
 	bootstrapURL.Path = path.Join(bootstrapURL.Path, "/bootstrap")
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", bootstrapURL.String(), bytes.NewReader(reqBytes))
-	if err != nil {
-		return err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
 
-	token, err := b.Authenticator.CreateToken(reqBytes)
-	if err != nil {
-		return err
+	backoff := b.Backoff
+	if backoff.Steps == 0 {
+		backoff = DefaultBackoff
 	}
-	httpReq.Header.Set("Authorization", token)
 
-	response, err := b.httpClient.Do(httpReq)
-	if err != nil {
-		return err
-	}
-	if response.Body != nil {
-		defer response.Body.Close()
+	var response *http.Response
+	done, err := vfs.RetryWithBackoff(backoff, func() (bool, error) {
+		httpReq, reqErr := http.NewRequestWithContext(ctx, "POST", bootstrapURL.String(), bytes.NewReader(reqBytes))
+		if reqErr != nil {
+			return false, reqErr
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+
+		token, tokenErr := b.Authenticator.CreateToken(reqBytes)
+		if tokenErr != nil {
+			return false, tokenErr
+		}
+		httpReq.Header.Set("Authorization", token)
+
+		resp, doErr := b.httpClient.Do(httpReq)
+		if doErr != nil {
+			return false, fmt.Errorf("request to kops-controller failed: %w", doErr)
+		}
+
+		response = resp
+		return true, nil
+	})
+	if !done {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("timed out waiting for a successful response from kops-controller")
 	}
 
 	// if we receive StatusConflict it means that we should exit gracefully
 	if response.StatusCode == http.StatusConflict {
 		klog.Infof("kops-controller returned status code %d", response.StatusCode)
+		if response.Body != nil {
+			response.Body.Close()
+		}
 		os.Exit(0)
+	}
+
+	if response.Body != nil {
+		defer response.Body.Close()
 	}
 
 	if response.StatusCode != http.StatusOK {

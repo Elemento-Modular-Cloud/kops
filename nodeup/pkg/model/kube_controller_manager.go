@@ -29,7 +29,7 @@ import (
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
 	"k8s.io/kops/util/pkg/distributions"
-	"k8s.io/kops/util/pkg/proxy"
+	proxy "k8s.io/kops/util/pkg/env"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -44,9 +44,16 @@ type KubeControllerManagerBuilder struct {
 
 var _ fi.NodeupModelBuilder = &KubeControllerManagerBuilder{}
 
+func (b *KubeControllerManagerBuilder) runsKCM() bool {
+	if b.IsMaster || b.BootConfig.InstanceGroupRole.HasKubeControllerManager() {
+		return true
+	}
+	return false
+}
+
 // Build is responsible for configuring the kube-controller-manager
 func (b *KubeControllerManagerBuilder) Build(c *fi.NodeupModelBuilderContext) error {
-	if !b.IsMaster {
+	if !b.runsKCM() {
 		return nil
 	}
 
@@ -135,7 +142,7 @@ func (b *KubeControllerManagerBuilder) writeServerCertificate(c *fi.NodeupModelB
 			return err
 		}
 
-		kcm.TLSCertFile = fi.PtrTo(filepath.Join(pathSrvKCM, "server.crt"))
+		kcm.TLSCertFile = new(filepath.Join(pathSrvKCM, "server.crt"))
 		kcm.TLSPrivateKeyFile = filepath.Join(pathSrvKCM, "server.key")
 	}
 
@@ -150,8 +157,6 @@ func (b *KubeControllerManagerBuilder) buildPod(kcm *kops.KubeControllerManagerC
 	if err != nil {
 		return nil, fmt.Errorf("error building kube-controller-manager flags: %v", err)
 	}
-
-	flags = append(flags, "--cloud-config="+InTreeCloudConfigFilePath)
 
 	// Add kubeconfig flags
 	for _, flag := range []string{"", "authentication-", "authorization-"} {
@@ -261,11 +266,9 @@ func (b *KubeControllerManagerBuilder) buildPod(kcm *kops.KubeControllerManagerC
 		container.Args = append(container.Args, sortedStrings(flags)...)
 	}
 	for _, path := range b.SSLHostPaths() {
-		name := strings.Replace(path, "/", "", -1)
+		name := strings.ReplaceAll(path, "/", "")
 		kubemanifest.AddHostPathMapping(pod, container, name, path)
 	}
-
-	kubemanifest.AddHostPathMapping(pod, container, "cloudconfig", InTreeCloudConfigFilePath)
 
 	kubemanifest.AddHostPathMapping(pod, container, "cabundle", filepath.Join(b.PathSrvKubernetes(), "ca.crt"))
 

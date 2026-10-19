@@ -41,7 +41,11 @@ const (
 )
 
 type File struct {
-	AfterFiles      []string    `json:"afterFiles,omitempty"`
+	AfterFiles []string `json:"afterFiles,omitempty"`
+	// AfterPackages orders this file after every Package task. Set it when
+	// OnChangeExecute restarts the network: nodeup schedules tasks in parallel,
+	// so an unordered restart can land mid apt-get/dnf and fail the package task.
+	AfterPackages   bool        `json:"afterPackages,omitempty"`
 	BeforeServices  []string    `json:"beforeServices,omitempty"`
 	Contents        fi.Resource `json:"contents,omitempty"`
 	Group           *string     `json:"group,omitempty"`
@@ -102,6 +106,18 @@ func (e *File) GetDependencies(tasks map[string]fi.NodeupTask) []fi.NodeupTask {
 		}
 	}
 
+	// Requires every package to be installed first. For tasks whose
+	// OnChangeExecute restarts the network, nodeup's parallel scheduling
+	// otherwise lets the restart land in the middle of an apt-get or dnf
+	// transaction, which fails the package task and aborts the bootstrap.
+	if e.AfterPackages {
+		for _, v := range tasks {
+			if _, ok := v.(*Package); ok {
+				deps = append(deps, v)
+			}
+		}
+	}
+
 	return deps
 }
 
@@ -113,8 +129,8 @@ func (f *File) String() string {
 	return fmt.Sprintf("File: %q", f.Path)
 }
 
-var _ CreatesDir = &InstallFile{}
-var _ CreatesDir = &File{}
+var _ CreatesDir = (*InstallFile)(nil)
+var _ CreatesDir = (*File)(nil)
 
 // Dir implements CreatesDir::Dir
 func (f *File) Dir() string {
@@ -134,7 +150,7 @@ func findFile(p string) (*File, error) {
 
 	actual := &File{}
 	actual.Path = p
-	actual.Mode = fi.PtrTo(fi.FileModeToString(stat.Mode() & os.ModePerm))
+	actual.Mode = new(fi.FileModeToString(stat.Mode() & os.ModePerm))
 
 	uid := int(stat.Sys().(*syscall.Stat_t).Uid)
 	owner, err := fi.LookupUserByID(uid)
@@ -142,9 +158,9 @@ func findFile(p string) (*File, error) {
 		return nil, err
 	}
 	if owner != nil {
-		actual.Owner = fi.PtrTo(owner.Name)
+		actual.Owner = new(owner.Name)
 	} else {
-		actual.Owner = fi.PtrTo(strconv.Itoa(uid))
+		actual.Owner = new(strconv.Itoa(uid))
 	}
 
 	gid := int(stat.Sys().(*syscall.Stat_t).Gid)
@@ -153,9 +169,9 @@ func findFile(p string) (*File, error) {
 		return nil, err
 	}
 	if group != nil {
-		actual.Group = fi.PtrTo(group.Name)
+		actual.Group = new(group.Name)
 	} else {
-		actual.Group = fi.PtrTo(strconv.Itoa(gid))
+		actual.Group = new(strconv.Itoa(gid))
 	}
 
 	if (stat.Mode() & os.ModeSymlink) != 0 {
@@ -165,7 +181,7 @@ func findFile(p string) (*File, error) {
 		}
 
 		actual.Type = FileType_Symlink
-		actual.Symlink = fi.PtrTo(target)
+		actual.Symlink = new(target)
 	} else if (stat.Mode() & os.ModeDir) != 0 {
 		actual.Type = FileType_Directory
 	} else {
@@ -243,7 +259,8 @@ func (_ *File) RenderLocal(_ *local.LocalTarget, a, e, changes *File) error {
 	}
 
 	changed := false
-	if e.Type == FileType_Symlink {
+	switch e.Type {
+	case FileType_Symlink:
 		if changes.Symlink != nil {
 			// This will currently fail if the target already exists.
 			// That's probably a good thing for now ... it is hard to know what to do here!
@@ -254,7 +271,7 @@ func (_ *File) RenderLocal(_ *local.LocalTarget, a, e, changes *File) error {
 			}
 			changed = true
 		}
-	} else if e.Type == FileType_Directory {
+	case FileType_Directory:
 		if a == nil {
 			parent := filepath.Dir(strings.TrimSuffix(e.Path, "/"))
 			err := os.MkdirAll(parent, dirMode)
@@ -268,7 +285,7 @@ func (_ *File) RenderLocal(_ *local.LocalTarget, a, e, changes *File) error {
 			}
 			changed = true
 		}
-	} else if e.Type == FileType_File {
+	case FileType_File:
 		if changes.Contents != nil {
 			err = fi.WriteFile(e.Path, e.Contents, fileMode, dirMode, fi.ValueOf(e.Owner), fi.ValueOf(e.Group))
 			if err != nil {
@@ -276,7 +293,7 @@ func (_ *File) RenderLocal(_ *local.LocalTarget, a, e, changes *File) error {
 			}
 			changed = true
 		}
-	} else {
+	default:
 		return fmt.Errorf("File type=%q not valid/supported", e.Type)
 	}
 

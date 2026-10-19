@@ -49,7 +49,7 @@ func (e *RouterInterface) GetDependencies(tasks map[string]fi.CloudupTask) []fi.
 	return deps
 }
 
-var _ fi.CompareWithID = &RouterInterface{}
+var _ fi.CompareWithID = (*RouterInterface)(nil)
 
 func (i *RouterInterface) CompareWithID() *string {
 	return i.ID
@@ -80,7 +80,7 @@ func (i *RouterInterface) Find(context *fi.CloudupContext) (*RouterInterface, er
 					return nil, fmt.Errorf("found multiple interfaces which subnet:%s attach to", subnetID)
 				}
 				actual = &RouterInterface{
-					ID:        fi.PtrTo(p.ID),
+					ID:        new(p.ID),
 					Name:      i.Name,
 					Router:    i.Router,
 					Subnet:    i.Subnet,
@@ -131,7 +131,7 @@ func (_ *RouterInterface) RenderOpenstack(t *openstack.OpenstackAPITarget, a, e,
 			return fmt.Errorf("Error creating router interface: %v", err)
 		}
 
-		e.ID = fi.PtrTo(v.PortID)
+		e.ID = new(v.PortID)
 		klog.V(2).Infof("Creating a new Openstack router interface, id=%s", v.PortID)
 		return nil
 	}

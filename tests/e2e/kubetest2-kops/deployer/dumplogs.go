@@ -25,7 +25,6 @@ import (
 
 	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/resources"
-	"k8s.io/kops/tests/e2e/pkg/kops"
 	"sigs.k8s.io/kubetest2/pkg/exec"
 	"sigs.k8s.io/yaml"
 )
@@ -37,16 +36,25 @@ func (d *deployer) DumpClusterLogs() error {
 	}
 	defer yamlFile.Close()
 
+	// Up() may not have run in this process, or may have failed before it could work this out.
+	d.resolveSSHUserFromCluster()
+
 	args := []string{
 		d.KopsBinaryPath, "toolbox", "dump",
 		"--name", d.ClusterName,
 		"--dir", d.ArtifactsDir,
 		"--private-key", d.SSHPrivateKeyPath,
-		"--ssh-user", d.SSHUser,
+	}
+	// Passing an empty --ssh-user would override the kops default with an unusable value.
+	if d.SSHUser != "" {
+		args = append(args, "--ssh-user", d.SSHUser)
 	}
 
 	if d.MaxNodesToDump != "" {
 		args = append(args, "--max-nodes", d.MaxNodesToDump)
+	}
+	if d.NodeDumpTimeout > 0 {
+		args = append(args, "--node-dump-timeout", d.NodeDumpTimeout.String())
 	}
 	klog.Info(strings.Join(args, " "))
 	cmd := exec.Command(args[0], args[1:]...)
@@ -65,19 +73,6 @@ func (d *deployer) DumpClusterLogs() error {
 		dumpErr = errors.Join(dumpErr, err)
 	}
 
-	kopsVersion, err := kops.GetVersion(d.KopsBinaryPath)
-	if err != nil {
-		klog.Warningf("kops version failed: %v", err)
-		dumpErr = errors.Join(dumpErr, err)
-	}
-
-	if kopsVersion == "" || kopsVersion < "1.29" {
-		// TODO: remove when kubetest2-kops stops testing against kops 1.28 and older
-		if err := d.dumpClusterInfo(); err != nil {
-			klog.Warningf("cluster info dump failed: %v", err)
-			dumpErr = errors.Join(dumpErr, err)
-		}
-	}
 	return dumpErr
 }
 
@@ -234,8 +229,10 @@ func (d *deployer) dumpClusterInfoSSH() error {
 		d.KopsBinaryPath, "toolbox", "dump",
 		"--name", d.ClusterName,
 		"--private-key", d.SSHPrivateKeyPath,
-		"--ssh-user", d.SSHUser,
 		"-o", "yaml",
+	}
+	if d.SSHUser != "" {
+		toolboxDumpArgs = append(toolboxDumpArgs, "--ssh-user", d.SSHUser)
 	}
 	klog.Info(strings.Join(toolboxDumpArgs, " "))
 

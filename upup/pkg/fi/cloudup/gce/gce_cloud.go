@@ -27,16 +27,15 @@ import (
 
 	"maps"
 
+	"cloud.google.com/go/storage"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/cloudresourcemanager/v1"
 	compute "google.golang.org/api/compute/v1"
 	oauth2 "google.golang.org/api/oauth2/v2"
-	"google.golang.org/api/storage/v1"
 	"k8s.io/klog/v2"
 	"k8s.io/kops/dnsprovider/pkg/dnsprovider"
 	"k8s.io/kops/dnsprovider/pkg/dnsprovider/providers/google/clouddns"
 	"k8s.io/kops/pkg/apis/kops"
-	"k8s.io/kops/pkg/mutexes"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce/gcemetadata"
 )
@@ -44,7 +43,7 @@ import (
 type GCECloud interface {
 	fi.Cloud
 	Compute() ComputeClient
-	Storage() *storage.Service
+	Storage() *storage.Client
 	IAM() IamClient
 	CloudDNS() DNSClient
 	Project() string
@@ -60,13 +59,13 @@ type GCECloud interface {
 }
 
 // MutexForProjectIAM returns a mutex to prevent local concurrent operations on project IAM.
-func MutexForProjectIAM(projectID string) mutexes.LocalMutex {
-	return mutexes.InProcess.Get("iam/projects/" + projectID)
+func MutexForProjectIAM(projectID string) LocalMutex {
+	return InProcessMutex.Get("iam/projects/" + projectID)
 }
 
 type gceCloudImplementation struct {
 	compute *computeClientImpl
-	storage *storage.Service
+	storage *storage.Client
 	iam     *iamClientImpl
 	dns     *dnsClientImpl
 
@@ -82,7 +81,7 @@ type gceCloudImplementation struct {
 	labels map[string]string
 }
 
-var _ fi.Cloud = &gceCloudImplementation{}
+var _ fi.Cloud = (*gceCloudImplementation)(nil)
 
 func (c *gceCloudImplementation) ProviderID() kops.CloudProviderID {
 	return kops.CloudProviderGCE
@@ -130,6 +129,8 @@ func NewGCECloud(region string, project string, labels map[string]string) (GCECl
 		return i.(gceCloudInternal).WithLabels(labels), nil
 	}
 
+	klog.V(2).Infof("Building new GCE cloud instance for region %q and project %q", region, project)
+
 	c := &gceCloudImplementation{region: region, project: project}
 
 	ctx := context.Background()
@@ -144,11 +145,11 @@ func NewGCECloud(region string, project string, labels map[string]string) (GCECl
 	}
 	c.compute = computeClient
 
-	storageService, err := storage.NewService(ctx)
+	storageClient, err := storage.NewClient(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error building storage API client: %v", err)
 	}
-	c.storage = storageService
+	c.storage = storageClient
 
 	iamService, err := newIamClientImpl(ctx)
 	if err != nil {
@@ -210,7 +211,7 @@ func (c *gceCloudImplementation) Compute() ComputeClient {
 }
 
 // Storage returns private struct element storage.
-func (c *gceCloudImplementation) Storage() *storage.Service {
+func (c *gceCloudImplementation) Storage() *storage.Client {
 	return c.storage
 }
 
@@ -279,11 +280,7 @@ func (c *gceCloudImplementation) Labels() map[string]string {
 	return tags
 }
 
-// TODO refactor this out of resources
-// this is needed for delete groups and other new methods
-
-// Zones returns the zones in a region
-func (c *gceCloudImplementation) Zones() ([]string, error) {
+func GetZones(c GCECloud) ([]string, error) {
 	var zones []string
 	// TODO: Only zones in api.Cluster object, if we have one?
 	gceZones, err := c.Compute().Zones().List(context.Background(), c.Project())
@@ -306,6 +303,14 @@ func (c *gceCloudImplementation) Zones() ([]string, error) {
 
 	klog.Infof("Scanning zones: %v", zones)
 	return zones, nil
+}
+
+// TODO refactor this out of resources
+// this is needed for delete groups and other new methods
+
+// Zones returns the zones in a region
+func (c *gceCloudImplementation) Zones() ([]string, error) {
+	return GetZones(c)
 }
 
 func (c *gceCloudImplementation) WaitForOp(op *compute.Operation) error {

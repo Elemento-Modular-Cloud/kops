@@ -27,11 +27,11 @@ import (
 	"k8s.io/kops/pkg/flagbuilder"
 	"k8s.io/kops/pkg/k8scodecs"
 	"k8s.io/kops/pkg/kubemanifest"
-	"k8s.io/kops/pkg/model/components/kubescheduler"
 	"k8s.io/kops/pkg/rbac"
+	"k8s.io/kops/pkg/wellknownpaths"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
-	"k8s.io/kops/util/pkg/proxy"
+	"k8s.io/kops/util/pkg/env"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -60,9 +60,16 @@ type KubeSchedulerBuilder struct {
 
 var _ fi.NodeupModelBuilder = &KubeSchedulerBuilder{}
 
+func (b *KubeSchedulerBuilder) runsScheduler() bool {
+	if b.IsMaster || b.BootConfig.InstanceGroupRole.HasScheduler() {
+		return true
+	}
+	return false
+}
+
 // Build is responsible for building the manifest for the kube-scheduler
 func (b *KubeSchedulerBuilder) Build(c *fi.NodeupModelBuilderContext) error {
-	if !b.IsMaster {
+	if !b.runsScheduler() {
 		return nil
 	}
 
@@ -94,7 +101,7 @@ func (b *KubeSchedulerBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 		kubeconfig := b.BuildIssuedKubeconfig("kube-scheduler", nodetasks.PKIXName{CommonName: rbac.KubeScheduler}, c)
 
 		c.AddTask(&nodetasks.File{
-			Path:     kubescheduler.KubeConfigPath,
+			Path:     wellknownpaths.KubeSchedulerKubeConfig,
 			Contents: kubeconfig,
 			Type:     nodetasks.FileType_File,
 			Mode:     s("0400"),
@@ -102,7 +109,7 @@ func (b *KubeSchedulerBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 	}
 
 	// Load the kube-scheduler config object if one has been provided.
-	kubeSchedulerConfigAsset := b.findFileAsset(kubescheduler.KubeSchedulerConfigPath)
+	kubeSchedulerConfigAsset := b.findFileAsset(wellknownpaths.KubeSchedulerConfig)
 
 	if kubeSchedulerConfigAsset != nil {
 		klog.Infof("using kubescheduler configuration from file assets")
@@ -111,16 +118,13 @@ func (b *KubeSchedulerBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 		// We didn't get a kubescheduler configuration; warn as we're aiming to move this to generation in the kops CLI
 		klog.Warningf("using embedded kubescheduler configuration")
 		config := NewSchedulerConfig("kubescheduler.config.k8s.io/v1")
-		if b.IsKubernetesLT("1.25") {
-			config = NewSchedulerConfig("kubescheduler.config.k8s.io/v1beta2")
-		}
 
 		kubeSchedulerConfig, err := configbuilder.BuildConfigYaml(&kubeScheduler, config)
 		if err != nil {
 			return err
 		}
 		c.AddTask(&nodetasks.File{
-			Path:     kubescheduler.KubeSchedulerConfigPath,
+			Path:     wellknownpaths.KubeSchedulerConfig,
 			Contents: fi.NewBytesResource(kubeSchedulerConfig),
 			Type:     nodetasks.FileType_File,
 			Mode:     s("0400"),
@@ -146,7 +150,7 @@ func NewSchedulerConfig(apiVersion string) *SchedulerConfig {
 	schedConfig.APIVersion = apiVersion
 	schedConfig.Kind = "KubeSchedulerConfiguration"
 	schedConfig.ClientConnection = ClientConnectionConfig{}
-	schedConfig.ClientConnection.Kubeconfig = kubescheduler.KubeConfigPath
+	schedConfig.ClientConnection.Kubeconfig = wellknownpaths.KubeSchedulerKubeConfig
 	return schedConfig
 }
 
@@ -173,7 +177,7 @@ func (b *KubeSchedulerBuilder) writeServerCertificate(c *fi.NodeupModelBuilderCo
 			return err
 		}
 
-		kubeScheduler.TLSCertFile = fi.PtrTo(filepath.Join(pathSrvScheduler, "server.crt"))
+		kubeScheduler.TLSCertFile = new(filepath.Join(pathSrvScheduler, "server.crt"))
 		kubeScheduler.TLSPrivateKeyFile = filepath.Join(pathSrvScheduler, "server.key")
 	}
 
@@ -191,9 +195,12 @@ func (b *KubeSchedulerBuilder) buildPod(kubeScheduler *kops.KubeSchedulerConfig)
 
 	flags = append(flags, "--config="+"/var/lib/kube-scheduler/config.yaml")
 
+	// Make sure the scheduler always looks up its authentication configuration from the API server.
+	flags = append(flags, "--authentication-tolerate-lookup-failure=false")
+	flags = append(flags, "--authentication-skip-lookup=false")
 	// Add kubeconfig flags
 	for _, flag := range []string{"authentication-", "authorization-"} {
-		flags = append(flags, "--"+flag+"kubeconfig="+kubescheduler.KubeConfigPath)
+		flags = append(flags, "--"+flag+"kubeconfig="+wellknownpaths.KubeSchedulerKubeConfig)
 	}
 
 	pod := &v1.Pod{
@@ -246,7 +253,7 @@ func (b *KubeSchedulerBuilder) buildPod(kubeScheduler *kops.KubeSchedulerConfig)
 	container := &v1.Container{
 		Name:  "kube-scheduler",
 		Image: image,
-		Env:   proxy.GetProxyEnvVars(b.NodeupConfig.Networking.EgressProxy),
+		Env:   env.GetProxyEnvVars(b.NodeupConfig.Networking.EgressProxy),
 		LivenessProbe: &v1.Probe{
 			ProbeHandler:        v1.ProbeHandler{HTTPGet: healthAction},
 			InitialDelaySeconds: 15,

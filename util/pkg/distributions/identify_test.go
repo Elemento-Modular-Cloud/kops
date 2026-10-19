@@ -30,14 +30,14 @@ func TestFindDistribution(t *testing.T) {
 		expected Distribution
 	}{
 		{
-			rootfs:   "amazonlinux2",
-			err:      nil,
-			expected: DistributionAmazonLinux2,
-		},
-		{
 			rootfs:   "amazonlinux2023",
 			err:      nil,
 			expected: DistributionAmazonLinux2023,
+		},
+		{
+			rootfs:   "amazonlinux2027",
+			err:      nil,
+			expected: DistributionAmazonLinux2027,
 		},
 		{
 			rootfs:   "centos7",
@@ -70,11 +70,6 @@ func TestFindDistribution(t *testing.T) {
 			expected: Distribution{},
 		},
 		{
-			rootfs:   "debian10",
-			err:      nil,
-			expected: DistributionDebian10,
-		},
-		{
 			rootfs:   "debian11",
 			err:      nil,
 			expected: DistributionDebian11,
@@ -85,6 +80,10 @@ func TestFindDistribution(t *testing.T) {
 			expected: DistributionDebian12,
 		},
 		{
+			rootfs:   "debian13",
+			err:      nil,
+			expected: DistributionDebian13,
+		}, {
 			rootfs:   "flatcar",
 			err:      nil,
 			expected: DistributionFlatcar,
@@ -120,11 +119,6 @@ func TestFindDistribution(t *testing.T) {
 			expected: Distribution{},
 		},
 		{
-			rootfs:   "ubuntu2004",
-			err:      nil,
-			expected: DistributionUbuntu2004,
-		},
-		{
 			rootfs:   "ubuntu2204",
 			err:      nil,
 			expected: DistributionUbuntu2204,
@@ -133,6 +127,21 @@ func TestFindDistribution(t *testing.T) {
 			rootfs:   "ubuntu2404",
 			err:      nil,
 			expected: DistributionUbuntu2404,
+		},
+		{
+			rootfs:   "ubuntu2510",
+			err:      nil,
+			expected: DistributionUbuntu2510,
+		},
+		{
+			rootfs:   "ubuntu2604",
+			err:      nil,
+			expected: DistributionUbuntu2604,
+		},
+		{
+			rootfs:   "ubuntu2610",
+			err:      nil,
+			expected: DistributionUbuntu2610,
 		},
 		{
 			rootfs:   "notfound",

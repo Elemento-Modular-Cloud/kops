@@ -19,7 +19,7 @@ metadata:
   labels:
     k8s-addon: kops-controller.addons.k8s.io
     k8s-app: kops-controller
-    version: v{{ KopsVersion }}
+    version: {{ KopsVersionForLabel }}
 spec:
   selector:
     matchLabels:
@@ -31,7 +31,7 @@ spec:
       labels:
         k8s-addon: kops-controller.addons.k8s.io
         k8s-app: kops-controller
-        version: v{{ KopsVersion }}
+        version: {{ KopsVersionForLabel }}
       annotations:
         dns.alpha.kubernetes.io/internal: kops-controller.internal.{{ ClusterName }}
     spec:
@@ -40,12 +40,10 @@ spec:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
             - matchExpressions:
-              - key: node-role.kubernetes.io/control-plane
-                operator: Exists
-              - key: kops.k8s.io/kops-controller-pki
+              - key: node-role.kops.k8s.io/kops-controller
                 operator: Exists
             - matchExpressions:
-              - key: node-role.kubernetes.io/master
+              - key: node-role.kubernetes.io/control-plane
                 operator: Exists
               - key: kops.k8s.io/kops-controller-pki
                 operator: Exists
@@ -60,12 +58,14 @@ spec:
         operator: Exists
       - key: node-role.kubernetes.io/control-plane
         operator: Exists
+      - key: node-role.kubernetes.io/api-server
+        operator: Exists
       dnsPolicy: Default  # Don't use cluster DNS (we are likely running before kube-dns)
       hostNetwork: true
       serviceAccount: kops-controller
       containers:
       - name: kops-controller
-        image: registry.k8s.io/kops/kops-controller:{{ KopsVersion }}
+        image: registry.k8s.io/kops/kops-controller:{{ KopsVersionImageTag }}
         volumeMounts:
 {{ if .UseHostCertificates }}
         - mountPath: /etc/ssl/certs
@@ -163,16 +163,6 @@ rules:
   - get
   - patch
   - update
-{{- if GossipEnabled }}
-- apiGroups:
-  - ""
-  resources:
-  - endpoints
-  verbs:
-  - get
-  - list
-  - watch
-{{- end }}
 
 ---
 
@@ -190,7 +180,6 @@ subjects:
 - apiGroup: rbac.authorization.k8s.io
   kind: User
   name: system:serviceaccount:kube-system:kops-controller
-
 ---
 
 apiVersion: rbac.authorization.k8s.io/v1
@@ -235,17 +224,6 @@ rules:
   - leases
   verbs:
   - create
-{{- if GossipEnabled }}
-- apiGroups:
-  - ""
-  resources:
-  - configmaps
-  verbs:
-  - get
-  - watch
-  - patch
-  resourceNames: [ "coredns" ]
-{{- end }}
 
 ---
 
@@ -264,8 +242,3 @@ subjects:
 - apiGroup: rbac.authorization.k8s.io
   kind: User
   name: system:serviceaccount:kube-system:kops-controller
-
-{{- range $service := KopsController.GossipServices }}
----
-{{ KubeObjectToApplyYAML $service }}
-{{- end }}

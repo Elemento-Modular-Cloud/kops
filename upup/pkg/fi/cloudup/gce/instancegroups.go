@@ -17,11 +17,14 @@ limitations under the License.
 package gce
 
 import (
+	"cmp"
 	"context"
 	"encoding/base32"
 	"fmt"
 	"hash/fnv"
+	"slices"
 	"strings"
+	"time"
 
 	compute "google.golang.org/api/compute/v1"
 	v1 "k8s.io/api/core/v1"
@@ -31,15 +34,43 @@ import (
 	"k8s.io/kops/upup/pkg/fi"
 )
 
+// PollingInterval is the polling interval to use when waiting for all MIG Instances to be deleted
+var PollingInterval = 5 * time.Second
+
 // DeleteGroup deletes a cloud of instances controlled by an Instance Group Manager
 func (c *gceCloudImplementation) DeleteGroup(g *cloudinstances.CloudInstanceGroup) error {
-	return deleteCloudInstanceGroup(c, g)
+	return DeleteCloudInstanceGroup(c, g)
 }
 
-// deleteCloudInstanceGroup deletes the InstanceGroupManager and current InstanceTemplate
-func deleteCloudInstanceGroup(c GCECloud, g *cloudinstances.CloudInstanceGroup) error {
+// DeleteCloudInstanceGroup deletes the InstanceGroupManager and current InstanceTemplate
+func DeleteCloudInstanceGroup(c GCECloud, g *cloudinstances.CloudInstanceGroup) error {
 	mig := g.Raw.(*compute.InstanceGroupManager)
-	err := DeleteInstanceGroupManager(c, mig)
+	err := DeleteMIGInstances(c, mig)
+	if err != nil {
+		return err
+	}
+
+	timeout := time.Now().Add(10 * time.Minute)
+
+	klog.Infof("Waiting for instances in MIG %q to terminate...", mig.Name)
+	for {
+		if time.Now().After(timeout) {
+			return fmt.Errorf("timed out waiting for instances in MIG %q to terminate", mig.Name)
+		}
+
+		instances, err := ListManagedInstances(c, mig)
+		if err != nil {
+			return fmt.Errorf("error listing managed instances for %q: %v", mig.Name, err)
+		}
+		if len(instances) == 0 {
+			klog.Infof("All instances in MIG %q terminated", mig.Name)
+			break
+		}
+		klog.Infof("%d instance(s) remaining in MIG %q, waiting...", len(instances), mig.Name)
+		time.Sleep(PollingInterval)
+	}
+
+	err = DeleteInstanceGroupManager(c, mig)
 	if err != nil {
 		return err
 	}
@@ -88,14 +119,18 @@ func recreateCloudInstance(c GCECloud, i *cloudinstances.CloudInstance) error {
 
 // GetCloudGroups returns a map of CloudGroup that backs a list of instance groups
 func (c *gceCloudImplementation) GetCloudGroups(cluster *kops.Cluster, instancegroups []*kops.InstanceGroup, warnUnmatched bool, nodes []v1.Node) (map[string]*cloudinstances.CloudInstanceGroup, error) {
-	return getCloudGroups(c, cluster, instancegroups, warnUnmatched, nodes)
+	return GetCloudGroups(c, cluster, instancegroups, warnUnmatched, nodes)
 }
 
-func getCloudGroups(c GCECloud, cluster *kops.Cluster, instancegroups []*kops.InstanceGroup, warnUnmatched bool, nodes []v1.Node) (map[string]*cloudinstances.CloudInstanceGroup, error) {
+func GetCloudGroups(c GCECloud, cluster *kops.Cluster, instancegroups []*kops.InstanceGroup, warnUnmatched bool, nodes []v1.Node) (map[string]*cloudinstances.CloudInstanceGroup, error) {
 	groups := make(map[string]*cloudinstances.CloudInstanceGroup)
 
 	project := c.Project()
 	ctx := context.Background()
+
+	// Every instance template has carried the cluster label since kOps 1.23, so
+	// filtering on it keeps other clusters sharing the project out of the listing.
+	clusterLabel := LabelForCluster(cluster.Name)
 
 	nodesByProviderID := make(map[string]*v1.Node)
 
@@ -133,6 +168,9 @@ func getCloudGroups(c GCECloud, cluster *kops.Cluster, instancegroups []*kops.In
 		if err != nil {
 			return nil, fmt.Errorf("error listing InstanceGroupManagers: %v", err)
 		}
+
+		var instancesByName map[string]*compute.Instance
+
 		for _, mig := range migs {
 			name := mig.Name
 
@@ -170,12 +208,24 @@ func getCloudGroups(c GCECloud, cluster *kops.Cluster, instancegroups []*kops.In
 				return nil, err
 			}
 
+			if len(instances) > 0 && instancesByName == nil {
+				zoneInstances, err := c.Compute().Instances().List(ctx, project, zoneName, clusterLabel)
+				if err != nil {
+					return nil, fmt.Errorf("error listing Instances in zone %q: %v", zoneName, err)
+				}
+				instancesByName = make(map[string]*compute.Instance, len(zoneInstances))
+				for _, inst := range zoneInstances {
+					instancesByName[inst.Name] = inst
+				}
+			}
+
 			for _, i := range instances {
 				id := i.Instance
 				name := LastComponent(id)
-				instance, err := c.Compute().Instances().Get(project, zoneName, name)
-				if err != nil {
-					return nil, fmt.Errorf("error getting Instance: %v", err)
+				instance := instancesByName[name]
+				if instance == nil {
+					klog.Warningf("Instance %s not found, it may not have been created", name)
+					continue
 				}
 				cm := &cloudinstances.CloudInstance{
 					ID:                 instance.SelfLink,
@@ -264,9 +314,150 @@ func matchInstanceGroup(mig *compute.InstanceGroupManager, c *kops.Cluster, inst
 	return matches[0], nil
 }
 
+var (
+	_ cloudinstances.GroupFailureReporter        = (*gceCloudImplementation)(nil)
+	_ cloudinstances.GroupInstanceStatusReporter = (*gceCloudImplementation)(nil)
+)
+
+// GetGroupFailures returns recent provisioning errors the GCE managed
+// instance group has hit. To avoid surfacing errors from a previous, healthier
+// incarnation of the group, results are filtered to only errors timestamped
+// after the most recent successful instance creation in the group. If the
+// group is empty (no instances were ever created), no filter is applied.
+func (c *gceCloudImplementation) GetGroupFailures(ctx context.Context, group *cloudinstances.CloudInstanceGroup) ([]cloudinstances.GroupFailure, error) {
+	return GetGroupFailures(ctx, c, group)
+}
+
+// GetGroupFailures implements the GroupFailureReporter capability for
+// any GCECloud. See the method above for the filtering and aggregation rules.
+func GetGroupFailures(ctx context.Context, c GCECloud, group *cloudinstances.CloudInstanceGroup) ([]cloudinstances.GroupFailure, error) {
+	mig, ok := group.Raw.(*compute.InstanceGroupManager)
+	if !ok || mig == nil {
+		return nil, nil
+	}
+	u, err := ParseGoogleCloudURL(mig.SelfLink)
+	if err != nil {
+		return nil, fmt.Errorf("parsing MIG self link %q: %w", mig.SelfLink, err)
+	}
+
+	watermark := cloudinstances.Watermark(group)
+
+	items, err := c.Compute().InstanceGroupManagers().ListErrors(ctx, u.Project, u.Zone, u.Name)
+	if err != nil {
+		return nil, fmt.Errorf("listing errors for MIG %q: %w", mig.Name, err)
+	}
+
+	type key struct{ code, message string }
+	agg := map[key]*cloudinstances.GroupFailure{}
+	for _, it := range items {
+		if it == nil || it.Error == nil {
+			continue
+		}
+		var ts time.Time
+		if it.Timestamp != "" {
+			if t, err := time.Parse(time.RFC3339, it.Timestamp); err == nil {
+				ts = t
+			}
+		}
+		if !watermark.IsZero() && !ts.IsZero() && ts.Before(watermark) {
+			continue
+		}
+		k := key{it.Error.Code, it.Error.Message}
+		e, ok := agg[k]
+		if !ok {
+			e = &cloudinstances.GroupFailure{
+				Code:      it.Error.Code,
+				Message:   it.Error.Message,
+				FirstSeen: ts,
+				LastSeen:  ts,
+			}
+			if it.InstanceActionDetails != nil {
+				e.Instance = LastComponent(it.InstanceActionDetails.Instance)
+			}
+			agg[k] = e
+		}
+		e.Count++
+		if !ts.IsZero() {
+			if e.FirstSeen.IsZero() || ts.Before(e.FirstSeen) {
+				e.FirstSeen = ts
+			}
+			if ts.After(e.LastSeen) {
+				e.LastSeen = ts
+			}
+		}
+	}
+
+	out := make([]cloudinstances.GroupFailure, 0, len(agg))
+	for _, e := range agg {
+		out = append(out, *e)
+	}
+	cloudinstances.SortFailures(out)
+	return out, nil
+}
+
+// GetGroupInstanceStatuses reports every instance the MIG is managing,
+// including ones it is still trying and failing to create. Those never show up
+// as CloudInstances: GetCloudGroups skips a managed instance whose compute
+// instance does not exist, so a MIG stuck in a create-retry loop is otherwise
+// indistinguishable from one that never tried.
+func (c *gceCloudImplementation) GetGroupInstanceStatuses(ctx context.Context, group *cloudinstances.CloudInstanceGroup) ([]cloudinstances.GroupInstanceStatus, error) {
+	return GetGroupInstanceStatuses(ctx, c, group)
+}
+
+// GetGroupInstanceStatuses implements the GroupInstanceStatusReporter
+// capability for any GCECloud. See the method above for what it reports.
+func GetGroupInstanceStatuses(ctx context.Context, c GCECloud, group *cloudinstances.CloudInstanceGroup) ([]cloudinstances.GroupInstanceStatus, error) {
+	mig, ok := group.Raw.(*compute.InstanceGroupManager)
+	if !ok || mig == nil {
+		return nil, nil
+	}
+
+	u, err := ParseGoogleCloudURL(mig.SelfLink)
+	if err != nil {
+		return nil, fmt.Errorf("parsing MIG self link %q: %w", mig.SelfLink, err)
+	}
+
+	// Calling the client directly rather than via ListManagedInstances, which
+	// substitutes context.Background() and so cannot be cancelled.
+	instances, err := c.Compute().InstanceGroupManagers().ListManagedInstances(ctx, u.Project, u.Zone, u.Name)
+	if err != nil {
+		return nil, fmt.Errorf("listing managed instances for MIG %q: %w", mig.Name, err)
+	}
+
+	out := make([]cloudinstances.GroupInstanceStatus, 0, len(instances))
+	for _, i := range instances {
+		s := cloudinstances.GroupInstanceStatus{
+			Name:          LastComponent(i.Instance),
+			Status:        i.InstanceStatus,
+			CurrentAction: i.CurrentAction,
+		}
+		if i.LastAttempt != nil && i.LastAttempt.Errors != nil {
+			s.Failures = make([]cloudinstances.GroupFailure, 0, len(i.LastAttempt.Errors.Errors))
+			for _, e := range i.LastAttempt.Errors.Errors {
+				// Count is left unset: these are the raw errors from one
+				// attempt, not aggregated observations.
+				s.Failures = append(s.Failures, cloudinstances.GroupFailure{
+					Code:    e.Code,
+					Message: e.Message,
+				})
+			}
+		}
+		out = append(out, s)
+	}
+	slices.SortFunc(out, func(a, b cloudinstances.GroupInstanceStatus) int {
+		return cmp.Compare(a.Name, b.Name)
+	})
+	return out, nil
+}
+
 func addCloudInstanceData(cm *cloudinstances.CloudInstance, instance *compute.Instance) {
 	cm.MachineType = LastComponent(instance.MachineType)
 	cm.Status = instance.Status
+	if instance.CreationTimestamp != "" {
+		if t, err := time.Parse(time.RFC3339, instance.CreationTimestamp); err == nil {
+			cm.CreationTimestamp = t
+		}
+	}
 	if instance.Status == "RUNNING" {
 		cm.State = cloudinstances.CloudInstanceStatusUpToDate
 	}

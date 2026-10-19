@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/apis/kops/model"
 	"k8s.io/kops/util/pkg/architectures"
@@ -35,8 +36,6 @@ type Config struct {
 	Images map[architectures.Architecture][]*Image `json:"images,omitempty"`
 	// ClusterName is the name of the cluster
 	ClusterName string `json:",omitempty"`
-	// Channels is a list of channels that we should apply
-	Channels []string `json:"channels,omitempty"`
 	// ApiserverAdditionalIPs are additional IP address to put in the apiserver server cert.
 	ApiserverAdditionalIPs []string `json:",omitempty"`
 	// KubernetesVersion is the version of Kubernetes to install.
@@ -51,6 +50,9 @@ type Config struct {
 	EtcdClusterNames []string `json:",omitempty"`
 	// EtcdManifests are the manifests for running etcd.
 	EtcdManifests []string `json:"etcdManifests,omitempty"`
+	// ChannelsManifest is the state-store path of the kops-channels static pod manifest,
+	// set on control-plane instance groups.
+	ChannelsManifest string `json:"channelsManifest,omitempty"`
 
 	// CAs are the CA certificates to trust.
 	CAs map[string]string
@@ -97,12 +99,12 @@ type Config struct {
 	APIServerConfig *APIServerConfig `json:",omitempty"`
 	// ControlPlaneConfig is additional configuration for control-plane nodes.
 	ControlPlaneConfig *ControlPlaneConfig `json:",omitempty"`
-	// GossipConfig is configuration for gossip DNS.
-	GossipConfig *kops.GossipConfig `json:",omitempty"`
 	// DNSZone is the DNS zone we should use when configuring DNS.
 	DNSZone string `json:",omitempty"`
 	// NvidiaGPU contains the configuration for nvidia
 	NvidiaGPU *kops.NvidiaGPUConfig `json:",omitempty"`
+	// GVisor contains the configuration for gVisor sandboxed runtime
+	GVisor *kops.GVisorConfig `json:",omitempty"`
 
 	// AWS-specific
 	// DisableSecurityGroupIngress disables the Cloud Controller Manager's creation
@@ -112,22 +114,19 @@ type Config struct {
 	// Manager to assign to each ELB provisioned for a Service, instead of creating
 	// one per ELB.
 	ElbSecurityGroup *string `json:"elbSecurityGroup,omitempty"`
+	// NLBSecurityGroupMode determines if the Cloud Controller Manager supports and manages
+	// security groups for Network Load Balancers (AWS only). Valid value: "Managed"
+	NLBSecurityGroupMode *string `json:"nlbSecurityGroupMode,omitempty"`
 	// NodeIPFamilies controls the IP families reported for each node.
 	NodeIPFamilies []string `json:"nodeIPFamilies,omitempty"`
+	// UseIPBasedNodeNames names the node after the EC2 private DNS name instead of the instance ID.
+	UseIPBasedNodeNames bool `json:"useIPBasedNodeNames,omitempty"`
 	// WarmPoolImages are the container images to pre-pull during instance pre-initialization
 	WarmPoolImages []string `json:"warmPoolImages,omitempty"`
 
 	// Azure-specific
-	// AzureLocation is the location of the resource group that the cluster is deployed in.
-	AzureLocation string `json:",omitempty"`
-	// AzureSubscriptionID is the ID of the Azure Subscription that the cluster is deployed in.
-	AzureSubscriptionID string `json:",omitempty"`
-	// AzureTenantID is the ID of the tenant that the cluster is deployed in.
-	AzureTenantID string `json:",omitempty"`
-	// AzureResourceGroup is the name of the resource group that the cluster is deployed in.
-	AzureResourceGroup string `json:",omitempty"`
-	// AzureRouteTableName is the name of the route table attached to the subnet that the cluster is deployed in.
-	AzureRouteTableName string `json:",omitempty"`
+	// AzureAdminUser is the admin user of VMs.
+	AzureAdminUser string `json:",omitempty"`
 
 	// GCE-specific
 	Multizone          *bool   `json:"multizone,omitempty"`
@@ -138,8 +137,16 @@ type Config struct {
 	Openstack *kops.OpenstackSpec `json:",omitempty"`
 
 	// Discovery methods
-	UsesLegacyGossip bool `json:"usesLegacyGossip"`
-	UsesNoneDNS      bool `json:"usesNoneDNS"`
+	UsesNoneDNS bool `json:"usesNoneDNS"`
+
+	// DiscoveryService implements discovery using a hosted discovery service.
+	DiscoveryService *DiscoveryServiceOptions `json:"discoveryServiceWithUniverse,omitempty"`
+}
+
+// DiscoveryServiceOptions is the configuration for a discovery service.
+type DiscoveryServiceOptions struct {
+	// URL is the base URL of the discovery service, including universe ID if applicable.
+	URL string `json:"url,omitempty"`
 }
 
 // BootConfig is the configuration for the nodeup binary that might be too big to fit in userdata.
@@ -161,11 +168,16 @@ type BootConfig struct {
 	InstanceGroupRole kops.InstanceGroupRole
 	// NodeupConfigHash holds a secure hash of the nodeup.Config.
 	NodeupConfigHash string
+	// EtcdIPs holds the address of the load balancer to use if Etcd is not local.
+	// This field is used for adding an alias for the *.etcd.internal. in /etc/hosts when etcd is not local
+	EtcdIPs []string `json:",omitempty"`
 }
 
 type ConfigServerOptions struct {
 	// Servers are the addresses of the configuration servers to use (kops-controller)
 	Servers []string `json:"servers,omitempty"`
+	// TLSServerName is the server name to use for TLS verification when connecting to Servers.
+	TLSServerName string `json:"tlsServerName,omitempty"`
 	// CACertificates are the certificates to trust for fi.CertificateIDCA.
 	CACertificates string
 }
@@ -234,8 +246,14 @@ func NewConfig(cluster *kops.Cluster, instanceGroup *kops.InstanceGroup) (*Confi
 		VolumeMounts:         instanceGroup.Spec.VolumeMounts,
 		FileAssets:           append(filterFileAssets(instanceGroup.Spec.FileAssets, role), filterFileAssets(cluster.Spec.FileAssets, role)...),
 		Hooks:                [][]kops.HookSpec{igHooks, clusterHooks},
-		UsesLegacyGossip:     cluster.UsesLegacyGossip(),
 		UsesNoneDNS:          cluster.UsesNoneDNS(),
+	}
+
+	if cluster.Spec.ServiceAccountIssuerDiscovery != nil && cluster.Spec.ServiceAccountIssuerDiscovery.DiscoveryService != nil {
+		discoveryService := cluster.Spec.ServiceAccountIssuerDiscovery.DiscoveryService
+		config.DiscoveryService = &DiscoveryServiceOptions{
+			URL: discoveryService.URL,
+		}
 	}
 
 	bootConfig := BootConfig{
@@ -253,6 +271,8 @@ func NewConfig(cluster *kops.Cluster, instanceGroup *kops.InstanceGroup) (*Confi
 		config.NvidiaGPU = buildNvidiaConfig(cluster, instanceGroup)
 	}
 
+	config.GVisor = buildGVisorConfig(instanceGroup)
+
 	config.KubeProxy = buildKubeProxy(cluster, instanceGroup)
 
 	if cluster.Spec.NTP != nil && cluster.Spec.NTP.Managed != nil && !*cluster.Spec.NTP.Managed {
@@ -266,20 +286,19 @@ func NewConfig(cluster *kops.Cluster, instanceGroup *kops.InstanceGroup) (*Confi
 			config.EnableLifecycleHook = true
 		}
 
-		if instanceGroup.HasAPIServer() {
+		if instanceGroup.RunsAPIServer() {
 			config.DisableSecurityGroupIngress = aws.DisableSecurityGroupIngress
 			config.ElbSecurityGroup = aws.ElbSecurityGroup
+			config.NLBSecurityGroupMode = aws.NLBSecurityGroupMode
 			config.NodeIPFamilies = aws.NodeIPFamilies
 		}
+
+		config.UseIPBasedNodeNames = aws.UseIPBasedNodeNames != nil && *aws.UseIPBasedNodeNames
 	}
 
 	if cluster.Spec.CloudProvider.Azure != nil {
-		config.AzureLocation = cluster.Spec.Networking.Subnets[0].Region
-		config.AzureSubscriptionID = cluster.Spec.CloudProvider.Azure.SubscriptionID
-		config.AzureTenantID = cluster.Spec.CloudProvider.Azure.TenantID
-		config.AzureResourceGroup = cluster.AzureResourceGroupName()
-		config.AzureRouteTableName = cluster.AzureRouteTableName()
 		config.Networking.NetworkID = cluster.Spec.Networking.NetworkID
+		config.AzureAdminUser = cluster.Spec.CloudProvider.Azure.AdminUser
 	}
 
 	if cluster.Spec.CloudProvider.GCE != nil {
@@ -291,11 +310,12 @@ func NewConfig(cluster *kops.Cluster, instanceGroup *kops.InstanceGroup) (*Confi
 
 	config.Openstack = cluster.Spec.CloudProvider.Openstack
 
-	if instanceGroup.Spec.UpdatePolicy != nil {
+	switch {
+	case instanceGroup.Spec.UpdatePolicy != nil:
 		config.UpdatePolicy = *instanceGroup.Spec.UpdatePolicy
-	} else if cluster.Spec.UpdatePolicy != nil {
+	case cluster.Spec.UpdatePolicy != nil:
 		config.UpdatePolicy = *cluster.Spec.UpdatePolicy
-	} else {
+	default:
 		config.UpdatePolicy = kops.UpdatePolicyAutomatic
 	}
 
@@ -309,13 +329,16 @@ func NewConfig(cluster *kops.Cluster, instanceGroup *kops.InstanceGroup) (*Confi
 	}
 
 	if cluster.Spec.Networking.Calico != nil {
-		config.Networking.Calico = &kops.CalicoNetworkingSpec{}
+		config.Networking.Calico = &kops.CalicoNetworkingSpec{
+			WireguardEnabled: cluster.Spec.Networking.Calico.WireguardEnabled,
+		}
 	}
 
 	if cluster.Spec.Networking.Cilium != nil {
 		config.Networking.Cilium = &kops.CiliumNetworkingSpec{}
 		if cluster.Spec.Networking.Cilium.IPAM == kops.CiliumIpamEni {
 			config.Networking.Cilium.IPAM = kops.CiliumIpamEni
+			config.DefaultMachineType = aws.String(strings.Split(instanceGroup.Spec.MachineType, ",")[0])
 		}
 		if model.UseCiliumEtcd(cluster) {
 			config.UseCiliumEtcd = true
@@ -342,7 +365,7 @@ func NewConfig(cluster *kops.Cluster, instanceGroup *kops.InstanceGroup) (*Confi
 		config.KubeletConfig = *instanceGroup.Spec.Kubelet
 	}
 
-	if instanceGroup.HasAPIServer() {
+	if instanceGroup.RunsAPIServer() {
 		config.APIServerConfig = &APIServerConfig{
 			ClusterDNSDomain: cluster.Spec.ClusterDNSDomain,
 			KubeAPIServer:    cluster.Spec.KubeAPIServer,
@@ -352,11 +375,13 @@ func NewConfig(cluster *kops.Cluster, instanceGroup *kops.InstanceGroup) (*Confi
 			},
 		}
 		if cluster.Spec.Authentication != nil {
-			config.APIServerConfig.Authentication = cluster.Spec.Authentication
-			if cluster.Spec.Authentication.AWS != nil {
+			// Copy before clearing fields, so that we don't mutate the shared cluster spec.
+			authentication := *cluster.Spec.Authentication
+			if authentication.AWS != nil {
 				// The values go into the manifest and aren't needed by nodeup.
-				config.APIServerConfig.Authentication.AWS = &kops.AWSAuthenticationSpec{}
+				authentication.AWS = &kops.AWSAuthenticationSpec{}
 			}
+			config.APIServerConfig.Authentication = &authentication
 		}
 		if cluster.Spec.API.DNS != nil {
 			config.APIServerConfig.API.DNS = &kops.DNSAccessSpec{}
@@ -366,29 +391,39 @@ func NewConfig(cluster *kops.Cluster, instanceGroup *kops.InstanceGroup) (*Confi
 		}
 	}
 
-	if instanceGroup.HasAPIServer() || !model.UseKopsControllerForNodeConfig(cluster) {
+	if instanceGroup.RunsAPIServer() || instanceGroup.RunsEtcd() || instanceGroup.RunsKubeControllerManager() || instanceGroup.RunsScheduler() {
 		config.ConfigStore = &kops.ConfigStoreSpec{
 			Keypairs: cluster.Spec.ConfigStore.Keypairs,
 			Secrets:  cluster.Spec.ConfigStore.Secrets,
 		}
 	}
 
-	if instanceGroup.HasAPIServer() || cluster.UsesLegacyGossip() {
+	if instanceGroup.RunsAPIServer() {
 		config.Networking.EgressProxy = cluster.Spec.Networking.EgressProxy
 	}
 
-	if instanceGroup.IsControlPlane() || cluster.UsesLegacyGossip() {
+	if instanceGroup.RunsAPIServer() {
 		config.DNSZone = cluster.Spec.DNSZone
-	}
-
-	if cluster.UsesLegacyGossip() {
-		config.GossipConfig = cluster.Spec.GossipConfig
 	}
 
 	if instanceGroup.IsControlPlane() {
 		config.ControlPlaneConfig = &ControlPlaneConfig{
 			KubeControllerManager: *cluster.Spec.KubeControllerManager,
 			KubeScheduler:         *cluster.Spec.KubeScheduler,
+		}
+	} else if instanceGroup.IsKubeControllerManagerOnly() {
+		config.ControlPlaneConfig = &ControlPlaneConfig{
+			KubeControllerManager: *cluster.Spec.KubeControllerManager,
+		}
+		config.APIServerConfig = &APIServerConfig{
+			ClusterDNSDomain: cluster.Spec.ClusterDNSDomain,
+		}
+	} else if instanceGroup.IsSchedulerOnly() {
+		config.ControlPlaneConfig = &ControlPlaneConfig{
+			KubeScheduler: *cluster.Spec.KubeScheduler,
+		}
+		config.APIServerConfig = &APIServerConfig{
+			ClusterDNSDomain: cluster.Spec.ClusterDNSDomain,
 		}
 	}
 
@@ -411,9 +446,15 @@ func NewConfig(cluster *kops.Cluster, instanceGroup *kops.InstanceGroup) (*Confi
 
 // buildContainerdConfig builds containerd configuration for instance. Instance group configuration will override cluster configuration
 func buildContainerdConfig(cluster *kops.Cluster, instanceGroup *kops.InstanceGroup) *kops.ContainerdConfig {
-	config := cluster.Spec.Containerd.DeepCopy()
+	config := &kops.ContainerdConfig{}
+	if cluster.Spec.Containerd != nil {
+		config = cluster.Spec.Containerd.DeepCopy()
+	}
 	if instanceGroup.Spec.Containerd != nil {
 		reflectutils.JSONMergeStruct(&config, instanceGroup.Spec.Containerd)
+	}
+	if !instanceGroup.HasGVisor() {
+		config.GVisor = nil
 	}
 	return config
 }
@@ -431,6 +472,20 @@ func buildNvidiaConfig(cluster *kops.Cluster, instanceGroup *kops.InstanceGroup)
 
 	if config.DriverPackage == "" {
 		config.DriverPackage = kops.NvidiaDefaultDriverPackage
+	}
+
+	return config
+}
+
+// buildGVisorConfig builds gVisor configuration for instance group
+func buildGVisorConfig(instanceGroup *kops.InstanceGroup) *kops.GVisorConfig {
+	if !instanceGroup.HasGVisor() {
+		return nil
+	}
+
+	config := instanceGroup.Spec.Containerd.GVisor.DeepCopy()
+	if config.Platform == "" {
+		config.Platform = kops.GVisorDefaultPlatform
 	}
 
 	return config

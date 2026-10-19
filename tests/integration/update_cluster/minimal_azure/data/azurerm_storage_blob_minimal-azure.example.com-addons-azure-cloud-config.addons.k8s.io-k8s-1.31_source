@@ -1,0 +1,11 @@
+apiVersion: v1
+data:
+  cloud-config: eyJ0ZW5hbnRJZCI6InRlbmFudC0xMjMiLCJzdWJzY3JpcHRpb25JZCI6InN1Yi0xMjMiLCJ1c2VNYW5hZ2VkSWRlbnRpdHlFeHRlbnNpb24iOnRydWUsInJlc291cmNlR3JvdXAiOiJtaW5pbWFsLWF6dXJlLmV4YW1wbGUuY29tIiwibG9jYXRpb24iOiJlYXN0dXMiLCJ2bmV0TmFtZSI6Im1pbmltYWwtYXp1cmUuZXhhbXBsZS5jb20iLCJzdWJuZXROYW1lIjoiZWFzdHVzIiwicm91dGVUYWJsZU5hbWUiOiJtaW5pbWFsLWF6dXJlLmV4YW1wbGUuY29tIiwic2VjdXJpdHlHcm91cE5hbWUiOiJtaW5pbWFsLWF6dXJlLmV4YW1wbGUuY29tIiwidXNlSW5zdGFuY2VNZXRhZGF0YSI6dHJ1ZSwiZGlzYWJsZUF2YWlsYWJpbGl0eVNldE5vZGVzIjp0cnVlfQ==
+kind: Secret
+metadata:
+  labels:
+    addon.kops.k8s.io/name: azure-cloud-config.addons.k8s.io
+    app.kubernetes.io/managed-by: kops
+    k8s-addon: azure-cloud-config.addons.k8s.io
+  name: azure-cloud-provider
+  namespace: kube-system

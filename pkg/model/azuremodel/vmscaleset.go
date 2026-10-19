@@ -42,13 +42,13 @@ var _ fi.CloudupModelBuilder = &VMScaleSetModelBuilder{}
 // Build is responsible for constructing the VM ScaleSet from the kops spec.
 func (b *VMScaleSetModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	c.AddTask(&azuretasks.ApplicationSecurityGroup{
-		Name:          fi.PtrTo(b.NameForApplicationSecurityGroupControlPlane()),
+		Name:          new(b.NameForApplicationSecurityGroupControlPlane()),
 		Lifecycle:     b.Lifecycle,
 		ResourceGroup: b.LinkToResourceGroup(),
 		Tags:          map[string]*string{},
 	})
 	c.AddTask(&azuretasks.ApplicationSecurityGroup{
-		Name:          fi.PtrTo(b.NameForApplicationSecurityGroupNodes()),
+		Name:          new(b.NameForApplicationSecurityGroupNodes()),
 		Lifecycle:     b.Lifecycle,
 		ResourceGroup: b.LinkToResourceGroup(),
 		Tags:          map[string]*string{},
@@ -62,20 +62,20 @@ func (b *VMScaleSetModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		}
 		c.AddTask(vmss)
 
-		if ig.IsControlPlane() || b.Cluster.UsesLegacyGossip() {
+		if ig.IsControlPlane() {
 			// Create tasks for assigning built-in roles to VM Scale Sets.
 			// See https://docs.microsoft.com/en-us/azure/role-based-access-control/built-in-roles
 			resourceGroupID := fmt.Sprintf("/subscriptions/%s/resourceGroups/%s",
 				b.Cluster.Spec.CloudProvider.Azure.SubscriptionID,
-				b.Cluster.Spec.CloudProvider.Azure.ResourceGroupName,
+				b.Cluster.AzureResourceGroupName(),
 			)
 			c.AddTask(&azuretasks.RoleAssignment{
-				Name:       to.Ptr(fmt.Sprintf("%s-%s", *vmss.Name, "owner")),
+				Name:       to.Ptr(fmt.Sprintf("%s-%s", *vmss.Name, "contributor")),
 				Lifecycle:  b.Lifecycle,
 				Scope:      to.Ptr(resourceGroupID),
 				VMScaleSet: vmss,
-				// Owner
-				RoleDefID: to.Ptr("8e3af657-a8ff-443c-a75c-2fe8c4bcb635"),
+				// Contributor
+				RoleDefID: to.Ptr("b24988ac-6180-42a0-ab88-20f7382dd24c"),
 			})
 			c.AddTask(&azuretasks.RoleAssignment{
 				Name:       to.Ptr(fmt.Sprintf("%s-%s", *vmss.Name, "blob")),
@@ -105,13 +105,13 @@ func (b *VMScaleSetModelBuilder) buildVMScaleSetTask(
 		azNumbers = append(azNumbers, &az)
 	}
 	t := &azuretasks.VMScaleSet{
-		Name:               fi.PtrTo(name),
+		Name:               new(name),
 		Lifecycle:          b.Lifecycle,
 		ResourceGroup:      b.LinkToResourceGroup(),
 		VirtualNetwork:     b.LinkToVirtualNetwork(),
-		SKUName:            fi.PtrTo(ig.Spec.MachineType),
-		ComputerNamePrefix: fi.PtrTo(ig.Name),
-		AdminUser:          fi.PtrTo(b.Cluster.Spec.CloudProvider.Azure.AdminUser),
+		SKUName:            new(ig.Spec.MachineType),
+		ComputerNamePrefix: new(ig.Name),
+		AdminUser:          new(b.Cluster.Spec.CloudProvider.Azure.AdminUser),
 		Zones:              azNumbers,
 	}
 
@@ -141,7 +141,7 @@ func (b *VMScaleSetModelBuilder) buildVMScaleSetTask(
 		if n > 1 {
 			return nil, fmt.Errorf("expected at most one SSH public key; found %d keys", n)
 		}
-		t.SSHPublicKey = fi.PtrTo(string(b.SSHPublicKeys[0]))
+		t.SSHPublicKey = new(string(b.SSHPublicKeys[0]))
 	}
 
 	if t.UserData, err = b.BootstrapScriptBuilder.ResourceNodeUp(c, ig); err != nil {
@@ -160,17 +160,17 @@ func (b *VMScaleSetModelBuilder) buildVMScaleSetTask(
 
 	switch subnet.Type {
 	case kops.SubnetTypePublic, kops.SubnetTypeUtility:
-		t.RequirePublicIP = fi.PtrTo(true)
+		t.RequirePublicIP = new(true)
 		if ig.Spec.AssociatePublicIP != nil {
 			t.RequirePublicIP = ig.Spec.AssociatePublicIP
 		}
 	case kops.SubnetTypeDualStack, kops.SubnetTypePrivate:
-		t.RequirePublicIP = fi.PtrTo(false)
+		t.RequirePublicIP = new(false)
 	default:
 		return nil, fmt.Errorf("unexpected subnet type: for InstanceGroup %q; type was %s", ig.Name, subnet.Type)
 	}
 
-	if ig.Spec.Role == kops.InstanceGroupRoleControlPlane && b.Cluster.Spec.API.LoadBalancer != nil {
+	if ig.Spec.Role.HasControlPlane() && b.Cluster.Spec.API.LoadBalancer != nil {
 		t.LoadBalancer = &azuretasks.LoadBalancer{
 			Name: to.Ptr(b.NameForLoadBalancer()),
 		}
@@ -187,18 +187,18 @@ func getCapacity(spec *kops.InstanceGroupSpec) (*int64, error) {
 	maxSize := int32(1)
 	if spec.MinSize != nil {
 		minSize = fi.ValueOf(spec.MinSize)
-	} else if spec.Role == kops.InstanceGroupRoleNode {
+	} else if spec.Role.HasNode() {
 		minSize = 2
 	}
 	if spec.MaxSize != nil {
 		maxSize = *spec.MaxSize
-	} else if spec.Role == kops.InstanceGroupRoleNode {
+	} else if spec.Role.HasNode() {
 		maxSize = 2
 	}
 	if minSize != maxSize {
 		return nil, fmt.Errorf("instance group must have the same min and max size in Azure, but got %d and %d", minSize, maxSize)
 	}
-	return fi.PtrTo(int64(minSize)), nil
+	return new(int64(minSize)), nil
 }
 
 func getStorageProfile(spec *kops.InstanceGroupSpec) (*compute.VirtualMachineScaleSetStorageProfile, error) {

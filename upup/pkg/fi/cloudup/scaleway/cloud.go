@@ -36,6 +36,7 @@ import (
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/cloudinstances"
 	"k8s.io/kops/upup/pkg/fi"
+	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway/scalewaymetadata"
 )
 
 const (
@@ -90,7 +91,7 @@ type ScwCloud interface {
 }
 
 // static compile time check to validate ScwCloud's fi.Cloud Interface.
-var _ fi.Cloud = &scwCloudImplementation{}
+var _ fi.Cloud = (*scwCloudImplementation)(nil)
 
 // scwCloudImplementation holds the scw.Client object to interact with Scaleway resources.
 type scwCloudImplementation struct {
@@ -123,7 +124,7 @@ func NewScwCloud(tags map[string]string) (ScwCloud, error) {
 			return nil, err
 		}
 	} else {
-		profile, err := CreateValidScalewayProfile()
+		profile, err := scalewaymetadata.CreateValidScalewayProfile()
 		if err != nil {
 			return nil, err
 		}
@@ -503,9 +504,9 @@ func (s *scwCloudImplementation) GetServerIP(serverID string, zone scw.Zone) (st
 
 	ips, err := s.ipamAPI.ListIPs(&ipam.ListIPsRequest{
 		Region:     region,
-		IsIPv6:     fi.PtrTo(false),
+		IsIPv6:     new(false),
 		ResourceID: &serverID,
-		Zonal:      fi.PtrTo(zone.String()),
+		Zonal:      new(zone.String()),
 	}, scw.WithAllPages())
 	if err != nil {
 		return "", fmt.Errorf("listing IPs for server %s: %w", serverID, err)

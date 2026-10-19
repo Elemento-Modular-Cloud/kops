@@ -46,12 +46,9 @@ var MagicTimestamp = metav1.Time{Time: time.Date(2017, 1, 1, 0, 0, 0, 0, time.UT
 
 // TestCreateClusterMinimal runs kops create cluster minimal.example.com --zones us-test-1a
 func TestCreateClusterMinimal(t *testing.T) {
-	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-1.27", "v1alpha2")
-	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-1.28", "v1alpha2")
-	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-1.29", "v1alpha2")
-	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-1.30", "v1alpha2")
-	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-1.31", "v1alpha2")
 	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-1.32", "v1alpha2")
+	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-1.35", "v1alpha2")
+	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-1.36", "v1alpha2")
 	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-arm64", "v1alpha2")
 	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-irsa", "v1alpha2")
 }
@@ -79,8 +76,20 @@ func TestCreateClusterOpenStackNoDNS(t *testing.T) {
 }
 
 // TestCreateClusterCilium runs kops with the cilium networking flags
+// TestCreateClusterCalicoBPF verifies that --set cluster.spec.networking.calico.bpfEnabled=true
+// causes kops to default spec.kubeProxy.enabled=false, because Calico's BPF mode replaces
+// kube-proxy and from v3.31 binds the kube-proxy healthz port.
+func TestCreateClusterCalicoBPF(t *testing.T) {
+	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/calico_bpf", "v1alpha2")
+}
+
 func TestCreateClusterCilium(t *testing.T) {
 	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/cilium-eni", "v1alpha2")
+}
+
+// TestCreateClusterVolumeType tests the control plane volume type flag
+func TestCreateClusterVolumeType(t *testing.T) {
+	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/volume_type", "v1alpha2")
 }
 
 // TestCreateClusterOverride tests the override flag
@@ -123,6 +132,14 @@ func TestCreateClusterHAGCE(t *testing.T) {
 // TestCreateClusterGCE runs kops create cluster gce.example.com --cloud gce --zones us-test1-a --gce-service-account=test-account@testproject.iam.gserviceaccounts.com
 func TestCreateClusterGCE(t *testing.T) {
 	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/gce_byo_sa", "v1alpha2")
+}
+
+// TestCreateClusterExperimentalRoles tests kops create cluster with ExperimentalRoles and control-plane-count=0
+func TestCreateClusterExperimentalRoles(t *testing.T) {
+	featureflag.ParseFlags("+APIServerNodes,+ExperimentalRoles")
+	defer featureflag.ParseFlags("-APIServerNodes,-ExperimentalRoles")
+
+	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/experimental-roles", "v1alpha2")
 }
 
 // TestCreateClusterHASharedZone tests kops create cluster when the master count is bigger than the number of zones

@@ -32,22 +32,20 @@ import (
 	"k8s.io/kops/util/pkg/vfs"
 )
 
+// CertificateIDCA is the ID for the primary cluster CA certificate/key
 const CertificateIDCA = "kubernetes-ca"
+
+// DiscoveryCAID is the ID for the discovery service client certificate CA
+const DiscoveryCAID = "discovery-ca"
 
 const (
 	// SecretNameSSHPrimary is the Name for the primary SSH key
 	SecretNameSSHPrimary = "admin"
 )
 
-const (
-	keysetFormatLatest = "v1alpha2"
-)
-
 // Keyset is a parsed api.Keyset.
 type Keyset struct {
-	// LegacyFormat instructs a keypair task to convert a Legacy Keyset to the new Keyset API format.
-	LegacyFormat bool
-	Items        map[string]*KeysetItem
+	Items map[string]*KeysetItem
 
 	// Primary is the KeysetItem that is considered the "active" key.
 	// It is guaranteed to be non-nil, if there are any keypairs.

@@ -39,7 +39,7 @@ type SSHKey struct {
 	KeyPairFingerPrint *string
 }
 
-var _ fi.CompareWithID = &SSHKey{}
+var _ fi.CompareWithID = (*SSHKey)(nil)
 
 func (s *SSHKey) CompareWithID() *string {
 	return s.Name
@@ -64,9 +64,9 @@ func (s *SSHKey) Find(c *fi.CloudupContext) (*SSHKey, error) {
 	klog.V(2).Infof("found matching SSH key named %q", *s.Name)
 	k := keysResp.SSHKeys[0]
 	sshKey := &SSHKey{
-		ID:                 fi.PtrTo(k.ID),
-		Name:               fi.PtrTo(k.Name),
-		KeyPairFingerPrint: fi.PtrTo(k.Fingerprint),
+		ID:                 new(k.ID),
+		Name:               new(k.Name),
+		KeyPairFingerPrint: new(k.Fingerprint),
 		Lifecycle:          s.Lifecycle,
 	}
 
@@ -114,8 +114,6 @@ func (*SSHKey) RenderScw(t *scaleway.ScwAPITarget, actual, expected, changes *SS
 		return nil
 	}
 
-	cloud := t.Cloud.(scaleway.ScwCloud)
-
 	name := fi.ValueOf(expected.Name)
 	if name == "" {
 		return fi.RequiredField("Name")
@@ -133,11 +131,11 @@ func (*SSHKey) RenderScw(t *scaleway.ScwAPITarget, actual, expected, changes *SS
 		keyArgs.PublicKey = d
 	}
 
-	key, err := cloud.IamService().CreateSSHKey(keyArgs)
+	key, err := t.Cloud.IamService().CreateSSHKey(keyArgs)
 	if err != nil {
 		return fmt.Errorf("error creating SSH keypair: %w", err)
 	}
-	expected.KeyPairFingerPrint = fi.PtrTo(key.Fingerprint)
+	expected.KeyPairFingerPrint = new(key.Fingerprint)
 	klog.V(2).Infof("Created a new SSH keypair, id=%q fingerprint=%q", key.ID, key.Fingerprint)
 
 	return nil
@@ -156,7 +154,7 @@ func (_ *SSHKey) RenderTerraform(t *terraform.TerraformTarget, actual, expected,
 	}
 	tf := terraformSSHKey{
 		Name:      expected.Name,
-		PublicKey: fi.PtrTo(publicKeyStr),
+		PublicKey: new(publicKeyStr),
 	}
 	return t.RenderResource("scaleway_iam_ssh_key", tfName, tf)
 }

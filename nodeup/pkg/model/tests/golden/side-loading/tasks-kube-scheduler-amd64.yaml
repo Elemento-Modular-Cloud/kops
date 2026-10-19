@@ -2,7 +2,6 @@ contents: |
   apiVersion: v1
   kind: Pod
   metadata:
-    creationTimestamp: null
     labels:
       k8s-app: kube-scheduler
     name: kube-scheduler
@@ -14,16 +13,17 @@ contents: |
       - --also-stdout
       - /usr/local/bin/kube-scheduler
       - --authentication-kubeconfig=/var/lib/kube-scheduler/kubeconfig
+      - --authentication-skip-lookup=false
+      - --authentication-tolerate-lookup-failure=false
       - --authorization-kubeconfig=/var/lib/kube-scheduler/kubeconfig
       - --config=/var/lib/kube-scheduler/config.yaml
-      - --feature-gates=InTreePluginAWSUnregister=true
       - --leader-elect=true
       - --tls-cert-file=/srv/kubernetes/kube-scheduler/server.crt
       - --tls-private-key-file=/srv/kubernetes/kube-scheduler/server.key
       - --v=2
       command:
       - /go-runner
-      image: registry.k8s.io/kube-scheduler-amd64:v1.27.0
+      image: registry.k8s.io/kube-scheduler-amd64:v1.35.0
       livenessProbe:
         httpGet:
           host: 127.0.0.1

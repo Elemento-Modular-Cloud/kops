@@ -44,7 +44,7 @@ type Address struct {
 	WellKnownServices []wellknownservices.WellKnownService
 }
 
-var _ fi.CompareWithID = &ForwardingRule{}
+var _ fi.CompareWithID = (*ForwardingRule)(nil)
 
 func (e *Address) CompareWithID() *string {
 	return e.Name
@@ -98,7 +98,7 @@ func findAddressByIP(cloud gce.GCECloud, ip string, subnet string) (*Address, er
 	actual.Name = &addr.Name
 	if addr.Subnetwork != "" {
 		actual.Subnetwork = &Subnet{
-			Name: fi.PtrTo(lastComponent(addr.Subnetwork)),
+			Name: new(lastComponent(addr.Subnetwork)),
 		}
 	}
 
@@ -122,14 +122,14 @@ func (e *Address) find(cloud gce.GCECloud) (*Address, error) {
 	actual.Name = &r.Name
 	if e.Subnetwork != nil {
 		actual.Subnetwork = &Subnet{
-			Name: fi.PtrTo(lastComponent(r.Subnetwork)),
+			Name: new(lastComponent(r.Subnetwork)),
 		}
 	}
 
 	return actual, nil
 }
 
-var _ fi.HasAddress = &Address{}
+var _ fi.HasAddress = (*Address)(nil)
 
 // GetWellKnownServices implements fi.HasAddress::GetWellKnownServices.
 // It indicates which services we support with this address (likely attached to a load balancer).

@@ -1,6 +1,6 @@
 {{ with .CloudProvider.AWS.NodeTerminationHandler }}
-# Sourced from https://github.com/aws/aws-node-termination-handler/releases/download/v1.22.0/all-resources.yaml
-# and https://github.com/aws/aws-node-termination-handler/releases/download/v1.22.0/all-resources-queue-processor.yaml
+# Sourced from https://github.com/aws/aws-node-termination-handler/releases/download/v1.25.5/all-resources.yaml
+# and https://github.com/aws/aws-node-termination-handler/releases/download/v1.25.5/all-resources-queue-processor.yaml
 ---
 # Source: aws-node-termination-handler/templates/serviceaccount.yaml
 apiVersion: v1
@@ -192,6 +192,8 @@ spec:
               value: "false"
             - name: TAINT_NODE
               value: "{{ WithDefaultBool .TaintNode false }}"
+            - name: ENABLE_OUT_OF_SERVICE_TAINT
+              value: "{{ WithDefaultBool .EnableOutOfServiceTaint false }}"
             - name: EXCLUDE_FROM_LOAD_BALANCERS
               value: "{{ .ExcludeFromLoadBalancers }}"
             - name: DELETE_LOCAL_DATA
@@ -214,6 +216,12 @@ spec:
               value: "{{ WithDefaultBool .DeleteSQSMsgIfNodeNotFound false }}"
             - name: WORKERS
               value: "10"
+            - name: HEARTBEAT_INTERVAL
+              value: "-1"
+            - name: HEARTBEAT_UNTIL
+              value: "-1"
+            - name: SQS_MSG_VISIBILITY_TIMEOUT_SEC
+              value: "20"
             {{ if .WebhookTemplate }}
             - name: WEBHOOK_TEMPLATE
               value: '{{ .WebhookTemplate }}'
@@ -367,6 +375,8 @@ spec:
               value: "false"
             - name: TAINT_NODE
               value: "{{ WithDefaultBool .TaintNode false }}"
+            - name: ENABLE_OUT_OF_SERVICE_TAINT
+              value: "{{ WithDefaultBool .EnableOutOfServiceTaint false }}"
             - name: EXCLUDE_FROM_LOAD_BALANCERS
               value: "{{ WithDefaultBool .ExcludeFromLoadBalancers true }}"
             - name: DELETE_LOCAL_DATA
@@ -381,6 +391,8 @@ spec:
               value: "true"
             - name: ENABLE_SPOT_INTERRUPTION_DRAINING
               value: "{{ WithDefaultBool .EnableSpotInterruptionDraining true }}"
+            - name: ENABLE_ASG_LIFECYCLE_DRAINING
+              value: "true"
             - name: ENABLE_SCHEDULED_EVENT_DRAINING
               value: "{{ WithDefaultBool .EnableScheduledEventDraining true }}"
             - name: ENABLE_REBALANCE_MONITORING

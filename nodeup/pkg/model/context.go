@@ -27,13 +27,14 @@ import (
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
-	hcloudmetadata "github.com/hetznercloud/hcloud-go/hcloud/metadata"
+	hcloudmetadata "github.com/hetznercloud/hcloud-go/v2/hcloud/metadata"
 	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
 	kopsmodel "k8s.io/kops/pkg/apis/kops/model"
 	"k8s.io/kops/pkg/apis/nodeup"
 	"k8s.io/kops/pkg/systemd"
 	"k8s.io/kops/upup/pkg/fi"
+	"k8s.io/kops/upup/pkg/fi/nodeup/awsup"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
 	"k8s.io/kops/upup/pkg/fi/utils"
 	"k8s.io/kops/util/pkg/architectures"
@@ -50,7 +51,8 @@ const (
 
 // NodeupModelContext is the context supplied the nodeup tasks
 type NodeupModelContext struct {
-	Cloud        fi.Cloud
+	// Cloud holds the AWS clients, on AWS only.
+	Cloud        *awsup.Cloud
 	Architecture architectures.Architecture
 	GPUVendor    architectures.GPUVendor
 	Assets       *fi.AssetStore
@@ -67,11 +69,11 @@ type NodeupModelContext struct {
 	// HasAPIServer is true if the InstanceGroup has a role of master or apiserver (pupulated by Init)
 	HasAPIServer bool
 
-	// usesLegacyGossip is true if the cluster runs (legacy) Gossip DNS.
-	usesLegacyGossip bool
-
 	// usesNoneDNS is true if the cluster runs with dns=none (which uses fixed IPs, for example a load balancer, instead of DNS)
 	usesNoneDNS bool
+
+	// discoveryService implements discovery using a hosted discovery service.
+	discoveryService *nodeup.DiscoveryServiceOptions
 
 	// Deprecated: This should be renamed to controlPlaneVersion / nodeVersion;
 	// controlPlaneVersion should probably/ideally only be populated on control plane nodes.
@@ -86,6 +88,13 @@ type NodeupModelContext struct {
 	MachineType       string
 }
 
+func (c NodeupModelContext) canSignCertificates() bool {
+	if c.IsMaster || c.BootConfig.InstanceGroupRole.IsControlPlaneType() {
+		return true
+	}
+	return false
+}
+
 // Init completes initialization of the object, for example pre-parsing the kubernetes version
 func (c *NodeupModelContext) Init() error {
 	k8sVersion, err := kopsmodel.ParseKubernetesVersion(c.NodeupConfig.KubernetesVersion)
@@ -98,16 +107,16 @@ func (c *NodeupModelContext) Init() error {
 
 	role := c.BootConfig.InstanceGroupRole
 
-	if role == kops.InstanceGroupRoleControlPlane {
+	if role.HasControlPlane() {
 		c.IsMaster = true
 	}
 
-	if role == kops.InstanceGroupRoleControlPlane || role == kops.InstanceGroupRoleAPIServer {
+	if role.HasControlPlane() || role.HasAPIServer() {
 		c.HasAPIServer = true
 	}
 
 	c.usesNoneDNS = c.NodeupConfig.UsesNoneDNS
-	c.usesLegacyGossip = c.NodeupConfig.UsesLegacyGossip
+	c.discoveryService = c.NodeupConfig.DiscoveryService
 
 	return nil
 }
@@ -333,7 +342,14 @@ func (c *NodeupModelContext) UseChallengeCallback(cloudProvider kops.CloudProvid
 }
 
 func (c *NodeupModelContext) UseExternalKubeletCredentialProvider() bool {
-	return kopsmodel.UseExternalKubeletCredentialProvider(c.kubernetesVersion, c.CloudProvider())
+	switch c.CloudProvider() {
+	case kops.CloudProviderGCE:
+		return true
+	case kops.CloudProviderAWS:
+		return true
+	default:
+		return false
+	}
 }
 
 // UsesSecondaryIP checks if the CNI in use attaches secondary interfaces to the host.
@@ -527,6 +543,12 @@ func (c *NodeupModelContext) NodeName() (string, error) {
 	return strings.ToLower(strings.TrimSpace(nodeName)), nil
 }
 
+// ClusterName returns the name of the cluster, as it is registered in kOps
+// (Note this name may include dots, which are not valid in many k8s objects)
+func (c *NodeupModelContext) ClusterName() string {
+	return c.BootConfig.ClusterName
+}
+
 func (b *NodeupModelContext) AddCNIBinAssets(c *fi.NodeupModelBuilderContext) error {
 	f := b.Assets.FindMatches(regexp.MustCompile(".*"))
 
@@ -535,7 +557,7 @@ func (b *NodeupModelContext) AddCNIBinAssets(c *fi.NodeupModelBuilderContext) er
 			Path:     filepath.Join(b.CNIBinDir(), name),
 			Contents: res,
 			Type:     nodetasks.FileType_File,
-			Mode:     fi.PtrTo("0755"),
+			Mode:     new("0755"),
 		})
 	}
 
@@ -557,6 +579,14 @@ func (c *NodeupModelContext) InstallNvidiaRuntime() bool {
 	return c.NodeupConfig.NvidiaGPU != nil &&
 		fi.ValueOf(c.NodeupConfig.NvidiaGPU.Enabled) &&
 		c.GPUVendor == architectures.GPUVendorNvidia
+}
+
+// InstallGVisorRuntime returns true if the gVisor (runsc) runtime should be installed.
+func (c *NodeupModelContext) InstallGVisorRuntime() bool {
+	return c.BootConfig != nil &&
+		c.BootConfig.InstanceGroupRole.HasNode() &&
+		c.NodeupConfig.GVisor != nil &&
+		fi.ValueOf(c.NodeupConfig.GVisor.Enabled)
 }
 
 // CloudProvider returns the cloud provider we are running on
@@ -668,17 +698,15 @@ func (c *NodeupModelContext) findFileAsset(path string) *kops.FileAssetSpec {
 	return nil
 }
 
-func (c *NodeupModelContext) UsesLegacyGossip() bool {
-	return c.usesLegacyGossip
-}
-
 func (c *NodeupModelContext) UsesNoneDNS() bool {
 	return c.usesNoneDNS
 }
 
+// DiscoveryServiceOptions returns the configuration for discovery service to register with, or nil if not using a discovery service.
+func (c *NodeupModelContext) DiscoveryServiceOptions() *nodeup.DiscoveryServiceOptions {
+	return c.discoveryService
+}
+
 func (c *NodeupModelContext) PublishesDNSRecords() bool {
-	if c.UsesLegacyGossip() || c.UsesNoneDNS() {
-		return false
-	}
-	return true
+	return !c.UsesNoneDNS()
 }

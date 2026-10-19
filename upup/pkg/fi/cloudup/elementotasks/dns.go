@@ -83,11 +83,11 @@ func (z *DNSZone) Find(c *fi.CloudupContext) (*DNSZone, error) {
 	if dnsIPAddress == "" {
 		return nil, fmt.Errorf("Elemento DNS zone %q has no service IP address", zoneName)
 	}
-	z.IPAddress = fi.PtrTo(dnsIPAddress)
+	z.IPAddress = new(dnsIPAddress)
 
 	ecloud.Log("debug", "ekops", fmt.Sprintf("Elemento DNS zone %q already exists", zoneName))
 	return &DNSZone{
-		Name:      fi.PtrTo(dns.ZoneName),
+		Name:      new(dns.ZoneName),
 		Network:   z.Network,
 		IPAddress: z.IPAddress,
 		Lifecycle: z.Lifecycle,
@@ -123,7 +123,7 @@ func (_ *DNSZone) RenderElemento(t *elemento.ElementoAPITarget, actual, expected
 	if dnsService == nil || strings.TrimSpace(dnsService.IPAddress) == "" {
 		return fmt.Errorf("Elemento DNS zone %q returned no service IP address", zoneName)
 	}
-	expected.IPAddress = fi.PtrTo(strings.TrimSpace(dnsService.IPAddress))
+	expected.IPAddress = new(strings.TrimSpace(dnsService.IPAddress))
 	ecloud.Log("info", "ekops", "DNS zone ensured", "operation", "ensure_dns_zone", "cluster", zoneName)
 	return nil
 }
@@ -180,16 +180,16 @@ func (d *DNSRecord) Find(c *fi.CloudupContext) (*DNSRecord, error) {
 	}
 
 	return &DNSRecord{
-		Name:                  fi.PtrTo(record.Name),
-		Data:                  fi.PtrTo(record.Value),
+		Name:                  new(record.Name),
+		Data:                  new(record.Value),
 		DNSZone:               d.DNSZone,
 		DNSZoneTask:           d.DNSZoneTask,
 		ExternalLoadBalancer:  d.ExternalLoadBalancer,
 		LoadBalancerPublicAPI: d.LoadBalancerPublicAPI,
 		DHCPReservation:       d.DHCPReservation,
 		DependsOn:             d.DependsOn,
-		Type:                  fi.PtrTo(record.Type),
-		TTL:                   fi.PtrTo(int64(record.TTL)),
+		Type:                  new(record.Type),
+		TTL:                   new(int64(record.TTL)),
 		Lifecycle:             d.Lifecycle,
 		Comment:               d.Comment,
 	}, nil
@@ -231,7 +231,7 @@ func (_ *DNSRecord) RenderElemento(t *elemento.ElementoAPITarget, actual, expect
 	recordValue := fi.ValueOf(expected.Data)
 	if expected.DHCPReservation != nil {
 		recordValue = fi.ValueOf(expected.DHCPReservation.IPAddress)
-		expected.Data = fi.PtrTo(recordValue)
+		expected.Data = new(recordValue)
 	}
 	if expected.LoadBalancerPublicAPI {
 		// Resolve the public address after LB creation rather than persisting a
@@ -247,7 +247,7 @@ func (_ *DNSRecord) RenderElemento(t *elemento.ElementoAPITarget, actual, expect
 			return fmt.Errorf("external load balancer has no public IPv4 address")
 		}
 		recordValue = result.Server.PublicNet.IPv4
-		expected.Data = fi.PtrTo(recordValue)
+		expected.Data = new(recordValue)
 	}
 	if recordValue == "" {
 		return fmt.Errorf("Elemento DNS record %q in zone %q has no IP address", recordName, zoneName)

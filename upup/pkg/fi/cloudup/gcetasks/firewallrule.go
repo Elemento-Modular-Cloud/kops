@@ -53,8 +53,8 @@ type FirewallRule struct {
 	Disabled bool
 }
 
-var _ fi.CompareWithID = &FirewallRule{}
-var _ fi.CloudupTaskNormalize = &FirewallRule{}
+var _ fi.CompareWithID = (*FirewallRule)(nil)
+var _ fi.CloudupTaskNormalize = (*FirewallRule)(nil)
 
 func (e *FirewallRule) CompareWithID() *string {
 	return e.Name
@@ -73,7 +73,7 @@ func (e *FirewallRule) Find(c *fi.CloudupContext) (*FirewallRule, error) {
 
 	actual := &FirewallRule{}
 	actual.Name = &r.Name
-	actual.Network = &Network{Name: fi.PtrTo(lastComponent(r.Network))}
+	actual.Network = &Network{Name: new(lastComponent(r.Network))}
 	actual.TargetTags = r.TargetTags
 	actual.SourceRanges = r.SourceRanges
 	actual.SourceTags = r.SourceTags

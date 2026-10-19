@@ -30,8 +30,8 @@ func buildMinimalNodeInstanceGroup(subnets ...string) *kopsapi.InstanceGroup {
 	g := &kopsapi.InstanceGroup{}
 	g.ObjectMeta.Name = "nodes"
 	g.Spec.Role = kopsapi.InstanceGroupRoleNode
-	g.Spec.MinSize = fi.PtrTo(int32(1))
-	g.Spec.MaxSize = fi.PtrTo(int32(1))
+	g.Spec.MinSize = new(int32(1))
+	g.Spec.MaxSize = new(int32(1))
 	g.Spec.Image = "my-image"
 	g.Spec.Subnets = subnets
 
@@ -42,8 +42,8 @@ func buildMinimalMasterInstanceGroup(subnet string) *kopsapi.InstanceGroup {
 	g := &kopsapi.InstanceGroup{}
 	g.ObjectMeta.Name = "master-" + subnet
 	g.Spec.Role = kopsapi.InstanceGroupRoleControlPlane
-	g.Spec.MinSize = fi.PtrTo(int32(1))
-	g.Spec.MaxSize = fi.PtrTo(int32(1))
+	g.Spec.MinSize = new(int32(1))
+	g.Spec.MaxSize = new(int32(1))
 	g.Spec.Image = "my-image"
 	g.Spec.Subnets = []string{subnet}
 
@@ -70,13 +70,28 @@ func TestPopulateInstanceGroup_Role_Required(t *testing.T) {
 	expectErrorFromPopulateInstanceGroup(t, cluster, g, channel, "spec.role")
 }
 
+func TestPopulateInstanceGroup_KarpenterMinSize(t *testing.T) {
+	cloud, cluster := buildMinimalCluster()
+	input := buildMinimalNodeInstanceGroup()
+	input.Spec.Manager = kopsapi.InstanceManagerKarpenter
+	input.Spec.MinSize = nil
+
+	output, err := PopulateInstanceGroupSpec(cluster, input, cloud, &kopsapi.Channel{})
+	if err != nil {
+		t.Fatalf("error from PopulateInstanceGroupSpec: %v", err)
+	}
+	if output.Spec.MinSize != nil {
+		t.Errorf("expected minSize to be omitted, got %v", output.Spec.MinSize)
+	}
+}
+
 // TestPopulateInstanceGroup_AddTaintsCollision ensures we handle IGs with a user configured taint that kOps also adds by default
 func TestPopulateInstanceGroup_AddTaintsCollision(t *testing.T) {
 	_, cluster := buildMinimalCluster()
 	input := buildMinimalNodeInstanceGroup()
 	input.Spec.Taints = []string{"nvidia.com/gpu:NoSchedule"}
 	input.Spec.MachineType = "g4dn.xlarge"
-	cluster.Spec.Containerd.NvidiaGPU = &kopsapi.NvidiaGPUConfig{Enabled: fi.PtrTo(true)}
+	cluster.Spec.Containerd.NvidiaGPU = &kopsapi.NvidiaGPUConfig{Enabled: new(true)}
 
 	channel := &kopsapi.Channel{}
 
@@ -125,11 +140,11 @@ func TestPopulateInstanceGroup_AddTaintsCollision3(t *testing.T) {
 func TestPopulateInstanceGroup_EvictionHard(t *testing.T) {
 	_, cluster := buildMinimalCluster()
 	cluster.Spec.Kubelet = &kopsapi.KubeletConfigSpec{
-		EvictionHard: fi.PtrTo("memory.available<350Mi"),
+		EvictionHard: new("memory.available<350Mi"),
 	}
 	input := buildMinimalNodeInstanceGroup()
 	input.Spec.Kubelet = &kopsapi.KubeletConfigSpec{
-		EvictionHard: fi.PtrTo("memory.available<250Mi"),
+		EvictionHard: new("memory.available<250Mi"),
 	}
 
 	channel := &kopsapi.Channel{}
@@ -150,7 +165,7 @@ func TestPopulateInstanceGroup_EvictionHard(t *testing.T) {
 func TestPopulateInstanceGroup_EvictionHard3(t *testing.T) {
 	_, cluster := buildMinimalCluster()
 	cluster.Spec.Kubelet = &kopsapi.KubeletConfigSpec{
-		EvictionHard: fi.PtrTo("memory.available<350Mi"),
+		EvictionHard: new("memory.available<350Mi"),
 	}
 	input := buildMinimalMasterInstanceGroup("us-test-1")
 
@@ -173,7 +188,7 @@ func TestPopulateInstanceGroup_EvictionHard3(t *testing.T) {
 func TestPopulateInstanceGroup_EvictionHard4(t *testing.T) {
 	_, cluster := buildMinimalCluster()
 	cluster.Spec.ControlPlaneKubelet = &kopsapi.KubeletConfigSpec{
-		EvictionHard: fi.PtrTo("memory.available<350Mi"),
+		EvictionHard: new("memory.available<350Mi"),
 	}
 	input := buildMinimalMasterInstanceGroup("us-test-1")
 
@@ -196,7 +211,7 @@ func TestPopulateInstanceGroup_EvictionHard2(t *testing.T) {
 	_, cluster := buildMinimalCluster()
 	input := buildMinimalNodeInstanceGroup()
 	input.Spec.Kubelet = &kopsapi.KubeletConfigSpec{
-		EvictionHard: fi.PtrTo("memory.available<250Mi"),
+		EvictionHard: new("memory.available<250Mi"),
 	}
 
 	channel := &kopsapi.Channel{}
@@ -218,7 +233,7 @@ func TestPopulateInstanceGroup_AddTaints(t *testing.T) {
 	_, cluster := buildMinimalCluster()
 	input := buildMinimalNodeInstanceGroup()
 	input.Spec.MachineType = "g4dn.xlarge"
-	cluster.Spec.Containerd.NvidiaGPU = &kopsapi.NvidiaGPUConfig{Enabled: fi.PtrTo(true)}
+	cluster.Spec.Containerd.NvidiaGPU = &kopsapi.NvidiaGPUConfig{Enabled: new(true)}
 
 	channel := &kopsapi.Channel{}
 
@@ -232,6 +247,56 @@ func TestPopulateInstanceGroup_AddTaints(t *testing.T) {
 	}
 	if len(output.Spec.Taints) != 1 {
 		t.Errorf("Expected only 1 taint, got %d", len(output.Spec.Taints))
+	}
+}
+
+func TestPopulateInstanceGroup_GVisorLabelsWorkersOnly(t *testing.T) {
+	_, cluster := buildMinimalCluster()
+
+	channel := &kopsapi.Channel{}
+	cloud, err := BuildCloud(cluster)
+	if err != nil {
+		t.Fatalf("error from BuildCloud: %v", err)
+	}
+
+	for _, test := range []struct {
+		name      string
+		ig        *kopsapi.InstanceGroup
+		cluster   *kopsapi.GVisorConfig
+		wantLabel bool
+	}{
+		{
+			name:    "cluster config ignored on worker",
+			ig:      buildMinimalNodeInstanceGroup(),
+			cluster: &kopsapi.GVisorConfig{Enabled: new(true)},
+		},
+		{
+			name: "worker instance group",
+			ig: func() *kopsapi.InstanceGroup {
+				ig := buildMinimalNodeInstanceGroup()
+				ig.Spec.Containerd = &kopsapi.ContainerdConfig{
+					GVisor: &kopsapi.GVisorConfig{Enabled: new(true)},
+				}
+				return ig
+			}(),
+			wantLabel: true,
+		},
+		{
+			name: "control plane",
+			ig:   buildMinimalMasterInstanceGroup("us-test-1"),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cluster.Spec.Containerd.GVisor = test.cluster
+			output, err := PopulateInstanceGroupSpec(cluster, test.ig, cloud, channel)
+			if err != nil {
+				t.Fatalf("error from PopulateInstanceGroupSpec: %v", err)
+			}
+			gotLabel := output.Spec.NodeLabels["kops.k8s.io/gvisor"] == "1"
+			if gotLabel != test.wantLabel {
+				t.Errorf("gVisor node label presence = %v, want %v", gotLabel, test.wantLabel)
+			}
+		})
 	}
 }
 

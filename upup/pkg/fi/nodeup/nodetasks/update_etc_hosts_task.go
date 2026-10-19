@@ -20,12 +20,12 @@ import (
 	"fmt"
 
 	"k8s.io/klog/v2"
-	"k8s.io/kops/protokube/pkg/gossip/dns/hosts"
+	"k8s.io/kops/pkg/dns/hosts"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/nodeup/local"
 )
 
-// UpdateEtcHostsTask is responsible for updating /etc/hosts to set some DNS records, for gossip.
+// UpdateEtcHostsTask is responsible for updating /etc/hosts to set some DNS records.
 type UpdateEtcHostsTask struct {
 	// Name is a reference for our task
 	Name string
@@ -45,13 +45,13 @@ type HostRecord struct {
 	Addresses []string
 }
 
-var _ fi.NodeupTask = &UpdateEtcHostsTask{}
+var _ fi.NodeupTask = (*UpdateEtcHostsTask)(nil)
 
 func (e *UpdateEtcHostsTask) String() string {
 	return fmt.Sprintf("UpdateEtcHostsTask: %s", e.Name)
 }
 
-var _ fi.HasName = &UpdateEtcHostsTask{}
+var _ fi.HasName = (*UpdateEtcHostsTask)(nil)
 
 func (f *UpdateEtcHostsTask) GetName() *string {
 	return &f.Name

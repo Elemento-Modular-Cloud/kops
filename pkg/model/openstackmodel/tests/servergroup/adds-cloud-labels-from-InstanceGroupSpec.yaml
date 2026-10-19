@@ -81,7 +81,6 @@ Name: apiserver-aggregator-ca
 Signer: null
 alternateNames: null
 issuer: ""
-oldFormat: false
 subject: cn=apiserver-aggregator-ca
 type: ca
 ---
@@ -90,7 +89,6 @@ Name: etcd-clients-ca
 Signer: null
 alternateNames: null
 issuer: ""
-oldFormat: false
 subject: cn=etcd-clients-ca
 type: ca
 ---
@@ -99,8 +97,15 @@ Name: etcd-manager-ca-events
 Signer: null
 alternateNames: null
 issuer: ""
-oldFormat: false
 subject: cn=etcd-manager-ca-events
+type: ca
+---
+Lifecycle: ""
+Name: etcd-manager-ca-leases
+Signer: null
+alternateNames: null
+issuer: ""
+subject: cn=etcd-manager-ca-leases
 type: ca
 ---
 Lifecycle: ""
@@ -108,7 +113,6 @@ Name: etcd-manager-ca-main
 Signer: null
 alternateNames: null
 issuer: ""
-oldFormat: false
 subject: cn=etcd-manager-ca-main
 type: ca
 ---
@@ -117,8 +121,15 @@ Name: etcd-peers-ca-events
 Signer: null
 alternateNames: null
 issuer: ""
-oldFormat: false
 subject: cn=etcd-peers-ca-events
+type: ca
+---
+Lifecycle: ""
+Name: etcd-peers-ca-leases
+Signer: null
+alternateNames: null
+issuer: ""
+subject: cn=etcd-peers-ca-leases
 type: ca
 ---
 Lifecycle: ""
@@ -126,7 +137,6 @@ Name: etcd-peers-ca-main
 Signer: null
 alternateNames: null
 issuer: ""
-oldFormat: false
 subject: cn=etcd-peers-ca-main
 type: ca
 ---
@@ -138,12 +148,10 @@ Signer:
   Signer: null
   alternateNames: null
   issuer: ""
-  oldFormat: false
   subject: cn=kubernetes
   type: ca
 alternateNames: null
 issuer: ""
-oldFormat: false
 subject: cn=kube-proxy
 type: client
 ---
@@ -155,12 +163,10 @@ Signer:
   Signer: null
   alternateNames: null
   issuer: ""
-  oldFormat: false
   subject: cn=kubernetes
   type: ca
 alternateNames: null
 issuer: ""
-oldFormat: false
 subject: cn=kubelet
 type: client
 ---
@@ -169,7 +175,6 @@ Name: kubernetes-ca
 Signer: null
 alternateNames: null
 issuer: ""
-oldFormat: false
 subject: cn=kubernetes
 type: ca
 ---
@@ -178,7 +183,6 @@ Name: service-account
 Signer: null
 alternateNames: null
 issuer: ""
-oldFormat: false
 subject: cn=service-account
 type: ca
 ---

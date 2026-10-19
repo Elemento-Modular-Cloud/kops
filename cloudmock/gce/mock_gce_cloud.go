@@ -17,13 +17,13 @@ limitations under the License.
 package gce
 
 import (
+	"context"
 	"fmt"
 
+	"cloud.google.com/go/storage"
 	"google.golang.org/api/cloudresourcemanager/v1"
 	compute "google.golang.org/api/compute/v1"
-	"google.golang.org/api/storage/v1"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/klog/v2"
 	"k8s.io/kops/cloudmock/gce/mockcloudresourcemanager"
 	mockcompute "k8s.io/kops/cloudmock/gce/mockcompute"
 	"k8s.io/kops/cloudmock/gce/mockdns"
@@ -46,11 +46,15 @@ type MockGCECloud struct {
 	computeClient              *mockcompute.MockClient
 	dnsClient                  *mockdns.MockClient
 	iamClient                  *mockiam.MockClient
-	storageClient              *storage.Service
+	storageClient              *storage.Client
 	cloudResourceManagerClient *cloudresourcemanager.Service
 }
 
-var _ gce.GCECloud = &MockGCECloud{}
+var (
+	_ gce.GCECloud                               = &MockGCECloud{}
+	_ cloudinstances.GroupFailureReporter        = &MockGCECloud{}
+	_ cloudinstances.GroupInstanceStatusReporter = &MockGCECloud{}
+)
 
 // InstallMockGCECloud registers a MockGCECloud implementation for the specified region & project
 func InstallMockGCECloud(region string, project string) *MockGCECloud {
@@ -67,19 +71,32 @@ func InstallMockGCECloud(region string, project string) *MockGCECloud {
 	return c
 }
 
+// ComputeClient exposes the mock compute client so tests can install canned
+// responses that are not reachable through the gce.ComputeClient interface.
+func (c *MockGCECloud) ComputeClient() *mockcompute.MockClient {
+	return c.computeClient
+}
+
 func (c *MockGCECloud) AllResources() map[string]interface{} {
 	return c.computeClient.AllResources()
 }
 
 // GetCloudGroups is not implemented yet
 func (c *MockGCECloud) GetCloudGroups(cluster *kops.Cluster, instancegroups []*kops.InstanceGroup, warnUnmatched bool, nodes []v1.Node) (map[string]*cloudinstances.CloudInstanceGroup, error) {
-	klog.V(8).Infof("MockGCECloud cloud provider GetCloudGroups not implemented yet")
-	return nil, fmt.Errorf("MockGCECloud cloud provider does not support getting cloud groups at this time")
+	return gce.GetCloudGroups(c, cluster, instancegroups, warnUnmatched, nodes)
+}
+
+func (c *MockGCECloud) GetGroupFailures(ctx context.Context, group *cloudinstances.CloudInstanceGroup) ([]cloudinstances.GroupFailure, error) {
+	return gce.GetGroupFailures(ctx, c, group)
+}
+
+func (c *MockGCECloud) GetGroupInstanceStatuses(ctx context.Context, group *cloudinstances.CloudInstanceGroup) ([]cloudinstances.GroupInstanceStatus, error) {
+	return gce.GetGroupInstanceStatuses(ctx, c, group)
 }
 
 // Zones is not implemented yet
 func (c *MockGCECloud) Zones() ([]string, error) {
-	return nil, fmt.Errorf("not yet implemented")
+	return gce.GetZones(c)
 }
 
 // WithLabels returns a copy of the MockGCECloud bound to the specified labels
@@ -111,7 +128,7 @@ func (c *MockGCECloud) Compute() gce.ComputeClient {
 }
 
 // Storage implements GCECloud::Storage
-func (c *MockGCECloud) Storage() *storage.Service {
+func (c *MockGCECloud) Storage() *storage.Client {
 	return c.storageClient
 }
 
@@ -170,8 +187,7 @@ func (c *MockGCECloud) Labels() map[string]string {
 
 // DeleteGroup implements fi.Cloud::DeleteGroup
 func (c *MockGCECloud) DeleteGroup(g *cloudinstances.CloudInstanceGroup) error {
-	return nil
-	//	return deleteCloudInstanceGroup(c, g)
+	return gce.DeleteCloudInstanceGroup(c, g)
 }
 
 // DeleteInstance deletes a GCE instance

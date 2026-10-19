@@ -48,7 +48,7 @@ type Subnet struct {
 	Shared *bool
 }
 
-var _ fi.CompareWithID = &Subnet{}
+var _ fi.CompareWithID = (*Subnet)(nil)
 
 func (e *Subnet) CompareWithID() *string {
 	return e.Name
@@ -72,8 +72,8 @@ func (e *Subnet) Find(c *fi.CloudupContext) (*Subnet, error) {
 
 	actual := &Subnet{}
 	actual.Name = &s.Name
-	actual.Network = &Network{Name: fi.PtrTo(lastComponent(s.Network))}
-	actual.Region = fi.PtrTo(lastComponent(s.Region))
+	actual.Network = &Network{Name: new(lastComponent(s.Network))}
+	actual.Region = new(lastComponent(s.Region))
 	actual.CIDR = &s.IpCidrRange
 	actual.StackType = &s.StackType
 	actual.Ipv6AccessType = &s.Ipv6AccessType
@@ -195,7 +195,8 @@ func updateSecondaryRanges(cloud gce.GCECloud, op string, e *Subnet) error {
 	}
 
 	// Cannot add and remove ranges in the same call
-	if op == "add" {
+	switch op {
+	case "add":
 		patch := false
 		for k, v := range expectedRanges {
 			if actualRanges[k] != v {
@@ -211,7 +212,7 @@ func updateSecondaryRanges(cloud gce.GCECloud, op string, e *Subnet) error {
 		if !patch {
 			return nil
 		}
-	} else if op == "remove" {
+	case "remove":
 		patch := false
 		if len(actualRanges) != len(expectedRanges) {
 			patch = true

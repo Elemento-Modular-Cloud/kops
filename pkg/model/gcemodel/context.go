@@ -20,7 +20,6 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/model"
-	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gcetasks"
 )
@@ -92,6 +91,38 @@ func (c *GCEModelContext) GCETagForRole(role kops.InstanceGroupRole) string {
 	return gce.TagForRole(c.Cluster.ObjectMeta.Name, role)
 }
 
+// HasAPIServerOnlyInstanceGroups returns true if the cluster has any APIServer-only instance groups.
+func (c *GCEModelContext) HasAPIServerOnlyInstanceGroups() bool {
+	for _, ig := range c.AllInstanceGroups {
+		if ig.Spec.Role.HasAPIServer() {
+			return true
+		}
+	}
+	return false
+}
+
+// HasEtcdOnlyInstanceGroups returns true if the cluster has any Etcd-only instance groups.
+func (c *GCEModelContext) HasEtcdOnlyInstanceGroups() bool {
+	for _, ig := range c.AllInstanceGroups {
+		if ig.IsEtcdOnly() {
+			return true
+		}
+	}
+	return false
+}
+
+// GCETagsForAPIServerTargets returns the network tags that should be used as firewall
+// targets for rules that need to reach API server instances. It always includes the
+// ControlPlane tag, and adds the APIServer tag only when the cluster has dedicated
+// APIServer instance groups.
+func (c *GCEModelContext) GCETagsForAPIServerTargets() []string {
+	tags := []string{c.GCETagForRole(kops.InstanceGroupRoleControlPlane)}
+	if c.HasAPIServerOnlyInstanceGroups() {
+		tags = append(tags, c.GCETagForRole(kops.InstanceGroupRoleAPIServer))
+	}
+	return tags
+}
+
 func (c *GCEModelContext) LinkToTargetPool(id string) *gcetasks.TargetPool {
 	return &gcetasks.TargetPool{Name: s(c.NameForTargetPool(id))}
 }
@@ -148,7 +179,7 @@ func (c *GCEModelContext) LinkToServiceAccount(ig *kops.InstanceGroup) *gcetasks
 		return &gcetasks.ServiceAccount{
 			Name:   s("shared"),
 			Email:  &c.Cluster.Spec.CloudProvider.GCE.ServiceAccount,
-			Shared: fi.PtrTo(true),
+			Shared: new(true),
 		}
 	}
 
@@ -156,7 +187,7 @@ func (c *GCEModelContext) LinkToServiceAccount(ig *kops.InstanceGroup) *gcetasks
 
 	name := ""
 	switch role {
-	case kops.InstanceGroupRoleAPIServer, kops.InstanceGroupRoleControlPlane:
+	case kops.InstanceGroupRoleAPIServer, kops.InstanceGroupRoleControlPlane, kops.InstanceGroupRoleEtcd, kops.InstanceGroupRoleScheduler, kops.InstanceGroupRoleKubeControllerManager:
 		name = gce.ControlPlane
 
 	case kops.InstanceGroupRoleBastion:

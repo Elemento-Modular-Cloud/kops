@@ -57,7 +57,7 @@ type Router struct {
 	Subnetworks []*Subnet
 }
 
-var _ fi.CompareWithID = &Router{}
+var _ fi.CompareWithID = (*Router)(nil)
 
 // CompareWithID returns the name of the Router.
 func (r *Router) CompareWithID() *string {
@@ -88,8 +88,8 @@ func (r *Router) Find(c *fi.CloudupContext) (*Router, error) {
 	actual := &Router{
 		Name:                          &found.Name,
 		Lifecycle:                     r.Lifecycle,
-		Network:                       &Network{Name: fi.PtrTo(lastComponent(found.Network))},
-		Region:                        fi.PtrTo(lastComponent(found.Region)),
+		Network:                       &Network{Name: new(lastComponent(found.Network))},
+		Region:                        new(lastComponent(found.Region)),
 		NATIPAllocationOption:         &nat.NatIpAllocateOption,
 		SourceSubnetworkIPRangesToNAT: &nat.SourceSubnetworkIpRangesToNat,
 	}

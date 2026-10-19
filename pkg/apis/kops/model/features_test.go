@@ -23,6 +23,22 @@ import (
 	"k8s.io/kops/pkg/apis/kops"
 )
 
+func TestUseChallengeCallback(t *testing.T) {
+	for _, tc := range []struct {
+		provider kops.CloudProviderID
+		want     bool
+	}{
+		{provider: kops.CloudProviderElemento, want: false},
+		{provider: kops.CloudProviderLinode, want: true},
+	} {
+		t.Run(string(tc.provider), func(t *testing.T) {
+			if got := UseChallengeCallback(tc.provider); got != tc.want {
+				t.Fatalf("UseChallengeCallback(%q) = %v, want %v", tc.provider, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestUseCiliumEtcd(t *testing.T) {
 	for _, tc := range []struct {
 		cluster  *kops.Cluster

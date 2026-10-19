@@ -17,20 +17,27 @@ limitations under the License.
 package assets
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"k8s.io/kops/pkg/apis/kops"
+	"k8s.io/kops/pkg/featureflag"
 	"k8s.io/kops/pkg/testutils/golden"
+	"k8s.io/kops/util/pkg/hashing"
+	"k8s.io/kops/util/pkg/vfs"
 )
 
 func buildAssetBuilder(t *testing.T) *AssetBuilder {
-	builder := &AssetBuilder{
-		AssetsLocation: &kops.AssetsSpec{},
-		ImageAssets:    []*ImageAsset{},
-	}
-	return builder
+	return NewAssetBuilder(nil, &kops.AssetsSpec{}, false)
 }
 
 func TestValidate_RemapImage_ContainerProxy_AppliesToDockerHub(t *testing.T) {
@@ -40,13 +47,9 @@ func TestValidate_RemapImage_ContainerProxy_AppliesToDockerHub(t *testing.T) {
 	image := "weaveworks/weave-kube"
 	expected := "proxy.example.com/weaveworks/weave-kube"
 
-	builder.AssetsLocation.ContainerProxy = &proxyURL
+	builder.assetsLocation.ContainerProxy = &proxyURL
 
-	remapped, err := builder.RemapImage(image)
-	if err != nil {
-		t.Error("Error remapping image", err)
-	}
-
+	remapped := builder.RemapImage(image)
 	if remapped != expected {
 		t.Errorf("Error remapping image (Expecting: %s, got %s)", expected, remapped)
 	}
@@ -59,13 +62,9 @@ func TestValidate_RemapImage_ContainerProxy_AppliesToSimplifiedDockerHub(t *test
 	image := "debian"
 	expected := "proxy.example.com/debian"
 
-	builder.AssetsLocation.ContainerProxy = &proxyURL
+	builder.assetsLocation.ContainerProxy = &proxyURL
 
-	remapped, err := builder.RemapImage(image)
-	if err != nil {
-		t.Error("Error remapping image", err)
-	}
-
+	remapped := builder.RemapImage(image)
 	if remapped != expected {
 		t.Errorf("Error remapping image (Expecting: %s, got %s)", expected, remapped)
 	}
@@ -78,13 +77,9 @@ func TestValidate_RemapImage_ContainerProxy_AppliesToSimplifiedKubernetesURL(t *
 	image := "registry.k8s.io/kube-apiserver"
 	expected := "proxy.example.com/kube-apiserver"
 
-	builder.AssetsLocation.ContainerProxy = &proxyURL
+	builder.assetsLocation.ContainerProxy = &proxyURL
 
-	remapped, err := builder.RemapImage(image)
-	if err != nil {
-		t.Error("Error remapping image", err)
-	}
-
+	remapped := builder.RemapImage(image)
 	if remapped != expected {
 		t.Errorf("Error remapping image (Expecting: %s, got %s)", expected, remapped)
 	}
@@ -97,13 +92,9 @@ func TestValidate_RemapImage_ContainerProxy_AppliesToLegacyKubernetesURL(t *test
 	image := "gcr.io/google_containers/kube-apiserver"
 	expected := "proxy.example.com/google_containers/kube-apiserver"
 
-	builder.AssetsLocation.ContainerProxy = &proxyURL
+	builder.assetsLocation.ContainerProxy = &proxyURL
 
-	remapped, err := builder.RemapImage(image)
-	if err != nil {
-		t.Error("Error remapping image", err)
-	}
-
+	remapped := builder.RemapImage(image)
 	if remapped != expected {
 		t.Errorf("Error remapping image (Expecting: %s, got %s)", expected, remapped)
 	}
@@ -116,13 +107,9 @@ func TestValidate_RemapImage_ContainerProxy_AppliesToImagesWithTags(t *testing.T
 	image := "registry.k8s.io/kube-apiserver:1.2.3"
 	expected := "proxy.example.com/kube-apiserver:1.2.3"
 
-	builder.AssetsLocation.ContainerProxy = &proxyURL
+	builder.assetsLocation.ContainerProxy = &proxyURL
 
-	remapped, err := builder.RemapImage(image)
-	if err != nil {
-		t.Error("Error remapping image", err)
-	}
-
+	remapped := builder.RemapImage(image)
 	if remapped != expected {
 		t.Errorf("Error remapping image (Expecting: %s, got %s)", expected, remapped)
 	}
@@ -135,26 +122,100 @@ func TestValidate_RemapImage_ContainerRegistry_MappingMultipleTimesConverges(t *
 	image := "kube-apiserver:1.2.3"
 	expected := "proxy.example.com/kube-apiserver:1.2.3"
 
-	builder.AssetsLocation.ContainerRegistry = &mirrorURL
+	builder.assetsLocation.ContainerRegistry = &mirrorURL
 
 	remapped := image
 	iterations := make([]map[int]int, 2)
 	for i := range iterations {
-		remapped, err := builder.RemapImage(remapped)
-		if err != nil {
-			t.Errorf("Error remapping image (iteration %d): %s", i, err)
-		}
-
+		remapped := builder.RemapImage(remapped)
 		if remapped != expected {
 			t.Errorf("Error remapping image (Expecting: %s, got %s, iteration: %d)", expected, remapped, i)
 		}
 	}
 }
 
+func TestRemapURLPathDelimiterEscaping(t *testing.T) {
+	canonicalURL, err := url.Parse("https://artifacts.k8s.io/binaries/kops/1.37.0/linux/arm64/nodeup")
+	if err != nil {
+		t.Fatalf("parsing canonical URL: %v", err)
+	}
+	knownHash := hashing.MustFromString("sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+	for _, tc := range []struct {
+		name           string
+		fileRepository string
+		expected       string
+	}{
+		{
+			name:           "S3 raw comma",
+			fileRepository: "s3://artifact-bucket/prefix,prod",
+			expected:       "s3://artifact-bucket/prefix%2Cprod/binaries/kops/1.37.0/linux/arm64/nodeup",
+		},
+		{
+			name:           "S3 encoded comma",
+			fileRepository: "s3://artifact-bucket/prefix%2Cprod",
+			expected:       "s3://artifact-bucket/prefix%2Cprod/binaries/kops/1.37.0/linux/arm64/nodeup",
+		},
+		{
+			name:           "GCS raw comma",
+			fileRepository: "gs://artifact-bucket/prefix,prod",
+			expected:       "gs://artifact-bucket/prefix%2Cprod/binaries/kops/1.37.0/linux/arm64/nodeup",
+		},
+		{
+			name:           "GCS encoded comma",
+			fileRepository: "gs://artifact-bucket/prefix%2Cprod",
+			expected:       "gs://artifact-bucket/prefix%2Cprod/binaries/kops/1.37.0/linux/arm64/nodeup",
+		},
+		{
+			name:           "HTTPS raw comma",
+			fileRepository: "https://artifacts.example.com/prefix,prod",
+			expected:       "https://artifacts.example.com/prefix%2Cprod/binaries/kops/1.37.0/linux/arm64/nodeup",
+		},
+		{
+			name:           "HTTPS encoded comma",
+			fileRepository: "https://artifacts.example.com/prefix%2Cprod",
+			expected:       "https://artifacts.example.com/prefix%2Cprod/binaries/kops/1.37.0/linux/arm64/nodeup",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fileRepository := tc.fileRepository
+			builder := NewAssetBuilder(nil, &kops.AssetsSpec{FileRepository: &fileRepository}, false)
+			asset, err := builder.RemapFile(canonicalURL, knownHash)
+			if err != nil {
+				t.Fatalf("remapping file: %v", err)
+			}
+
+			mirrored := BuildMirroredAsset(asset)
+			if len(mirrored.Locations) != 1 {
+				t.Fatalf("expected one location, got %d", len(mirrored.Locations))
+			}
+			if mirrored.Locations[0] != tc.expected {
+				t.Errorf("expected location %q, got %q", tc.expected, mirrored.Locations[0])
+			}
+
+			_, locations, ok := strings.Cut(mirrored.CompactString(), "@")
+			if !ok {
+				t.Fatalf("compact asset does not contain a hash separator")
+			}
+			if split := strings.Split(locations, ","); len(split) != 1 {
+				t.Fatalf("compact asset split into %d locations", len(split))
+			}
+			parsed, err := url.Parse(locations)
+			if err != nil {
+				t.Fatalf("parsing compact asset location: %v", err)
+			}
+			expectedPath := "/prefix,prod/binaries/kops/1.37.0/linux/arm64/nodeup"
+			if parsed.Path != expectedPath {
+				t.Errorf("expected decoded path %q, got %q", expectedPath, parsed.Path)
+			}
+		})
+	}
+}
+
 func TestRemapEmptySection(t *testing.T) {
 	builder := buildAssetBuilder(t)
 
-	testdir := filepath.Join("testdata")
+	testdir := "testdata"
 
 	key := "emptysection"
 
@@ -172,4 +233,242 @@ func TestRemapEmptySection(t *testing.T) {
 	}
 
 	golden.AssertMatchesFile(t, string(actual), expectedPath)
+}
+
+func TestAssetBuilderConcurrentCollection(t *testing.T) {
+	builder := buildAssetBuilder(t)
+	knownHash := hashing.MustFromString("sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+	originalImageDigestEnabled := featureflag.ImageDigest.Enabled()
+	featureflag.ParseFlags("-ImageDigest")
+	t.Cleanup(func() {
+		if originalImageDigestEnabled {
+			featureflag.ParseFlags("ImageDigest")
+		} else {
+			featureflag.ParseFlags("-ImageDigest")
+		}
+	})
+
+	const count = 64
+
+	var wg sync.WaitGroup
+	wg.Add(count * 4)
+
+	for i := 0; i < count; i++ {
+		go func(i int) {
+			defer wg.Done()
+			builder.RemapImage(fmt.Sprintf("registry.k8s.io/example/image-%d:latest", i))
+		}(i)
+
+		go func(i int) {
+			defer wg.Done()
+			u := fmt.Sprintf("https://example.com/assets/file-%d", i)
+			fileURL, err := url.Parse(u)
+			if err != nil {
+				t.Errorf("error parsing url %q: %v", u, err)
+				return
+			}
+			if _, err := builder.RemapFile(fileURL, knownHash); err != nil {
+				t.Errorf("error remapping file %q: %v", u, err)
+			}
+		}(i)
+
+		go func(i int) {
+			defer wg.Done()
+			builder.AddStaticManifest(&StaticManifest{
+				Key:      fmt.Sprintf("manifest-%d", i),
+				Path:     fmt.Sprintf("manifests/static/manifest-%d.yaml", i),
+				Contents: []byte(fmt.Sprintf("manifest-%d", i)),
+			})
+		}(i)
+
+		go func(i int) {
+			defer wg.Done()
+			builder.AddStaticFile(&StaticFile{
+				Path:    fmt.Sprintf("/etc/kubernetes/static-file-%d", i),
+				Content: fmt.Sprintf("content-%d", i),
+			})
+		}(i)
+	}
+
+	wg.Wait()
+
+	if got := len(builder.ImageAssets()); got != count {
+		t.Fatalf("expected %d image assets, got %d", count, got)
+	}
+	if got := len(builder.FileAssets()); got != count {
+		t.Fatalf("expected %d file assets, got %d", count, got)
+	}
+	if got := len(builder.StaticManifests()); got != count {
+		t.Fatalf("expected %d static manifests, got %d", count, got)
+	}
+	if got := len(builder.StaticFiles()); got != count {
+		t.Fatalf("expected %d static files, got %d", count, got)
+	}
+
+	imageAssets := builder.ImageAssets()
+	for i := 1; i < len(imageAssets); i++ {
+		prev := imageAssets[i-1]
+		curr := imageAssets[i]
+		if prev.CanonicalLocation > curr.CanonicalLocation {
+			t.Fatalf("image assets not sorted by canonical location: %q > %q", prev.CanonicalLocation, curr.CanonicalLocation)
+		}
+	}
+
+	fileAssets := builder.FileAssets()
+	for i := 1; i < len(fileAssets); i++ {
+		prev := fileAssets[i-1]
+		curr := fileAssets[i]
+		prevCanonical := prev.CanonicalURL.String()
+		currCanonical := curr.CanonicalURL.String()
+		if prevCanonical > currCanonical {
+			t.Fatalf("file assets not sorted by canonical url: %q > %q", prevCanonical, currCanonical)
+		}
+	}
+
+	staticManifests := builder.StaticManifests()
+	for i := 1; i < len(staticManifests); i++ {
+		prev := staticManifests[i-1]
+		curr := staticManifests[i]
+		if prev.Key > curr.Key {
+			t.Fatalf("static manifests not sorted by key: %q > %q", prev.Key, curr.Key)
+		}
+	}
+
+	staticFiles := builder.StaticFiles()
+	for i := 1; i < len(staticFiles); i++ {
+		prev := staticFiles[i-1]
+		curr := staticFiles[i]
+		if prev.Path > curr.Path {
+			t.Fatalf("static files not sorted: %q > %q", prev.Path, curr.Path)
+		}
+	}
+}
+
+func resetDownloadedFileHashes(t *testing.T) {
+	t.Helper()
+
+	downloadedFileHashes.Clear()
+	t.Cleanup(downloadedFileHashes.Clear)
+}
+
+func hashHandler(assetPath string, hash string, requests *atomic.Int64) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != assetPath+".sha256" {
+			// The VFS retries 404 and 5xx responses.
+			http.Error(w, "not found", http.StatusForbidden)
+			return
+		}
+		requests.Add(1)
+		fmt.Fprintf(w, "%s  %s\n", hash, path.Base(assetPath))
+	}
+}
+
+func newHashServer(t *testing.T, assetPath string, hash string, requests *atomic.Int64) *httptest.Server {
+	t.Helper()
+
+	server := httptest.NewServer(hashHandler(assetPath, hash, requests))
+	t.Cleanup(server.Close)
+
+	return server
+}
+
+func TestFindHashCachesDownloadedHashesByResolvedURL(t *testing.T) {
+	resetDownloadedFileHashes(t)
+
+	const assetPath = "/binaries/example/linux/amd64/example"
+	const canonicalHash = "2222222222222222222222222222222222222222222222222222222222222222"
+	const mirroredHash = "3333333333333333333333333333333333333333333333333333333333333333"
+
+	var canonicalRequests atomic.Int64
+	canonicalServer := newHashServer(t, assetPath, canonicalHash, &canonicalRequests)
+
+	var mirroredRequests atomic.Int64
+	mirroredServer := newHashServer(t, assetPath, mirroredHash, &mirroredRequests)
+
+	assetURL, err := url.Parse(canonicalServer.URL + assetPath)
+	if err != nil {
+		t.Fatalf("error parsing asset url: %v", err)
+	}
+
+	vfsContext := vfs.NewVFSContext()
+
+	// Each builder registers the asset, but only the first downloads its checksum.
+	for i := 0; i < 3; i++ {
+		builder := NewAssetBuilder(vfsContext, &kops.AssetsSpec{}, false)
+
+		asset, err := builder.RemapFile(assetURL, nil)
+		if err != nil {
+			t.Fatalf("error remapping file with builder %d: %v", i, err)
+		}
+		if actual := asset.SHAValue.Hex(); actual != canonicalHash {
+			t.Errorf("unexpected hash from builder %d: actual %q, expected %q", i, actual, canonicalHash)
+		}
+		if actual := len(builder.FileAssets()); actual != 1 {
+			t.Errorf("expected builder %d to register 1 file asset, got %d", i, actual)
+		}
+	}
+
+	// The mirror must not reuse the canonical URL's cached hash.
+	fileRepository := mirroredServer.URL
+	mirroredBuilder := NewAssetBuilder(vfsContext, &kops.AssetsSpec{FileRepository: &fileRepository}, false)
+	mirroredAsset, err := mirroredBuilder.RemapFile(assetURL, nil)
+	if err != nil {
+		t.Fatalf("error remapping mirrored file: %v", err)
+	}
+	if actual := mirroredAsset.SHAValue.Hex(); actual != mirroredHash {
+		t.Errorf("unexpected mirrored hash: actual %q, expected %q", actual, mirroredHash)
+	}
+
+	if actual := canonicalRequests.Load(); actual != 1 {
+		t.Errorf("expected 1 canonical checksum request, got %d", actual)
+	}
+	if actual := mirroredRequests.Load(); actual != 1 {
+		t.Errorf("expected 1 mirrored checksum request, got %d", actual)
+	}
+}
+
+func TestFindHashDoesNotCacheFailures(t *testing.T) {
+	resetDownloadedFileHashes(t)
+
+	const assetPath = "/binaries/example/linux/amd64/example"
+	const hash = "4444444444444444444444444444444444444444444444444444444444444444"
+
+	var published atomic.Bool
+	var requests atomic.Int64
+	handler := hashHandler(assetPath, hash, &requests)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !published.Load() {
+			// The VFS retries 404 and 5xx responses.
+			http.Error(w, "not found", http.StatusForbidden)
+			return
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(server.Close)
+
+	assetURL, err := url.Parse(server.URL + assetPath)
+	if err != nil {
+		t.Fatalf("error parsing asset url: %v", err)
+	}
+
+	vfsContext := vfs.NewVFSContext()
+	builder := NewAssetBuilder(vfsContext, &kops.AssetsSpec{}, false)
+
+	if _, err := builder.RemapFile(assetURL, nil); err == nil {
+		t.Fatal("expected an error while the checksum file is unavailable")
+	}
+
+	published.Store(true)
+
+	asset, err := builder.RemapFile(assetURL, nil)
+	if err != nil {
+		t.Fatalf("error remapping file after the checksum file was published: %v", err)
+	}
+	if actual := asset.SHAValue.Hex(); actual != hash {
+		t.Errorf("unexpected hash: actual %q, expected %q", actual, hash)
+	}
+	if actual := requests.Load(); actual != 1 {
+		t.Errorf("expected 1 successful checksum request, got %d", actual)
+	}
 }

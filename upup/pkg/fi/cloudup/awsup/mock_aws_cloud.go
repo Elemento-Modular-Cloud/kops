@@ -22,7 +22,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	elbtypes "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancing/types"
 	elbv2types "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
@@ -106,6 +105,12 @@ func (c *MockAWSCloud) GetCloudGroups(cluster *kops.Cluster, instancegroups []*k
 	return getCloudGroups(ctx, c, cluster, instancegroups, warnUnmatched, nodes)
 }
 
+var _ cloudinstances.GroupFailureReporter = (*MockAWSCloud)(nil)
+
+func (c *MockAWSCloud) GetGroupFailures(ctx context.Context, group *cloudinstances.CloudInstanceGroup) ([]cloudinstances.GroupFailure, error) {
+	return getGroupFailures(ctx, c, group)
+}
+
 func (c *MockCloud) ProviderID() kops.CloudProviderID {
 	return kops.CloudProviderAWS
 }
@@ -170,18 +175,6 @@ func (c *MockAWSCloud) UpdateTags(id string, tags map[string]string) error {
 	return updateTags(c, id, tags)
 }
 
-func (c *MockAWSCloud) GetELBTags(loadBalancerName string) (map[string]string, error) {
-	return getELBTags(c, loadBalancerName)
-}
-
-func (c *MockAWSCloud) CreateELBTags(loadBalancerName string, tags map[string]string) error {
-	return createELBTags(c, loadBalancerName, tags)
-}
-
-func (c *MockAWSCloud) RemoveELBTags(loadBalancerName string, tags map[string]string) error {
-	return removeELBTags(c, loadBalancerName, tags)
-}
-
 func (c *MockAWSCloud) GetELBV2Tags(ResourceArn string) (map[string]string, error) {
 	return getELBV2Tags(c, ResourceArn)
 }
@@ -192,14 +185,6 @@ func (c *MockAWSCloud) CreateELBV2Tags(ResourceArn string, tags map[string]strin
 
 func (c *MockAWSCloud) RemoveELBV2Tags(ResourceArn string, tags map[string]string) error {
 	return removeELBV2Tags(c, ResourceArn, tags)
-}
-
-func (c *MockAWSCloud) FindELBByNameTag(findNameTag string) (*elbtypes.LoadBalancerDescription, error) {
-	return findELBByNameTag(c, findNameTag)
-}
-
-func (c *MockAWSCloud) DescribeELBTags(loadBalancerNames []string) (map[string][]elbtypes.Tag, error) {
-	return describeELBTags(c, loadBalancerNames)
 }
 
 func (c *MockAWSCloud) DescribeELBV2Tags(loadBalancerArns []string) (map[string][]elbv2types.Tag, error) {
@@ -309,12 +294,12 @@ func (c *MockAWSCloud) GetApiIngressStatus(cluster *kops.Cluster) ([]fi.ApiIngre
 
 // DefaultInstanceType determines an instance type for the specified cluster & instance group
 func (c *MockAWSCloud) DefaultInstanceType(cluster *kops.Cluster, ig *kops.InstanceGroup) (string, error) {
-	switch ig.Spec.Role {
-	case kops.InstanceGroupRoleControlPlane, kops.InstanceGroupRoleAPIServer:
+	switch {
+	case ig.Spec.Role.IsControlPlaneType():
 		return "m3.medium", nil
-	case kops.InstanceGroupRoleNode:
+	case ig.Spec.Role.HasNode():
 		return "t2.medium", nil
-	case kops.InstanceGroupRoleBastion:
+	case ig.Spec.Role.HasBastion():
 		return "t2.micro", nil
 	default:
 		return "", fmt.Errorf("MockAWSCloud DefaultInstanceType does not handle %s", ig.Spec.Role)

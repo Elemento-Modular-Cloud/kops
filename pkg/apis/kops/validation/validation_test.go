@@ -18,6 +18,7 @@ package validation
 
 import (
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,7 +28,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/kops/pkg/apis/kops"
-	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/utils/ptr"
 )
 
@@ -38,6 +38,107 @@ func Test_Validate_DNS(t *testing.T) {
 			t.Fatalf("Expected errors validating name %q", name)
 		}
 	}
+}
+
+func Test_Validate_CloudDNSTopology(t *testing.T) {
+	grid := []struct {
+		Name           string
+		CloudProvider  kops.CloudProviderSpec
+		DNS            kops.DNSType
+		ExpectedErrors []string
+	}{
+		{
+			// Legacy gossip clusters are no longer supported
+			Name:           "cluster.k8s.local",
+			CloudProvider:  kops.CloudProviderSpec{AWS: &kops.AWSSpec{}},
+			DNS:            kops.DNSTypePublic,
+			ExpectedErrors: []string{"Forbidden::spec.networking.topology.dns.type"},
+		},
+		{
+			// .k8s.local names are fine with dns=none
+			Name:          "cluster.k8s.local",
+			CloudProvider: kops.CloudProviderSpec{AWS: &kops.AWSSpec{}},
+			DNS:           kops.DNSTypeNone,
+		},
+		{
+			Name:          "cluster.example.com",
+			CloudProvider: kops.CloudProviderSpec{AWS: &kops.AWSSpec{}},
+			DNS:           kops.DNSTypePublic,
+		},
+		{
+			// Azure only supports dns=none
+			Name:           "cluster.example.com",
+			CloudProvider:  kops.CloudProviderSpec{Azure: &kops.AzureSpec{}},
+			DNS:            kops.DNSTypePublic,
+			ExpectedErrors: []string{"Forbidden::spec.networking.topology.dns.type"},
+		},
+	}
+
+	for _, g := range grid {
+		cluster := &kops.Cluster{
+			Spec: kops.ClusterSpec{
+				CloudProvider: g.CloudProvider,
+				Networking: kops.NetworkingSpec{
+					Topology: &kops.TopologySpec{
+						DNS: g.DNS,
+					},
+				},
+			},
+		}
+		cluster.Name = g.Name
+
+		errs := validateCloudDNSTopology(cluster, field.NewPath("spec", "networking", "topology", "dns", "type"))
+		testErrors(t, g.Name, errs, g.ExpectedErrors)
+	}
+}
+
+func TestElementoDNSTopology(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		dns  kops.DNSType
+		want string
+	}{
+		{name: "managed private zone", dns: kops.DNSTypePrivate},
+		{name: "public zone not implemented", dns: kops.DNSTypePublic, want: "public DNS publication is not implemented"},
+		{name: "implicit public rejected", want: "public DNS publication is not implemented"},
+		{name: "bootstrap requires records", dns: kops.DNSTypeNone, want: "bootstrap depends on its managed private DNS records"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := &kops.Cluster{Spec: kops.ClusterSpec{
+				CloudProvider: kops.CloudProviderSpec{Elemento: &kops.ElementoSpec{}},
+				Networking:    kops.NetworkingSpec{Topology: &kops.TopologySpec{DNS: tc.dns}},
+			}}
+			cluster.Name = "test.k8s"
+			errs := validateCloudDNSTopology(cluster, field.NewPath("spec", "networking", "topology", "dns", "type"))
+			if tc.want == "" {
+				if len(errs) != 0 {
+					t.Fatalf("unexpected DNS validation errors: %v", errs)
+				}
+			} else if len(errs) != 1 || !strings.Contains(errs[0].Detail, tc.want) {
+				t.Fatalf("expected DNS error containing %q, got %v", tc.want, errs)
+			}
+		})
+	}
+}
+
+func Test_Validate_GossipConfig(t *testing.T) {
+	cluster := &kops.Cluster{
+		Spec: kops.ClusterSpec{
+			CloudProvider: kops.CloudProviderSpec{AWS: &kops.AWSSpec{}},
+			GossipConfig:  &kops.GossipConfig{},
+		},
+	}
+	errs := validateClusterSpec(&cluster.Spec, cluster, field.NewPath("spec"), false)
+	testErrors(t, "gossipConfig", errs, []string{"Forbidden::spec.gossipConfig"})
+
+	cluster = &kops.Cluster{
+		Spec: kops.ClusterSpec{
+			CloudProvider:             kops.CloudProviderSpec{AWS: &kops.AWSSpec{}},
+			DNSControllerGossipConfig: &kops.DNSControllerGossipConfig{},
+		},
+	}
+	errs = validateClusterSpec(&cluster.Spec, cluster, field.NewPath("spec"), false)
+	testErrors(t, "dnsControllerGossipConfig", errs, []string{"Forbidden::spec.dnsControllerGossipConfig"})
 }
 
 func TestValidateCIDR(t *testing.T) {
@@ -254,14 +355,14 @@ func TestValidateKubeAPIServer(t *testing.T) {
 		},
 		{
 			Input: kops.KubeAPIServerConfig{
-				AuthorizationMode: fi.PtrTo("RBAC"),
+				AuthorizationMode: new("RBAC"),
 			},
 			Cluster: &kops.Cluster{
 				Spec: kops.ClusterSpec{
 					Authorization: &kops.AuthorizationSpec{
 						RBAC: &kops.RBACAuthorizationSpec{},
 					},
-					KubernetesVersion: "1.25.0",
+					KubernetesVersion: "1.35.0",
 					CloudProvider: kops.CloudProviderSpec{
 						AWS: &kops.AWSSpec{},
 					},
@@ -273,14 +374,14 @@ func TestValidateKubeAPIServer(t *testing.T) {
 		},
 		{
 			Input: kops.KubeAPIServerConfig{
-				AuthorizationMode: fi.PtrTo("RBAC,Node"),
+				AuthorizationMode: new("RBAC,Node"),
 			},
 			Cluster: &kops.Cluster{
 				Spec: kops.ClusterSpec{
 					Authorization: &kops.AuthorizationSpec{
 						RBAC: &kops.RBACAuthorizationSpec{},
 					},
-					KubernetesVersion: "1.25.0",
+					KubernetesVersion: "1.35.0",
 					CloudProvider: kops.CloudProviderSpec{
 						AWS: &kops.AWSSpec{},
 					},
@@ -289,14 +390,14 @@ func TestValidateKubeAPIServer(t *testing.T) {
 		},
 		{
 			Input: kops.KubeAPIServerConfig{
-				AuthorizationMode: fi.PtrTo("RBAC,Node,Bogus"),
+				AuthorizationMode: new("RBAC,Node,Bogus"),
 			},
 			Cluster: &kops.Cluster{
 				Spec: kops.ClusterSpec{
 					Authorization: &kops.AuthorizationSpec{
 						RBAC: &kops.RBACAuthorizationSpec{},
 					},
-					KubernetesVersion: "1.25.0",
+					KubernetesVersion: "1.35.0",
 					CloudProvider: kops.CloudProviderSpec{
 						AWS: &kops.AWSSpec{},
 					},
@@ -320,7 +421,7 @@ func TestValidateKubeAPIServer(t *testing.T) {
 				Spec: kops.ClusterSpec{
 					Authentication: &kops.AuthenticationSpec{
 						OIDC: &kops.OIDCAuthenticationSpec{
-							ClientID: fi.PtrTo("foo"),
+							ClientID: new("foo"),
 						},
 					},
 				},
@@ -332,7 +433,7 @@ func TestValidateKubeAPIServer(t *testing.T) {
 		if g.Cluster == nil {
 			g.Cluster = &kops.Cluster{
 				Spec: kops.ClusterSpec{
-					KubernetesVersion: "1.20.0",
+					KubernetesVersion: "1.35.0",
 				},
 			}
 		}
@@ -379,7 +480,7 @@ func TestValidateKubeControllermanager(t *testing.T) {
 		if g.Cluster == nil {
 			g.Cluster = &kops.Cluster{
 				Spec: kops.ClusterSpec{
-					KubernetesVersion: "1.28.0",
+					KubernetesVersion: "1.35.0",
 				},
 			}
 		}
@@ -436,7 +537,7 @@ func Test_Validate_Networking_Flannel(t *testing.T) {
 	for _, g := range grid {
 		cluster := &kops.Cluster{
 			Spec: kops.ClusterSpec{
-				KubernetesVersion: "1.27.0",
+				KubernetesVersion: "1.35.0",
 				Networking: kops.NetworkingSpec{
 					NetworkCIDR:           "10.0.0.0/8",
 					NonMasqueradeCIDR:     "100.64.0.0/10",
@@ -502,7 +603,7 @@ func Test_Validate_Networking_Kindnet(t *testing.T) {
 	for _, g := range grid {
 		cluster := &kops.Cluster{
 			Spec: kops.ClusterSpec{
-				KubernetesVersion: "1.27.0",
+				KubernetesVersion: "1.35.0",
 				Networking: kops.NetworkingSpec{
 					NetworkCIDR:           "10.0.0.0/8",
 					NonMasqueradeCIDR:     "100.64.0.0/10",
@@ -596,7 +697,7 @@ func Test_Validate_Networking_OverlappingCIDR(t *testing.T) {
 		t.Run(g.Name, func(t *testing.T) {
 			cluster := &kops.Cluster{
 				Spec: kops.ClusterSpec{
-					KubernetesVersion: "1.27.0",
+					KubernetesVersion: "1.35.0",
 				},
 			}
 			cluster.Spec.Networking = g.Networking
@@ -674,7 +775,7 @@ func Test_Validate_AdditionalPolicies(t *testing.T) {
 	}
 	for _, g := range grid {
 		clusterSpec := &kops.ClusterSpec{
-			KubernetesVersion:  "1.17.0",
+			KubernetesVersion:  "1.35.0",
 			AdditionalPolicies: g.Input,
 			CloudProvider: kops.CloudProviderSpec{
 				AWS: &kops.AWSSpec{},
@@ -698,8 +799,52 @@ func Test_Validate_AdditionalPolicies(t *testing.T) {
 					Members: []kops.EtcdMemberSpec{
 						{
 							Name:          "us-test-1a",
-							InstanceGroup: fi.PtrTo("master-us-test-1a"),
+							InstanceGroup: new("master-us-test-1a"),
 						},
+					},
+				},
+			},
+		}
+		errs := validateClusterSpec(clusterSpec, &kops.Cluster{Spec: *clusterSpec}, field.NewPath("spec"), true)
+		testErrors(t, g.Input, errs, g.ExpectedErrors)
+	}
+}
+
+func Test_Validate_Addons(t *testing.T) {
+	grid := []struct {
+		Input          []kops.AddonSpec
+		ExpectedErrors []string
+	}{
+		{},
+		{
+			Input: []kops.AddonSpec{{Manifest: "s3://somebucket/example.yaml"}},
+		},
+		{
+			Input:          []kops.AddonSpec{{Manifest: "file:///etc/kubernetes/kops/config/addons/extra.yaml"}},
+			ExpectedErrors: []string{"Invalid value::spec.addons[0].manifest"},
+		},
+	}
+	for _, g := range grid {
+		clusterSpec := &kops.ClusterSpec{
+			KubernetesVersion: "1.35.0",
+			Addons:            g.Input,
+			CloudProvider: kops.CloudProviderSpec{
+				AWS: &kops.AWSSpec{},
+			},
+			Networking: kops.NetworkingSpec{
+				NetworkCIDR:           "10.10.0.0/16",
+				NonMasqueradeCIDR:     "100.64.0.0/10",
+				PodCIDR:               "100.96.0.0/11",
+				ServiceClusterIPRange: "100.64.0.0/13",
+				Subnets: []kops.ClusterSubnetSpec{
+					{Name: "subnet1", Type: kops.SubnetTypePublic, CIDR: "10.10.10.0/24"},
+				},
+			},
+			EtcdClusters: []kops.EtcdClusterSpec{
+				{
+					Name: "main",
+					Members: []kops.EtcdMemberSpec{
+						{Name: "us-test-1a", InstanceGroup: new("master-us-test-1a")},
 					},
 				},
 			},
@@ -1081,6 +1226,35 @@ func Test_Validate_Calico(t *testing.T) {
 				},
 			},
 		},
+		{
+			Description: "Calico BPF with kube-proxy explicitly disabled",
+			Input: caliInput{
+				Cluster: &kops.ClusterSpec{
+					KubeProxy: &kops.KubeProxyConfig{Enabled: new(false)},
+				},
+				Calico: &kops.CalicoNetworkingSpec{BPFEnabled: true},
+			},
+		},
+		{
+			Description: "Calico BPF with kube-proxy implicitly enabled",
+			Input: caliInput{
+				Cluster: &kops.ClusterSpec{
+					KubeProxy: &kops.KubeProxyConfig{},
+				},
+				Calico: &kops.CalicoNetworkingSpec{BPFEnabled: true},
+			},
+			ExpectedErrors: []string{"Forbidden::spec.kubeProxy.enabled"},
+		},
+		{
+			Description: "Calico BPF with kube-proxy explicitly enabled",
+			Input: caliInput{
+				Cluster: &kops.ClusterSpec{
+					KubeProxy: &kops.KubeProxyConfig{Enabled: new(true)},
+				},
+				Calico: &kops.CalicoNetworkingSpec{BPFEnabled: true},
+			},
+			ExpectedErrors: []string{"Forbidden::spec.kubeProxy.enabled"},
+		},
 	}
 	rootFieldPath := field.NewPath("calico")
 	for _, g := range grid {
@@ -1122,7 +1296,7 @@ func Test_Validate_Cilium(t *testing.T) {
 		},
 		{
 			Cilium: kops.CiliumNetworkingSpec{
-				Masquerade: fi.PtrTo(true),
+				Masquerade: new(true),
 				IPAM:       "eni",
 			},
 			Spec: kops.ClusterSpec{
@@ -1139,7 +1313,7 @@ func Test_Validate_Cilium(t *testing.T) {
 		},
 		{
 			Cilium: kops.CiliumNetworkingSpec{
-				Masquerade: fi.PtrTo(false),
+				Masquerade: new(false),
 				IPAM:       "eni",
 			},
 			Spec: kops.ClusterSpec{
@@ -1147,12 +1321,11 @@ func Test_Validate_Cilium(t *testing.T) {
 					AWS: &kops.AWSSpec{},
 				},
 			},
-			ExpectedErrors: []string{"Forbidden::cilium.masquerade"},
 		},
 		{
 			Cilium: kops.CiliumNetworkingSpec{
-				EnableL7Proxy:        fi.PtrTo(true),
-				InstallIptablesRules: fi.PtrTo(false),
+				EnableL7Proxy:        new(true),
+				InstallIptablesRules: new(false),
 			},
 			Spec: kops.ClusterSpec{
 				CloudProvider: kops.CloudProviderSpec{
@@ -1183,7 +1356,7 @@ func Test_Validate_Cilium(t *testing.T) {
 				Version: "v1.0.0",
 			},
 			Spec: kops.ClusterSpec{
-				KubernetesVersion: "1.18.0",
+				KubernetesVersion: "1.35.0",
 			},
 			ExpectedErrors: []string{"Invalid value::cilium.version"},
 		},
@@ -1197,16 +1370,16 @@ func Test_Validate_Cilium(t *testing.T) {
 			Cilium: kops.CiliumNetworkingSpec{
 				Version: "v1.8.0",
 				Hubble: &kops.HubbleSpec{
-					Enabled: fi.PtrTo(true),
+					Enabled: new(true),
 				},
 			},
 			ExpectedErrors: []string{"Forbidden::cilium.hubble.enabled"},
 		},
 		{
 			Cilium: kops.CiliumNetworkingSpec{
-				Version: "v1.16.0",
+				Version: "v1.18.0",
 				Ingress: &kops.CiliumIngressSpec{
-					Enabled:                 fi.PtrTo(true),
+					Enabled:                 new(true),
 					DefaultLoadBalancerMode: "bad-value",
 				},
 			},
@@ -1214,31 +1387,51 @@ func Test_Validate_Cilium(t *testing.T) {
 		},
 		{
 			Cilium: kops.CiliumNetworkingSpec{
-				Version: "v1.16.0",
+				Version: "v1.18.0",
 				Ingress: &kops.CiliumIngressSpec{
-					Enabled:                 fi.PtrTo(true),
+					Enabled:                 new(true),
 					DefaultLoadBalancerMode: "dedicated",
 				},
 			},
 		},
 		{
 			Cilium: kops.CiliumNetworkingSpec{
-				Version: "v1.16.0",
+				Version: "v1.18.0",
+				GatewayAPI: &kops.CiliumGatewayAPISpec{
+					Enabled:           new(true),
+					EnableSecretsSync: new(true),
+				},
+			},
+		},
+		{
+			Cilium: kops.CiliumNetworkingSpec{
+				Version: "v1.18.0",
 				Hubble: &kops.HubbleSpec{
-					Enabled: fi.PtrTo(true),
+					Enabled: new(true),
 				},
 			},
 			Spec: kops.ClusterSpec{
 				CertManager: &kops.CertManagerConfig{
-					Enabled: fi.PtrTo(true),
+					Enabled: new(true),
 				},
+			},
+		},
+		{
+			Cilium: kops.CiliumNetworkingSpec{
+				BPFLBSock:           false,
+				BPFLBSockHostNSOnly: true,
+			},
+			ExpectedErrors: []string{"Forbidden::cilium.bpfLBSockHostNSOnly"},
+		},
+		{
+			Cilium: kops.CiliumNetworkingSpec{
+				BPFLBSock:           true,
+				BPFLBSockHostNSOnly: true,
 			},
 		},
 	}
 	for _, g := range grid {
-		g.Spec.Networking = kops.NetworkingSpec{
-			Cilium: &g.Cilium,
-		}
+		g.Spec.Networking.Cilium = &g.Cilium
 		if g.Spec.KubernetesVersion == "" {
 			g.Spec.KubernetesVersion = "1.17.0"
 		}
@@ -1403,7 +1596,7 @@ func Test_Validate_NodeLocalDNS(t *testing.T) {
 				KubeDNS: &kops.KubeDNSConfig{
 					Provider: "CoreDNS",
 					NodeLocalDNS: &kops.NodeLocalDNSConfig{
-						Enabled: fi.PtrTo(true),
+						Enabled: new(true),
 					},
 				},
 			},
@@ -1420,7 +1613,7 @@ func Test_Validate_NodeLocalDNS(t *testing.T) {
 				KubeDNS: &kops.KubeDNSConfig{
 					Provider: "CoreDNS",
 					NodeLocalDNS: &kops.NodeLocalDNSConfig{
-						Enabled: fi.PtrTo(true),
+						Enabled: new(true),
 					},
 				},
 			},
@@ -1437,7 +1630,7 @@ func Test_Validate_NodeLocalDNS(t *testing.T) {
 				KubeDNS: &kops.KubeDNSConfig{
 					Provider: "CoreDNS",
 					NodeLocalDNS: &kops.NodeLocalDNSConfig{
-						Enabled: fi.PtrTo(true),
+						Enabled: new(true),
 					},
 				},
 				Networking: kops.NetworkingSpec{
@@ -1457,7 +1650,7 @@ func Test_Validate_NodeLocalDNS(t *testing.T) {
 				KubeDNS: &kops.KubeDNSConfig{
 					Provider: "CoreDNS",
 					NodeLocalDNS: &kops.NodeLocalDNSConfig{
-						Enabled: fi.PtrTo(true),
+						Enabled: new(true),
 						LocalIP: "169.254.20.10",
 					},
 				},
@@ -1489,13 +1682,13 @@ func Test_Validate_CloudConfiguration(t *testing.T) {
 		{
 			Description: "all false",
 			Input: kops.CloudConfiguration{
-				ManageStorageClasses: fi.PtrTo(false),
+				ManageStorageClasses: new(false),
 			},
 		},
 		{
 			Description: "all true",
 			Input: kops.CloudConfiguration{
-				ManageStorageClasses: fi.PtrTo(true),
+				ManageStorageClasses: new(true),
 			},
 		},
 		{
@@ -1504,7 +1697,7 @@ func Test_Validate_CloudConfiguration(t *testing.T) {
 			CloudProvider: kops.CloudProviderSpec{
 				Openstack: &kops.OpenstackSpec{
 					BlockStorage: &kops.OpenstackBlockStorageConfig{
-						CreateStorageClass: fi.PtrTo(false),
+						CreateStorageClass: new(false),
 					},
 				},
 			},
@@ -1515,7 +1708,7 @@ func Test_Validate_CloudConfiguration(t *testing.T) {
 			CloudProvider: kops.CloudProviderSpec{
 				Openstack: &kops.OpenstackSpec{
 					BlockStorage: &kops.OpenstackBlockStorageConfig{
-						CreateStorageClass: fi.PtrTo(true),
+						CreateStorageClass: new(true),
 					},
 				},
 			},
@@ -1523,12 +1716,12 @@ func Test_Validate_CloudConfiguration(t *testing.T) {
 		{
 			Description: "all false, os false",
 			Input: kops.CloudConfiguration{
-				ManageStorageClasses: fi.PtrTo(false),
+				ManageStorageClasses: new(false),
 			},
 			CloudProvider: kops.CloudProviderSpec{
 				Openstack: &kops.OpenstackSpec{
 					BlockStorage: &kops.OpenstackBlockStorageConfig{
-						CreateStorageClass: fi.PtrTo(false),
+						CreateStorageClass: new(false),
 					},
 				},
 			},
@@ -1536,12 +1729,12 @@ func Test_Validate_CloudConfiguration(t *testing.T) {
 		{
 			Description: "all false, os true",
 			Input: kops.CloudConfiguration{
-				ManageStorageClasses: fi.PtrTo(false),
+				ManageStorageClasses: new(false),
 			},
 			CloudProvider: kops.CloudProviderSpec{
 				Openstack: &kops.OpenstackSpec{
 					BlockStorage: &kops.OpenstackBlockStorageConfig{
-						CreateStorageClass: fi.PtrTo(true),
+						CreateStorageClass: new(true),
 					},
 				},
 			},
@@ -1550,12 +1743,12 @@ func Test_Validate_CloudConfiguration(t *testing.T) {
 		{
 			Description: "all true, os false",
 			Input: kops.CloudConfiguration{
-				ManageStorageClasses: fi.PtrTo(true),
+				ManageStorageClasses: new(true),
 			},
 			CloudProvider: kops.CloudProviderSpec{
 				Openstack: &kops.OpenstackSpec{
 					BlockStorage: &kops.OpenstackBlockStorageConfig{
-						CreateStorageClass: fi.PtrTo(false),
+						CreateStorageClass: new(false),
 					},
 				},
 			},
@@ -1564,12 +1757,12 @@ func Test_Validate_CloudConfiguration(t *testing.T) {
 		{
 			Description: "all true, os true",
 			Input: kops.CloudConfiguration{
-				ManageStorageClasses: fi.PtrTo(true),
+				ManageStorageClasses: new(true),
 			},
 			CloudProvider: kops.CloudProviderSpec{
 				Openstack: &kops.OpenstackSpec{
 					BlockStorage: &kops.OpenstackBlockStorageConfig{
-						CreateStorageClass: fi.PtrTo(true),
+						CreateStorageClass: new(true),
 					},
 				},
 			},
@@ -1684,7 +1877,7 @@ func Test_Validate_Nvidia_Cluster(t *testing.T) {
 			Input: kops.ClusterSpec{
 				Containerd: &kops.ContainerdConfig{
 					NvidiaGPU: &kops.NvidiaGPUConfig{
-						Enabled: fi.PtrTo(true),
+						Enabled: new(true),
 					},
 				},
 				CloudProvider: kops.CloudProviderSpec{
@@ -1696,7 +1889,7 @@ func Test_Validate_Nvidia_Cluster(t *testing.T) {
 			Input: kops.ClusterSpec{
 				Containerd: &kops.ContainerdConfig{
 					NvidiaGPU: &kops.NvidiaGPUConfig{
-						Enabled: fi.PtrTo(true),
+						Enabled: new(true),
 					},
 				},
 				CloudProvider: kops.CloudProviderSpec{
@@ -1709,7 +1902,7 @@ func Test_Validate_Nvidia_Cluster(t *testing.T) {
 			Input: kops.ClusterSpec{
 				Containerd: &kops.ContainerdConfig{
 					NvidiaGPU: &kops.NvidiaGPUConfig{
-						Enabled: fi.PtrTo(true),
+						Enabled: new(true),
 					},
 				},
 				CloudProvider: kops.CloudProviderSpec{
@@ -1736,7 +1929,7 @@ func Test_Validate_Nvidia_Ig(t *testing.T) {
 			Input: kops.ClusterSpec{
 				Containerd: &kops.ContainerdConfig{
 					NvidiaGPU: &kops.NvidiaGPUConfig{
-						Enabled: fi.PtrTo(true),
+						Enabled: new(true),
 					},
 				},
 				CloudProvider: kops.CloudProviderSpec{
@@ -1748,7 +1941,7 @@ func Test_Validate_Nvidia_Ig(t *testing.T) {
 			Input: kops.ClusterSpec{
 				Containerd: &kops.ContainerdConfig{
 					NvidiaGPU: &kops.NvidiaGPUConfig{
-						Enabled: fi.PtrTo(true),
+						Enabled: new(true),
 					},
 				},
 				CloudProvider: kops.CloudProviderSpec{
@@ -1760,7 +1953,7 @@ func Test_Validate_Nvidia_Ig(t *testing.T) {
 			Input: kops.ClusterSpec{
 				Containerd: &kops.ContainerdConfig{
 					NvidiaGPU: &kops.NvidiaGPUConfig{
-						Enabled: fi.PtrTo(true),
+						Enabled: new(true),
 					},
 				},
 				CloudProvider: kops.CloudProviderSpec{
@@ -1778,6 +1971,202 @@ func Test_Validate_Nvidia_Ig(t *testing.T) {
 	}
 }
 
+func Test_Validate_GVisor(t *testing.T) {
+	grid := []struct {
+		name            string
+		inClusterConfig bool
+		enabled         *bool
+		expectedErrors  []string
+	}{
+		{
+			name:            "enabled in cluster config",
+			inClusterConfig: true,
+			enabled:         new(true),
+			expectedErrors:  []string{"Forbidden::containerd.gvisor"},
+		},
+		{
+			name:            "disabled in cluster config",
+			inClusterConfig: true,
+			enabled:         new(false),
+			expectedErrors:  []string{"Forbidden::containerd.gvisor"},
+		},
+		{
+			name:    "enabled in instance group config",
+			enabled: new(true),
+		},
+	}
+	for _, g := range grid {
+		t.Run(g.name, func(t *testing.T) {
+			containerd := &kops.ContainerdConfig{
+				GVisor: &kops.GVisorConfig{
+					Enabled: g.enabled,
+				},
+			}
+			errs := validateContainerdConfig(&kops.Cluster{}, containerd, field.NewPath("containerd"), g.inClusterConfig)
+			testErrors(t, g.name, errs, g.expectedErrors)
+		})
+	}
+}
+
+func Test_Validate_ContainerdVersion(t *testing.T) {
+	grid := []struct {
+		version        string
+		expectedErrors []string
+	}{
+		{
+			version:        "not-a-semver",
+			expectedErrors: []string{"Invalid value::containerd.version"},
+		},
+		{
+			version:        "1.7.32",
+			expectedErrors: []string{"Invalid value::containerd.version"},
+		},
+		{
+			version:        "2.0.7",
+			expectedErrors: []string{"Invalid value::containerd.version"},
+		},
+		{
+			version: "2.1.0",
+		},
+		{
+			version: "2.3.4",
+		},
+	}
+	for _, g := range grid {
+		t.Run(g.version, func(t *testing.T) {
+			containerd := &kops.ContainerdConfig{
+				Version: &g.version,
+			}
+			errs := validateContainerdConfig(&kops.Cluster{}, containerd, field.NewPath("containerd"), true)
+			testErrors(t, g.version, errs, g.expectedErrors)
+		})
+	}
+}
+
+func Test_Validate_RuncVersion(t *testing.T) {
+	grid := []struct {
+		version        string
+		expectedErrors []string
+	}{
+		{
+			version:        "not-a-semver",
+			expectedErrors: []string{"Invalid value::containerd.runc.version"},
+		},
+		{
+			version:        "1.1.15",
+			expectedErrors: []string{"Invalid value::containerd.runc.version"},
+		},
+		{
+			version:        "1.2.9",
+			expectedErrors: []string{"Invalid value::containerd.runc.version"},
+		},
+		{
+			version: "1.3.0",
+		},
+		{
+			version: "1.4.3",
+		},
+	}
+	for _, g := range grid {
+		t.Run(g.version, func(t *testing.T) {
+			containerd := &kops.ContainerdConfig{
+				Runc: &kops.Runc{
+					Version: &g.version,
+				},
+			}
+			errs := validateContainerdConfig(&kops.Cluster{}, containerd, field.NewPath("containerd"), true)
+			testErrors(t, g.version, errs, g.expectedErrors)
+		})
+	}
+}
+
+func Test_Validate_ContainerdRegistryMirrors(t *testing.T) {
+	grid := []struct {
+		endpoint string
+		// expectedDetail is a substring of the error detail; empty means valid.
+		expectedDetail string
+	}{
+		// Valid endpoints.
+		{endpoint: "mirror.example.com"},
+		{endpoint: "10.0.0.5"},
+		{endpoint: "10.0.0.5:5000"},
+		{endpoint: "[2001:db8::5]:5000"},
+		{endpoint: "mirror.example.com:5000/v2/docker-hub"},
+		{endpoint: "https://mirror.example.com"},
+		{endpoint: "http://mirror.example.com:5000"},
+		{endpoint: "https://123456789012.dkr.ecr.us-east-1.amazonaws.com/v2/docker-hub"},
+		{endpoint: "http://localhost:5000"},
+		{endpoint: "https://127.0.0.1:5000"},
+		{endpoint: "http://[::1]:5000"},
+		// Only lowercase "http" and "https" schemes are accepted.
+		{endpoint: "HTTPS://mirror.example.com", expectedDetail: `scheme must be lowercase "http" or "https"`},
+		{endpoint: "Http://mirror.example.com", expectedDetail: `scheme must be lowercase "http" or "https"`},
+		{endpoint: "httpS://mirror.example.com", expectedDetail: `scheme must be lowercase "http" or "https"`},
+		{endpoint: "httpx://mirror.example.com", expectedDetail: `scheme must be lowercase "http" or "https"`},
+		{endpoint: "oci://mirror.example.com", expectedDetail: `scheme must be lowercase "http" or "https"`},
+		// containerd cannot parse these.
+		{endpoint: "mirror.example.com:port", expectedDetail: "containerd cannot parse this endpoint"},
+		{endpoint: "http://HostIP:Port", expectedDetail: "containerd cannot parse this endpoint"},
+		{endpoint: " mirror.example.com", expectedDetail: "containerd cannot parse this endpoint"},
+		// No host is left after containerd's normalization.
+		{endpoint: "", expectedDetail: "must include a host"},
+		{endpoint: "https://", expectedDetail: "must include a host"},
+		{endpoint: "http-cache.example.com", expectedDetail: "must include a host"},
+		{endpoint: "http-cache.example.com:5000", expectedDetail: "must include a host"},
+		// Loopback endpoints need an explicit scheme.
+		{endpoint: "localhost", expectedDetail: `must start with "http://" for a plain HTTP registry`},
+		{endpoint: "localhost:5000", expectedDetail: `must start with "http://" for a plain HTTP registry`},
+		{endpoint: "127.0.0.1:5000", expectedDetail: `must start with "http://" for a plain HTTP registry`},
+		{endpoint: "[::1]:5000", expectedDetail: `must start with "http://" for a plain HTTP registry`},
+	}
+	for _, g := range grid {
+		t.Run(g.endpoint, func(t *testing.T) {
+			containerd := &kops.ContainerdConfig{
+				RegistryMirrors: map[string][]string{"docker.io": {g.endpoint}},
+			}
+			errs := validateContainerdConfig(&kops.Cluster{}, containerd, field.NewPath("containerd"), true)
+			if g.expectedDetail == "" {
+				testErrors(t, g.endpoint, errs, nil)
+				return
+			}
+			testErrors(t, g.endpoint, errs, []string{"Invalid value::containerd.registryMirrors[docker.io][0]"})
+			if len(errs) != 1 || !strings.Contains(errs[0].Detail, g.expectedDetail) {
+				t.Errorf("expected a single error containing %q, got %v", g.expectedDetail, errs)
+			}
+		})
+	}
+}
+
+func Test_Validate_ContainerdRegistryMirrorDuplicates(t *testing.T) {
+	grid := []struct {
+		endpoints      []string
+		expectedErrors []string
+	}{
+		{
+			endpoints:      []string{"https://mirror.example.com", "https://mirror.example.com"},
+			expectedErrors: []string{"Duplicate value::containerd.registryMirrors[docker.io][1]"},
+		},
+		{
+			endpoints:      []string{"https://mirror.example.com", "https://backup.example.com", "https://mirror.example.com"},
+			expectedErrors: []string{"Duplicate value::containerd.registryMirrors[docker.io][2]"},
+		},
+		{
+			// Different keys for the same host are not duplicates.
+			endpoints: []string{"mirror.example.com", "https://mirror.example.com", "https://mirror.example.com/"},
+		},
+	}
+	for _, g := range grid {
+		containerd := &kops.ContainerdConfig{
+			RegistryMirrors: map[string][]string{"docker.io": g.endpoints},
+		}
+		errs := validateContainerdConfig(&kops.Cluster{}, containerd, field.NewPath("containerd"), true)
+		testErrors(t, g.endpoints, errs, g.expectedErrors)
+		if len(errs) != len(g.expectedErrors) {
+			t.Errorf("expected %d errors for %q, got %v", len(g.expectedErrors), g.endpoints, errs)
+		}
+	}
+}
+
 func Test_Validate_NriConfig(t *testing.T) {
 	unsupportedContainerdVersion := "1.6.0"
 	supportedContainerdVersion := "1.7.0"
@@ -1789,7 +2178,7 @@ func Test_Validate_NriConfig(t *testing.T) {
 			Input: kops.ClusterSpec{
 				Containerd: &kops.ContainerdConfig{
 					NRI: &kops.NRIConfig{
-						Enabled: fi.PtrTo(true),
+						Enabled: new(true),
 					},
 					Version: &unsupportedContainerdVersion,
 				},
@@ -1820,7 +2209,7 @@ func Test_Validate_NriConfig(t *testing.T) {
 			Input: kops.ClusterSpec{
 				Containerd: &kops.ContainerdConfig{
 					NRI: &kops.NRIConfig{
-						Enabled: fi.PtrTo(false),
+						Enabled: new(false),
 					},
 					Version: &unsupportedContainerdVersion,
 				},
@@ -1831,16 +2220,625 @@ func Test_Validate_NriConfig(t *testing.T) {
 			Input: kops.ClusterSpec{
 				Containerd: &kops.ContainerdConfig{
 					NRI: &kops.NRIConfig{
-						Enabled: fi.PtrTo(true),
+						Enabled: new(true),
 					},
 					Version: &supportedContainerdVersion,
 				},
 			},
 			ExpectedErrors: []string{},
 		},
+		{
+			Input: kops.ClusterSpec{
+				Containerd: &kops.ContainerdConfig{
+					NRI: &kops.NRIConfig{
+						Enabled:                   new(true),
+						PluginRequestTimeout:      &metav1.Duration{Duration: 2 * time.Second},
+						PluginRegistrationTimeout: &metav1.Duration{Duration: 5 * time.Second},
+					},
+					Version: &supportedContainerdVersion,
+				},
+			},
+			ExpectedErrors: []string{},
+		},
+		{
+			Input: kops.ClusterSpec{
+				Containerd: &kops.ContainerdConfig{
+					NRI: &kops.NRIConfig{
+						Enabled:              new(true),
+						PluginRequestTimeout: &metav1.Duration{Duration: -1 * time.Second},
+					},
+					Version: &supportedContainerdVersion,
+				},
+			},
+			ExpectedErrors: []string{"Invalid value::containerd.nri.pluginRequestTimeout"},
+		},
+		{
+			Input: kops.ClusterSpec{
+				Containerd: &kops.ContainerdConfig{
+					NRI: &kops.NRIConfig{
+						Enabled:                   new(true),
+						PluginRegistrationTimeout: &metav1.Duration{},
+					},
+					Version: &supportedContainerdVersion,
+				},
+			},
+			ExpectedErrors: []string{"Invalid value::containerd.nri.pluginRegistrationTimeout"},
+		},
 	}
 	for _, g := range grid {
 		errs := validateNriConfig(g.Input.Containerd, field.NewPath("containerd", "nri"))
 		testErrors(t, g.Input.Containerd, errs, g.ExpectedErrors)
+	}
+}
+
+func TestValidateNetworkingKubeRouter(t *testing.T) {
+	_, serviceClusterIPRange, err := net.ParseCIDR("100.64.0.0/13")
+	if err != nil {
+		t.Fatalf("parsing serviceClusterIPRange: %v", err)
+	}
+
+	// Detail is asserted on every case, so this doubles as a record of what the user
+	// actually reads back from kops create/replace/update cluster.
+	grid := []struct {
+		Description   string
+		KubeProxy     *kops.KubeProxyConfig
+		NonMasquerade string
+		KubeRouter    kops.KuberouterNetworkingSpec
+		Expected      []*field.Error
+	}{
+		{
+			Description: "no ranges configured",
+			KubeRouter:  kops.KuberouterNetworkingSpec{},
+		},
+		{
+			Description: "valid external and loadBalancer ranges",
+			KubeRouter: kops.KuberouterNetworkingSpec{
+				ExternalIPRanges:     []string{"192.0.2.0/24", "203.0.113.0/24"},
+				LoadBalancerIPRanges: []string{"198.51.100.0/24"},
+			},
+		},
+		{
+			Description: "unparseable external range",
+			KubeRouter: kops.KuberouterNetworkingSpec{
+				ExternalIPRanges: []string{"not-a-cidr"},
+			},
+			Expected: []*field.Error{{
+				Type:   field.ErrorTypeInvalid,
+				Field:  "spec.networking.kubeRouter.externalIPRanges[0]",
+				Detail: "Could not be parsed as a CIDR",
+			}},
+		},
+		{
+			Description: "octet above 255",
+			KubeRouter: kops.KuberouterNetworkingSpec{
+				ExternalIPRanges: []string{"192.0.300.0/24"},
+			},
+			Expected: []*field.Error{{
+				Type:   field.ErrorTypeInvalid,
+				Field:  "spec.networking.kubeRouter.externalIPRanges[0]",
+				Detail: "Could not be parsed as a CIDR",
+			}},
+		},
+		{
+			Description: "prefix length above 32 on an IPv4 range",
+			KubeRouter: kops.KuberouterNetworkingSpec{
+				LoadBalancerIPRanges: []string{"192.0.2.0/64"},
+			},
+			Expected: []*field.Error{{
+				Type:   field.ErrorTypeInvalid,
+				Field:  "spec.networking.kubeRouter.loadBalancerIPRanges[0]",
+				Detail: "Could not be parsed as a CIDR",
+			}},
+		},
+		{
+			// net.ParseCIDR folds this into plain 192.0.2.0/24, but we forward the string
+			// verbatim to kube-router, so we reject rather than silently accept it
+			Description: "IPv4-mapped IPv6 range",
+			KubeRouter: kops.KuberouterNetworkingSpec{
+				ExternalIPRanges: []string{"::ffff:192.0.2.0/120"},
+			},
+			Expected: []*field.Error{{
+				Type:   field.ErrorTypeInvalid,
+				Field:  "spec.networking.kubeRouter.externalIPRanges[0]",
+				Detail: `IPv4-mapped IPv6 ranges are ambiguous (did you mean "192.0.2.0/24")`,
+			}},
+		},
+		{
+			Description: "IPv4-mapped IPv6 range with an IPv6-scale prefix",
+			KubeRouter: kops.KuberouterNetworkingSpec{
+				ExternalIPRanges: []string{"::ffff:192.0.2.0/24"},
+			},
+			Expected: []*field.Error{{
+				Type:   field.ErrorTypeInvalid,
+				Field:  "spec.networking.kubeRouter.externalIPRanges[0]",
+				Detail: "IPv4-mapped IPv6 ranges are ambiguous, use plain IPv4 notation",
+			}},
+		},
+		{
+			// Genuine IPv6 that merely spells its low bits in dotted quad, so it is a
+			// family mismatch rather than the ambiguous mapped notation above
+			Description: "IPv6 range with an embedded IPv4 suffix",
+			KubeRouter: kops.KuberouterNetworkingSpec{
+				ExternalIPRanges: []string{"2001:db8::192.0.2.0/64"},
+			},
+			Expected: []*field.Error{
+				{
+					Type:   field.ErrorTypeInvalid,
+					Field:  "spec.networking.kubeRouter.externalIPRanges[0]",
+					Detail: `Network contains bits outside prefix (did you mean "2001:db8::/64")`,
+				},
+				{
+					Type:   field.ErrorTypeForbidden,
+					Field:  "spec.networking.kubeRouter.externalIPRanges[0]",
+					Detail: `"2001:db8::192.0.2.0/64" is an IPv6 range, but this is an IPv4 cluster`,
+				},
+			},
+		},
+		{
+			Description: "bare IP without a prefix length",
+			KubeRouter: kops.KuberouterNetworkingSpec{
+				LoadBalancerIPRanges: []string{"192.0.2.1"},
+			},
+			Expected: []*field.Error{{
+				Type:   field.ErrorTypeInvalid,
+				Field:  "spec.networking.kubeRouter.loadBalancerIPRanges[0]",
+				Detail: `Could not be parsed as a CIDR (did you mean "192.0.2.1/32")`,
+			}},
+		},
+		{
+			Description: "host bits set outside the prefix",
+			KubeRouter: kops.KuberouterNetworkingSpec{
+				ExternalIPRanges: []string{"192.0.2.1/24"},
+			},
+			Expected: []*field.Error{{
+				Type:   field.ErrorTypeInvalid,
+				Field:  "spec.networking.kubeRouter.externalIPRanges[0]",
+				Detail: `Network contains bits outside prefix (did you mean "192.0.2.0/24")`,
+			}},
+		},
+		{
+			Description: "external range overlapping serviceClusterIPRange",
+			KubeRouter: kops.KuberouterNetworkingSpec{
+				ExternalIPRanges: []string{"100.64.1.0/24"},
+			},
+			Expected: []*field.Error{{
+				Type:   field.ErrorTypeForbidden,
+				Field:  "spec.networking.kubeRouter.externalIPRanges[0]",
+				Detail: `"100.64.1.0/24" must not overlap serviceClusterIPRange "100.64.0.0/13"`,
+			}},
+		},
+		{
+			Description: "loadBalancer range overlapping serviceClusterIPRange",
+			KubeRouter: kops.KuberouterNetworkingSpec{
+				LoadBalancerIPRanges: []string{"100.64.0.0/16"},
+			},
+			Expected: []*field.Error{{
+				Type:   field.ErrorTypeForbidden,
+				Field:  "spec.networking.kubeRouter.loadBalancerIPRanges[0]",
+				Detail: `"100.64.0.0/16" must not overlap serviceClusterIPRange "100.64.0.0/13"`,
+			}},
+		},
+		{
+			Description: "IPv6 range on an IPv4 cluster",
+			KubeRouter: kops.KuberouterNetworkingSpec{
+				ExternalIPRanges: []string{"2001:db8::/64"},
+			},
+			Expected: []*field.Error{{
+				Type:   field.ErrorTypeForbidden,
+				Field:  "spec.networking.kubeRouter.externalIPRanges[0]",
+				Detail: `"2001:db8::/64" is an IPv6 range, but this is an IPv4 cluster`,
+			}},
+		},
+		{
+			Description: "only the second range is bad",
+			KubeRouter: kops.KuberouterNetworkingSpec{
+				ExternalIPRanges: []string{"192.0.2.0/24", "100.64.2.0/24"},
+			},
+			Expected: []*field.Error{{
+				Type:   field.ErrorTypeForbidden,
+				Field:  "spec.networking.kubeRouter.externalIPRanges[1]",
+				Detail: `"100.64.2.0/24" must not overlap serviceClusterIPRange "100.64.0.0/13"`,
+			}},
+		},
+		{
+			Description: "kube-proxy left enabled",
+			KubeProxy:   &kops.KubeProxyConfig{Enabled: new(true)},
+			KubeRouter:  kops.KuberouterNetworkingSpec{},
+			// The doubled "spec" is pre-existing: this error anchors at the path root and
+			// then re-adds "spec". Cilium's equivalent check has the same quirk.
+			Expected: []*field.Error{{
+				Type:   field.ErrorTypeForbidden,
+				Field:  "spec.spec.kubeProxy.enabled",
+				Detail: "kube-router requires kubeProxy to be disabled",
+			}},
+		},
+		{
+			Description:   "IPv6-only cluster is still rejected",
+			NonMasquerade: "::/0",
+			KubeRouter:    kops.KuberouterNetworkingSpec{},
+			Expected: []*field.Error{{
+				Type:   field.ErrorTypeForbidden,
+				Field:  "spec.networking.kubeRouter",
+				Detail: "kube-router does not support IPv6",
+			}},
+		},
+		{
+			Description:   "IPv4 range on an IPv6-only cluster",
+			NonMasquerade: "::/0",
+			KubeRouter: kops.KuberouterNetworkingSpec{
+				ExternalIPRanges: []string{"192.0.2.0/24"},
+			},
+			Expected: []*field.Error{
+				{
+					Type:   field.ErrorTypeForbidden,
+					Field:  "spec.networking.kubeRouter",
+					Detail: "kube-router does not support IPv6",
+				},
+				{
+					Type:   field.ErrorTypeForbidden,
+					Field:  "spec.networking.kubeRouter.externalIPRanges[0]",
+					Detail: `"192.0.2.0/24" is an IPv4 range, but this is an IPv6-only cluster`,
+				},
+			},
+		},
+	}
+
+	for _, g := range grid {
+		t.Run(g.Description, func(t *testing.T) {
+			cluster := &kops.Cluster{
+				Spec: kops.ClusterSpec{
+					KubeProxy: g.KubeProxy,
+					Networking: kops.NetworkingSpec{
+						NonMasqueradeCIDR: g.NonMasquerade,
+					},
+				},
+			}
+			// Matches how validateNetworking calls us, which matters because the
+			// kubeProxy error is anchored at the path root rather than at fldPath
+			fldPath := field.NewPath("spec", "networking").Child("kubeRouter")
+			errs := validateNetworkingKubeRouter(cluster, &g.KubeRouter, fldPath, serviceClusterIPRange)
+			testFieldErrors(t, errs, g.Expected)
+		})
+	}
+}
+
+func newLinodeClusterForNetworkingValidation(networking kops.NetworkingSpec) *kops.Cluster {
+	return &kops.Cluster{
+		Spec: kops.ClusterSpec{
+			CloudProvider: kops.CloudProviderSpec{
+				Linode: &kops.LinodeSpec{},
+			},
+			Networking: networking,
+		},
+	}
+}
+
+func validLinodeNetworkingSpec() kops.NetworkingSpec {
+	return kops.NetworkingSpec{
+		NetworkCIDR:           "10.0.0.0/8",
+		NonMasqueradeCIDR:     "100.64.0.0/10",
+		PodCIDR:               "100.96.0.0/11",
+		ServiceClusterIPRange: "100.64.0.0/13",
+		Subnets: []kops.ClusterSubnetSpec{
+			{
+				Name:   "subnet-us-east",
+				CIDR:   "10.11.0.0/16",
+				Type:   kops.SubnetTypePublic,
+				Region: "us-east",
+			},
+		},
+	}
+}
+
+func TestValidateNetworkingLinode(t *testing.T) {
+	tests := []struct {
+		name     string
+		network  kops.NetworkingSpec
+		expected []*field.Error
+	}{
+		{
+			name:    "accepts private network CIDR",
+			network: validLinodeNetworkingSpec(),
+		},
+		{
+			name: "rejects public network CIDR",
+			network: func() kops.NetworkingSpec {
+				n := validLinodeNetworkingSpec()
+				n.NetworkCIDR = "8.8.8.0/24"
+				n.Subnets[0].CIDR = "8.8.8.0/25"
+				return n
+			}(),
+			expected: []*field.Error{
+				{
+					Type:   field.ErrorTypeInvalid,
+					Field:  "networking.networkCIDR",
+					Detail: "networkCIDR must be within a private IP range",
+				},
+			},
+		},
+		{
+			name: "rejects networkID with networkCIDR",
+			network: func() kops.NetworkingSpec {
+				n := validLinodeNetworkingSpec()
+				n.NetworkID = "123456"
+				return n
+			}(),
+			expected: []*field.Error{
+				{
+					Type:   field.ErrorTypeForbidden,
+					Field:  "networking.networkCIDR",
+					Detail: "Akamai (Linode) doesn't support specifying both NetworkID and NetworkCIDR",
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cluster := newLinodeClusterForNetworkingValidation(tt.network)
+			errList := validateNetworking(cluster, &cluster.Spec.Networking, field.NewPath("networking"), true, &cloudProviderConstraints{})
+			testFieldErrors(t, errList, tt.expected)
+		})
+	}
+}
+
+func TestValidateAzureBlobAccountUniformity(t *testing.T) {
+	tests := []struct {
+		name     string
+		spec     kops.ClusterSpec
+		expected []*field.Error
+	}{
+		{
+			name: "all matching azureblob URLs",
+			spec: kops.ClusterSpec{
+				ConfigStore: kops.ConfigStoreSpec{
+					Base:     "azureblob://kopsstate/state/cluster.example.com",
+					Keypairs: "azureblob://kopsstate/state/cluster.example.com/pki",
+					Secrets:  "azureblob://kopsstate/state/cluster.example.com/secrets",
+				},
+				EtcdClusters: []kops.EtcdClusterSpec{{
+					Backups: &kops.EtcdBackupSpec{
+						BackupStore: "azureblob://kopsstate/state/cluster.example.com/backups/etcd/main",
+					},
+				}},
+			},
+		},
+		{
+			name: "non-azure cluster is unaffected",
+			spec: kops.ClusterSpec{
+				ConfigStore: kops.ConfigStoreSpec{
+					Base:     "s3://my-bucket/cluster.example.com",
+					Keypairs: "s3://my-bucket/cluster.example.com/pki",
+				},
+				EtcdClusters: []kops.EtcdClusterSpec{{
+					Backups: &kops.EtcdBackupSpec{
+						BackupStore: "s3://my-bucket/cluster.example.com/backups/etcd/main",
+					},
+				}},
+			},
+		},
+		{
+			name: "keypairs uses different storage account",
+			spec: kops.ClusterSpec{
+				ConfigStore: kops.ConfigStoreSpec{
+					Base:     "azureblob://kopsstate/state/cluster.example.com",
+					Keypairs: "azureblob://otheracct/state/cluster.example.com/pki",
+				},
+			},
+			expected: []*field.Error{
+				{
+					Type:  field.ErrorTypeInvalid,
+					Field: "spec.configStore.keypairs",
+				},
+			},
+		},
+		{
+			name: "secrets uses different storage account",
+			spec: kops.ClusterSpec{
+				ConfigStore: kops.ConfigStoreSpec{
+					Base:    "azureblob://kopsstate/state/cluster.example.com",
+					Secrets: "azureblob://otheracct/state/cluster.example.com/secrets",
+				},
+			},
+			expected: []*field.Error{
+				{
+					Type:  field.ErrorTypeInvalid,
+					Field: "spec.configStore.secrets",
+				},
+			},
+		},
+		{
+			name: "etcd backupStore uses different storage account",
+			spec: kops.ClusterSpec{
+				ConfigStore: kops.ConfigStoreSpec{
+					Base: "azureblob://kopsstate/state/cluster.example.com",
+				},
+				EtcdClusters: []kops.EtcdClusterSpec{{
+					Backups: &kops.EtcdBackupSpec{
+						BackupStore: "azureblob://otheracct/backups/etcd/main",
+					},
+				}},
+			},
+			expected: []*field.Error{
+				{
+					Type:  field.ErrorTypeInvalid,
+					Field: "spec.etcdClusters[0].backups.backupStore",
+				},
+			},
+		},
+		{
+			name: "azureblob backupStore with non-azure configStore.base is rejected",
+			spec: kops.ClusterSpec{
+				ConfigStore: kops.ConfigStoreSpec{
+					Base: "s3://my-bucket/cluster.example.com",
+				},
+				EtcdClusters: []kops.EtcdClusterSpec{{
+					Backups: &kops.EtcdBackupSpec{
+						BackupStore: "azureblob://kopsstate/backups/etcd/main",
+					},
+				}},
+			},
+			expected: []*field.Error{
+				{
+					Type:  field.ErrorTypeInvalid,
+					Field: "spec.etcdClusters[0].backups.backupStore",
+				},
+			},
+		},
+		{
+			name: "malformed azureblob configStore.base is rejected",
+			spec: kops.ClusterSpec{
+				ConfigStore: kops.ConfigStoreSpec{
+					Base: "azureblob://kopsstate",
+				},
+			},
+			expected: []*field.Error{
+				{
+					Type:  field.ErrorTypeInvalid,
+					Field: "spec.configStore.base",
+				},
+			},
+		},
+		{
+			name: "malformed azureblob keypairs is rejected",
+			spec: kops.ClusterSpec{
+				ConfigStore: kops.ConfigStoreSpec{
+					Base:     "azureblob://kopsstate/state/cluster.example.com",
+					Keypairs: "azureblob://kopsstate",
+				},
+			},
+			expected: []*field.Error{
+				{
+					Type:  field.ErrorTypeInvalid,
+					Field: "spec.configStore.keypairs",
+				},
+			},
+		},
+		{
+			name: "non-azure backup store with azure config base is allowed",
+			spec: kops.ClusterSpec{
+				ConfigStore: kops.ConfigStoreSpec{
+					Base: "azureblob://kopsstate/state/cluster.example.com",
+				},
+				EtcdClusters: []kops.EtcdClusterSpec{{
+					Backups: &kops.EtcdBackupSpec{
+						BackupStore: "memfs://tests/cluster.example.com/backups/etcd/main",
+					},
+				}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errList := validateAzureBlobAccountUniformity(&tt.spec, field.NewPath("spec"))
+			testFieldErrors(t, errList, tt.expected)
+		})
+	}
+}
+
+func TestValidateFileRepository(t *testing.T) {
+	grid := []struct {
+		Input          string
+		CloudProvider  kops.CloudProviderID
+		ExpectedErrors []string
+	}{
+		{
+			Input: "https://example.com/files",
+		},
+		{
+			Input: "http://example.com/files",
+		},
+		{
+			Input:         "s3://example-k8s-assets/kops",
+			CloudProvider: kops.CloudProviderAWS,
+		},
+		{
+			Input:          "s3://example-k8s-assets/kops",
+			CloudProvider:  kops.CloudProviderGCE,
+			ExpectedErrors: []string{"Invalid value::spec.assets.fileRepository"},
+		},
+		{
+			Input:          "s3://example-k8s-assets/kops",
+			ExpectedErrors: []string{"Invalid value::spec.assets.fileRepository"},
+		},
+		{
+			Input:         "azureblob://exampleaccount/assets/kops",
+			CloudProvider: kops.CloudProviderAzure,
+		},
+		{
+			Input:          "azureblob://exampleaccount/assets/kops",
+			CloudProvider:  kops.CloudProviderGCE,
+			ExpectedErrors: []string{"Invalid value::spec.assets.fileRepository"},
+		},
+		{
+			Input:          "azureblob://exampleaccount/assets/kops",
+			ExpectedErrors: []string{"Invalid value::spec.assets.fileRepository"},
+		},
+		{
+			// A container is required so that remapped assets share one container.
+			Input:          "azureblob://exampleaccount",
+			CloudProvider:  kops.CloudProviderAzure,
+			ExpectedErrors: []string{"Invalid value::spec.assets.fileRepository"},
+		},
+		{
+			// Nodes download from GCS with the credentials of their service account.
+			Input:         "gs://example-k8s-assets/kops",
+			CloudProvider: kops.CloudProviderGCE,
+		},
+		{
+			Input:          "gs://example-k8s-assets/kops",
+			CloudProvider:  kops.CloudProviderAWS,
+			ExpectedErrors: []string{"Invalid value::spec.assets.fileRepository"},
+		},
+		{
+			Input:          "gs://example-k8s-assets/kops",
+			ExpectedErrors: []string{"Invalid value::spec.assets.fileRepository"},
+		},
+		{
+			Input:          "example.com/files",
+			ExpectedErrors: []string{"Invalid value::spec.assets.fileRepository"},
+		},
+		{
+			Input:          "",
+			ExpectedErrors: []string{"Invalid value::spec.assets.fileRepository"},
+		},
+		{
+			Input:          "https://",
+			ExpectedErrors: []string{"Invalid value::spec.assets.fileRepository"},
+		},
+	}
+	for _, g := range grid {
+		errs := validateFileRepository(g.Input, field.NewPath("spec", "assets", "fileRepository"), g.CloudProvider)
+		testErrors(t, g.Input, errs, g.ExpectedErrors)
+	}
+}
+
+func TestValidateKubeletCgroupDriver(t *testing.T) {
+	grid := []struct {
+		Input          kops.KubeletConfigSpec
+		ExpectedErrors []string
+	}{
+		{
+			Input:          kops.KubeletConfigSpec{},
+			ExpectedErrors: []string{},
+		},
+		{
+			Input:          kops.KubeletConfigSpec{CgroupDriver: "systemd"},
+			ExpectedErrors: []string{},
+		},
+		{
+			Input:          kops.KubeletConfigSpec{CgroupDriver: "cgroupfs"},
+			ExpectedErrors: []string{},
+		},
+		{
+			Input:          kops.KubeletConfigSpec{CgroupDriver: "cgroup-fs"},
+			ExpectedErrors: []string{"Unsupported value::spec.kubelet.cgroupDriver"},
+		},
+	}
+
+	for _, g := range grid {
+		errs := validateKubelet(&g.Input, &kops.Cluster{}, field.NewPath("spec", "kubelet"))
+		testErrors(t, g.Input, errs, g.ExpectedErrors)
 	}
 }

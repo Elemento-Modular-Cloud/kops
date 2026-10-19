@@ -61,7 +61,7 @@ type VMScaleSet struct {
 	PrincipalID *string
 }
 
-var _ fi.CloudupTaskNormalize = &VMScaleSet{}
+var _ fi.CloudupTaskNormalize = (*VMScaleSet)(nil)
 
 // VMScaleSetStorageProfile wraps *compute.VirtualMachineScaleSetStorageProfile
 // and implements fi.HasDependencies.
@@ -74,7 +74,7 @@ type VMScaleSetStorageProfile struct {
 	*compute.VirtualMachineScaleSetStorageProfile
 }
 
-var _ fi.CloudupHasDependencies = &VMScaleSetStorageProfile{}
+var _ fi.CloudupHasDependencies = (*VMScaleSetStorageProfile)(nil)
 
 // GetDependencies returns a slice of tasks on which the tasks depends on.
 func (p *VMScaleSetStorageProfile) GetDependencies(tasks map[string]fi.CloudupTask) []fi.CloudupTask {
@@ -107,6 +107,10 @@ func (s *VMScaleSet) Find(c *fi.CloudupContext) (*VMScaleSet, error) {
 	}
 	if found.Properties == nil {
 		return nil, fmt.Errorf("found VMSS without properties")
+	}
+	if fi.ValueOf(found.Properties.ProvisioningState) == "Failed" {
+		klog.Warningf("found VMSS %q in failed provisioning state", *s.Name)
+		return nil, nil
 	}
 	if found.Properties.VirtualMachineProfile == nil {
 		return nil, fmt.Errorf("found VMSS without VM profile")
@@ -175,9 +179,12 @@ func (s *VMScaleSet) Find(c *fi.CloudupContext) (*VMScaleSet, error) {
 		return nil, fmt.Errorf("expecting exactly 1 SSH key for %q, found %d: %+v", *s.Name, len(sshKeys), sshKeys)
 	}
 
-	userData, err := base64.StdEncoding.DecodeString(*profile.UserData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode user data: %w", err)
+	var userData []byte
+	if profile.UserData != nil {
+		userData, err = base64.StdEncoding.DecodeString(*profile.UserData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode user data: %w", err)
+		}
 	}
 
 	vmss := &VMScaleSet{
@@ -196,14 +203,18 @@ func (s *VMScaleSet) Find(c *fi.CloudupContext) (*VMScaleSet, error) {
 			VirtualMachineScaleSetStorageProfile: profile.StorageProfile,
 		},
 		RequirePublicIP:    to.Ptr(ipConfig.Properties.PublicIPAddressConfiguration != nil),
-		SKUName:            found.SKU.Name,
-		Capacity:           found.SKU.Capacity,
 		ComputerNamePrefix: osProfile.ComputerNamePrefix,
 		AdminUser:          osProfile.AdminUsername,
 		SSHPublicKey:       sshKeys[0].KeyData,
 		UserData:           fi.NewBytesResource(userData),
 		Tags:               found.Tags,
-		PrincipalID:        found.Identity.PrincipalID,
+	}
+	if found.SKU != nil {
+		vmss.SKUName = found.SKU.Name
+		vmss.Capacity = found.SKU.Capacity
+	}
+	if found.Identity != nil {
+		vmss.PrincipalID = found.Identity.PrincipalID
 	}
 	if ipConfig.Properties != nil && ipConfig.Properties.ApplicationSecurityGroups != nil {
 		for _, asg := range ipConfig.Properties.ApplicationSecurityGroups {
@@ -220,7 +231,9 @@ func (s *VMScaleSet) Find(c *fi.CloudupContext) (*VMScaleSet, error) {
 	if found.Zones != nil {
 		vmss.Zones = found.Zones
 	}
-	s.PrincipalID = found.Identity.PrincipalID
+	if found.Identity != nil {
+		s.PrincipalID = found.Identity.PrincipalID
+	}
 	return vmss, nil
 }
 
@@ -308,7 +321,7 @@ func (s *VMScaleSet) RenderAzure(t *azure.AzureAPITarget, a, e, changes *VMScale
 	}
 	if *e.RequirePublicIP {
 		ipConfigProperties.PublicIPAddressConfiguration = &compute.VirtualMachineScaleSetPublicIPAddressConfiguration{
-			Name: to.Ptr(name + "-publicipconfig"),
+			Name: to.Ptr(name),
 			Properties: &compute.VirtualMachineScaleSetPublicIPAddressConfigurationProperties{
 				PublicIPAddressVersion: to.Ptr(compute.IPVersionIPv4),
 			},
@@ -328,13 +341,13 @@ func (s *VMScaleSet) RenderAzure(t *azure.AzureAPITarget, a, e, changes *VMScale
 	}
 
 	networkConfig := &compute.VirtualMachineScaleSetNetworkConfiguration{
-		Name: to.Ptr(name + "-netconfig"),
+		Name: to.Ptr(name),
 		Properties: &compute.VirtualMachineScaleSetNetworkConfigurationProperties{
 			Primary:            to.Ptr(true),
 			EnableIPForwarding: to.Ptr(true),
 			IPConfigurations: []*compute.VirtualMachineScaleSetIPConfiguration{
 				{
-					Name:       to.Ptr(name + "-ipconfig"),
+					Name:       to.Ptr(name),
 					Properties: ipConfigProperties,
 				},
 			},
@@ -380,6 +393,8 @@ func (s *VMScaleSet) RenderAzure(t *azure.AzureAPITarget, a, e, changes *VMScale
 	if err != nil {
 		return err
 	}
-	e.PrincipalID = result.Identity.PrincipalID
+	if result.Identity != nil {
+		e.PrincipalID = result.Identity.PrincipalID
+	}
 	return nil
 }

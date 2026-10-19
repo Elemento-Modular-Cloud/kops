@@ -24,7 +24,6 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/assets"
@@ -40,12 +39,50 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/do"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner"
+	"k8s.io/kops/upup/pkg/fi/cloudup/linode"
 	"k8s.io/kops/upup/pkg/fi/cloudup/openstack"
 	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
 	"k8s.io/kops/upup/pkg/fi/fitasks"
 	"k8s.io/kops/util/pkg/env"
-	"k8s.io/kops/util/pkg/exec"
+	"k8s.io/kops/util/pkg/vfs"
 )
+
+// resolveAzureBackupStore rewrites azureblob://<account>/<container>/<key> into
+// the legacy azureblob://<container>/<key> shape understood by the pinned
+// etcd-manager image, returning the storage account derived from
+// configStoreBase (the single source of truth for the cluster) for
+// AZURE_STORAGE_ACCOUNT injection. Non-azureblob backup stores pass through
+// unchanged. Errors if a backup store is azureblob:// but configStoreBase is
+// not, since validation already enforces account uniformity.
+//
+// TODO: remove once etcd-manager is bumped to a release whose vendored VFS
+// understands azureblob://<account>/<container>/<key>.
+func resolveAzureBackupStore(configStoreBase, backupStore string) (legacyURL string, storageAccount string, err error) {
+	if !strings.HasPrefix(backupStore, "azureblob://") {
+		return backupStore, "", nil
+	}
+	bp, err := vfs.Context.BuildVfsPath(backupStore)
+	if err != nil {
+		return "", "", fmt.Errorf("parsing etcd backup-store %q: %w", backupStore, err)
+	}
+	bpAzure, ok := bp.(*vfs.AzureBlobPath)
+	if !ok {
+		return "", "", fmt.Errorf("expected azureblob:// backup-store, got %q", backupStore)
+	}
+	csp, err := vfs.Context.BuildVfsPath(configStoreBase)
+	if err != nil {
+		return "", "", fmt.Errorf("parsing configStore.base %q: %w", configStoreBase, err)
+	}
+	csAzure, ok := csp.(*vfs.AzureBlobPath)
+	if !ok {
+		return "", "", fmt.Errorf("backup-store %q is azureblob:// but configStore.base %q is not", backupStore, configStoreBase)
+	}
+	legacy := "azureblob://" + bpAzure.Container()
+	if bpAzure.Key() != "" {
+		legacy += "/" + bpAzure.Key()
+	}
+	return legacy, csAzure.Account(), nil
+}
 
 // EtcdManagerBuilder builds the manifest for the etcd-manager
 type EtcdManagerBuilder struct {
@@ -83,8 +120,8 @@ func (b *EtcdManagerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			c.AddTask(&fitasks.ManagedFile{
 				Contents:  fi.NewBytesResource(manifestYAML),
 				Lifecycle: b.Lifecycle,
-				Location:  fi.PtrTo("manifests/etcd/" + name + ".yaml"),
-				Name:      fi.PtrTo("manifests-etcdmanager-" + name),
+				Location:  new("manifests/etcd/" + name + ".yaml"),
+				Name:      new("manifests-etcdmanager-" + name),
 			})
 		}
 
@@ -108,15 +145,15 @@ func (b *EtcdManagerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		c.AddTask(&fitasks.ManagedFile{
 			Contents:  fi.NewBytesResource(d),
 			Lifecycle: b.Lifecycle,
-			Base:      fi.PtrTo(backupStore),
+			Base:      new(backupStore),
 			// TODO: We need this to match the backup base (currently)
-			Location: fi.PtrTo(location + "/control/etcd-cluster-spec"),
-			Name:     fi.PtrTo("etcd-cluster-spec-" + etcdCluster.Name),
+			Location: new(location + "/control/etcd-cluster-spec"),
+			Name:     new("etcd-cluster-spec-" + etcdCluster.Name),
 		})
 
 		// We create a CA keypair to enable secure communication
 		c.AddTask(&fitasks.Keypair{
-			Name:      fi.PtrTo("etcd-manager-ca-" + etcdCluster.Name),
+			Name:      new("etcd-manager-ca-" + etcdCluster.Name),
 			Lifecycle: b.Lifecycle,
 			Subject:   "cn=etcd-manager-ca-" + etcdCluster.Name,
 			Type:      "ca",
@@ -124,7 +161,7 @@ func (b *EtcdManagerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 
 		// We create a CA for etcd peers and a separate one for clients
 		c.AddTask(&fitasks.Keypair{
-			Name:      fi.PtrTo("etcd-peers-ca-" + etcdCluster.Name),
+			Name:      new("etcd-peers-ca-" + etcdCluster.Name),
 			Lifecycle: b.Lifecycle,
 			Subject:   "cn=etcd-peers-ca-" + etcdCluster.Name,
 			Type:      "ca",
@@ -132,7 +169,7 @@ func (b *EtcdManagerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 
 		// Because API server can only have a single client-cert, we need to share a client CA
 		c.EnsureTask(&fitasks.Keypair{
-			Name:      fi.PtrTo("etcd-clients-ca"),
+			Name:      new("etcd-clients-ca"),
 			Lifecycle: b.Lifecycle,
 			Subject:   "cn=etcd-clients-ca",
 			Type:      "ca",
@@ -140,7 +177,7 @@ func (b *EtcdManagerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 
 		if etcdCluster.Name == "cilium" {
 			clientsCaCilium := &fitasks.Keypair{
-				Name:      fi.PtrTo("etcd-clients-ca-cilium"),
+				Name:      new("etcd-clients-ca-cilium"),
 				Lifecycle: b.Lifecycle,
 				Subject:   "cn=etcd-clients-ca-cilium",
 				Type:      "ca",
@@ -171,7 +208,7 @@ metadata:
 spec:
   containers:
   - name: etcd-manager
-    image: registry.k8s.io/etcd-manager/etcd-manager-slim:v3.0.20241012
+    image: registry.k8s.io/etcd-manager/etcd-manager-slim:v3.0.20260707
     resources:
       requests:
         cpu: 100m
@@ -187,8 +224,6 @@ spec:
       name: run
     - mountPath: /etc/kubernetes/pki/etcd-manager
       name: pki
-    - mountPath: /opt
-      name: opt
   hostNetwork: true
   hostPID: true # helps with mounting volumes from inside a container
   volumes:
@@ -204,11 +239,7 @@ spec:
       path: /etc/kubernetes/pki/etcd-manager
       type: DirectoryOrCreate
     name: pki
-  - name: opt
-    emptyDir: {}
 `
-
-const kopsUtilsImage = "registry.k8s.io/kops/kops-utils-cp:1.32.0-beta.1"
 
 // buildPod creates the pod spec, based on the EtcdClusterSpec
 func (b *EtcdManagerBuilder) buildPod(etcdCluster kops.EtcdClusterSpec, instanceGroupName string) (*v1.Pod, error) {
@@ -236,89 +267,26 @@ func (b *EtcdManagerBuilder) buildPod(etcdCluster kops.EtcdClusterSpec, instance
 		}
 	}
 
-	{
-		utilMounts := []v1.VolumeMount{
-			{
-				MountPath: "/opt",
-				Name:      "opt",
-			},
-		}
-		{
-			initContainer := v1.Container{
-				Name:    "kops-utils-cp",
-				Image:   kopsUtilsImage,
-				Command: []string{"/ko-app/kops-utils-cp"},
-				Args: []string{
-					"--target-dir=/opt/kops-utils/",
-					"--src=/ko-app/kops-utils-cp",
+	etcdVersions := etcdSupportedVersions()
+	if etcdCluster.Image != "" {
+		// With a custom image, only the selected version's binaries are made
+		// available in the pod; restoring backups, which can require the
+		// binaries of a bundled version, is not supported.
+		etcdVersions = []etcdVersion{{Version: strings.TrimPrefix(etcdCluster.Version, "v"), Image: etcdCluster.Image}}
+	}
+
+	for _, etcdVersion := range etcdVersions {
+		if etcdVersion.SymlinkToVersion == "" {
+			volume := v1.Volume{
+				Name: "etcd-v" + strings.ReplaceAll(etcdVersion.Version, ".", "-"),
+				VolumeSource: v1.VolumeSource{
+					Image: &v1.ImageVolumeSource{
+						Reference:  b.AssetBuilder.RemapImage(etcdVersion.Image),
+						PullPolicy: v1.PullIfNotPresent,
+					},
 				},
-				VolumeMounts: utilMounts,
 			}
-			pod.Spec.InitContainers = append(pod.Spec.InitContainers, initContainer)
-		}
-
-		symlinkToVersions := sets.NewString()
-		for _, etcdVersion := range etcdSupportedVersions() {
-			if etcdVersion.SymlinkToVersion != "" {
-				symlinkToVersions.Insert(etcdVersion.SymlinkToVersion)
-				continue
-			}
-
-			initContainer := v1.Container{
-				Name:         "init-etcd-" + strings.ReplaceAll(etcdVersion.Version, ".", "-"),
-				Image:        etcdVersion.Image,
-				Command:      []string{"/opt/kops-utils/kops-utils-cp"},
-				VolumeMounts: utilMounts,
-			}
-
-			initContainer.Args = []string{
-				"--target-dir=/opt/etcd-v" + etcdVersion.Version,
-				"--src=/usr/local/bin/etcd",
-				"--src=/usr/local/bin/etcdctl",
-			}
-
-			pod.Spec.InitContainers = append(pod.Spec.InitContainers, initContainer)
-		}
-
-		for _, symlinkToVersion := range symlinkToVersions.List() {
-			targetVersions := sets.NewString()
-
-			for _, etcdVersion := range etcdSupportedVersions() {
-				if etcdVersion.SymlinkToVersion == symlinkToVersion {
-					targetVersions.Insert(etcdVersion.Version)
-				}
-			}
-
-			initContainer := v1.Container{
-				Name:         "init-etcd-symlinks-" + strings.ReplaceAll(symlinkToVersion, ".", "-"),
-				Image:        kopsUtilsImage,
-				Command:      []string{"/opt/kops-utils/kops-utils-cp"},
-				VolumeMounts: utilMounts,
-			}
-
-			initContainer.Args = []string{
-				"--symlink",
-			}
-			for _, targetVersion := range targetVersions.List() {
-				initContainer.Args = append(initContainer.Args, "--target-dir=/opt/etcd-v"+targetVersion)
-			}
-			// NOTE: Flags must come before positional arguments
-			initContainer.Args = append(initContainer.Args,
-				"--src=/opt/etcd-v"+symlinkToVersion+"/etcd",
-				"--src=/opt/etcd-v"+symlinkToVersion+"/etcdctl",
-			)
-
-			pod.Spec.InitContainers = append(pod.Spec.InitContainers, initContainer)
-		}
-
-		// Remap image via AssetBuilder
-		for i := range pod.Spec.InitContainers {
-			initContainer := &pod.Spec.InitContainers[i]
-			remapped, err := b.AssetBuilder.RemapImage(initContainer.Image)
-			if err != nil {
-				return nil, fmt.Errorf("unable to remap init container image %q: %w", container.Image, err)
-			}
-			initContainer.Image = remapped
+			pod.Spec.Volumes = append(pod.Spec.Volumes, volume)
 		}
 	}
 
@@ -334,11 +302,19 @@ func (b *EtcdManagerBuilder) buildPod(etcdCluster kops.EtcdClusterSpec, instance
 		}
 
 		// Remap image via AssetBuilder
-		remapped, err := b.AssetBuilder.RemapImage(container.Image)
-		if err != nil {
-			return nil, fmt.Errorf("unable to remap container image %q: %w", container.Image, err)
+		container.Image = b.AssetBuilder.RemapImage(container.Image)
+
+		for _, etcdVersion := range etcdVersions {
+			volumeMount := v1.VolumeMount{
+				MountPath: "/opt/etcd-v" + etcdVersion.Version,
+			}
+			if etcdVersion.SymlinkToVersion == "" {
+				volumeMount.Name = "etcd-v" + strings.ReplaceAll(etcdVersion.Version, ".", "-")
+			} else {
+				volumeMount.Name = "etcd-v" + strings.ReplaceAll(etcdVersion.SymlinkToVersion, ".", "-")
+			}
+			container.VolumeMounts = append(container.VolumeMounts, volumeMount)
 		}
-		container.Image = remapped
 	}
 
 	var clientHost string
@@ -392,6 +368,10 @@ func (b *EtcdManagerBuilder) buildPod(etcdCluster kops.EtcdClusterSpec, instance
 		if !featureflag.APIServerNodes.Enabled() {
 			clientHost = b.Cluster.APIInternalName()
 		}
+
+	case "leases":
+		// ok
+
 	default:
 		return nil, fmt.Errorf("unknown etcd cluster key %q", etcdCluster.Name)
 	}
@@ -415,6 +395,14 @@ func (b *EtcdManagerBuilder) buildPod(etcdCluster kops.EtcdClusterSpec, instance
 		DNSSuffix:     dnsInternalSuffix,
 	}
 
+	// Rewrite to the legacy URL shape for the pinned etcd-manager image; see
+	// resolveAzureBackupStore.
+	legacyBackupStore, azureStorageAccount, err := resolveAzureBackupStore(b.Cluster.Spec.ConfigStore.Base, backupStore)
+	if err != nil {
+		return nil, err
+	}
+	config.BackupStore = legacyBackupStore
+
 	config.LogLevel = 6
 
 	if etcdCluster.Manager != nil && etcdCluster.Manager.LogLevel != nil {
@@ -423,15 +411,22 @@ func (b *EtcdManagerBuilder) buildPod(etcdCluster kops.EtcdClusterSpec, instance
 	}
 
 	if etcdCluster.Manager != nil && etcdCluster.Manager.BackupInterval != nil {
-		config.BackupInterval = fi.PtrTo(etcdCluster.Manager.BackupInterval.Duration.String())
+		config.BackupInterval = new(etcdCluster.Manager.BackupInterval.Duration.String())
 	}
 
 	if etcdCluster.Manager != nil && etcdCluster.Manager.DiscoveryPollInterval != nil {
-		config.DiscoveryPollInterval = fi.PtrTo(etcdCluster.Manager.DiscoveryPollInterval.Duration.String())
+		config.DiscoveryPollInterval = new(etcdCluster.Manager.DiscoveryPollInterval.Duration.String())
 	}
 
 	{
+		// Determine scheme: HTTPS by default, but allow HTTP for events cluster
+		// when EtcdEventsHTTP feature flag is enabled
 		scheme := "https"
+		if etcdCluster.Name == "events" && featureflag.EtcdEventsHTTP.Enabled() {
+			scheme = "http"
+			config.EtcdInsecure = new(true)
+			klog.Warningf("etcd cluster %q is configured with TLS disabled (HTTP) via KOPS_FEATURE_FLAGS=EtcdEventsHTTP. This is for experiments only.", etcdCluster.Name)
+		}
 
 		config.PeerUrls = fmt.Sprintf("%s://__name__:%d", scheme, ports.PeerPort)
 		config.ClientUrls = fmt.Sprintf("%s://%s:%d", scheme, clientHost, ports.ClientPort)
@@ -469,7 +464,7 @@ func (b *EtcdManagerBuilder) buildPod(etcdCluster kops.EtcdClusterSpec, instance
 				// allowed as a tag key in Azure.
 				fmt.Sprintf("kubernetes.io_cluster_%s=owned", b.Cluster.Name),
 				azure.TagNameEtcdClusterPrefix + etcdCluster.Name,
-				azure.TagNameRolePrefix + "control_plane=1",
+				azure.TagNameRolePrefix + azure.TagRoleControlPlane + "=1",
 			}
 			config.VolumeNameTag = azure.TagNameEtcdClusterPrefix + etcdCluster.Name
 
@@ -505,6 +500,10 @@ func (b *EtcdManagerBuilder) buildPod(etcdCluster kops.EtcdClusterSpec, instance
 			}
 			config.VolumeNameTag = fmt.Sprintf("%s=%s", hetzner.TagKubernetesInstanceGroup, instanceGroupName)
 
+		case kops.CloudProviderLinode:
+			config.VolumeProvider = "linode"
+			config.VolumeTag, config.VolumeNameTag = linodeVolumeSelectors(b.Cluster.Name, etcdCluster.Name, instanceGroupName)
+
 		case kops.CloudProviderOpenstack:
 			config.VolumeProvider = "openstack"
 
@@ -514,7 +513,7 @@ func (b *EtcdManagerBuilder) buildPod(etcdCluster kops.EtcdClusterSpec, instance
 				fmt.Sprintf("%s=%s", openstack.TagClusterName, b.Cluster.Name),
 			}
 			config.VolumeNameTag = openstack.TagNameEtcdClusterPrefix + etcdCluster.Name
-			config.NetworkCIDR = fi.PtrTo(b.Cluster.Spec.Networking.NetworkCIDR)
+			config.NetworkCIDR = new(b.Cluster.Spec.Networking.NetworkCIDR)
 
 		case kops.CloudProviderScaleway:
 			config.VolumeProvider = "scaleway"
@@ -572,7 +571,13 @@ func (b *EtcdManagerBuilder) buildPod(etcdCluster kops.EtcdClusterSpec, instance
 	}
 
 	{
-		container.Command = exec.WithTee("/etcd-manager", args, "/var/log/etcd.log")
+		container.Command = []string{"/go-runner"}
+		container.Args = []string{
+			"--log-file=/var/log/etcd.log",
+			"--also-stdout",
+			"/ko-app/etcd-manager",
+		}
+		container.Args = append(container.Args, args...)
 
 		cpuRequest := resource.MustParse("200m")
 		if etcdCluster.CPURequest != nil {
@@ -604,6 +609,14 @@ func (b *EtcdManagerBuilder) buildPod(etcdCluster kops.EtcdClusterSpec, instance
 
 	container.Env = envMap.ToEnvVars()
 
+	// Required by the pinned etcd-manager's legacy VFS; see resolveAzureBackupStore.
+	if azureStorageAccount != "" {
+		container.Env = append(container.Env, v1.EnvVar{
+			Name:  "AZURE_STORAGE_ACCOUNT",
+			Value: azureStorageAccount,
+		})
+	}
+
 	if etcdCluster.Manager != nil {
 		if etcdCluster.Manager.BackupRetentionDays != nil {
 			envVar := v1.EnvVar{
@@ -618,6 +631,15 @@ func (b *EtcdManagerBuilder) buildPod(etcdCluster kops.EtcdClusterSpec, instance
 			envVar := v1.EnvVar{
 				Name:  "ETCD_LISTEN_METRICS_URLS",
 				Value: strings.Join(etcdCluster.Manager.ListenMetricsURLs, ","),
+			}
+
+			container.Env = append(container.Env, envVar)
+		}
+
+		if len(etcdCluster.Manager.ListenClientHTTPURLs) > 0 {
+			envVar := v1.EnvVar{
+				Name:  "ETCD_LISTEN_CLIENT_HTTP_URLS",
+				Value: strings.Join(etcdCluster.Manager.ListenClientHTTPURLs, ","),
 			}
 
 			container.Env = append(container.Env, envVar)
@@ -678,6 +700,15 @@ func buildElementoStaticConfig(clusterName string, etcdCluster kops.EtcdClusterS
 	return string(data), nil
 }
 
+func linodeVolumeSelectors(clusterName, etcdClusterName, instanceGroupName string) ([]string, string) {
+	volumeTags := []string{
+		fmt.Sprintf("%s:%s", linode.TagKubernetesClusterName, linode.NormalizeLinodeLabel(clusterName)),
+		fmt.Sprintf("%s:%s", linode.TagKubernetesVolumeRole, linode.NormalizeLinodeLabel(etcdClusterName)),
+	}
+	volumeNameTag := fmt.Sprintf("%s:%s", linode.TagKubernetesInstanceGroup, linode.NormalizeLinodeLabel(instanceGroupName))
+	return volumeTags, volumeNameTag
+}
+
 // config defines the flags for etcd-manager
 type config struct {
 	// LogLevel sets the log verbosity level
@@ -688,6 +719,9 @@ type config struct {
 
 	// PKIDir is set to the directory for PKI keys, used to secure commucations between etcd-manager peers
 	PKIDir string `flag:"pki-dir"`
+
+	// EtcdInsecure allows running etcd without TLS (for experiments only)
+	EtcdInsecure *bool `flag:"etcd-insecure"`
 
 	Address               string   `flag:"address"`
 	PeerUrls              string   `flag:"peer-urls"`
@@ -741,23 +775,31 @@ func PortsForCluster(etcdCluster kops.EtcdClusterSpec) (Ports, error) {
 			GRPCPort: wellknownports.EtcdMainGRPC,
 			// TODO: Use a socket file for the quarantine port
 			QuarantinedGRPCPort: wellknownports.EtcdMainQuarantinedClientPort,
-			ClientPort:          4001,
-			PeerPort:            2380,
+			ClientPort:          wellknownports.EtcdMainClientPort,
+			PeerPort:            wellknownports.EtcdMainPeerPort,
 		}, nil
 
 	case "events":
 		return Ports{
 			GRPCPort:            wellknownports.EtcdEventsGRPC,
 			QuarantinedGRPCPort: wellknownports.EtcdEventsQuarantinedClientPort,
-			ClientPort:          4002,
-			PeerPort:            2381,
+			ClientPort:          wellknownports.EtcdEventsClientPort,
+			PeerPort:            wellknownports.EtcdEventsPeerPort,
 		}, nil
 	case "cilium":
 		return Ports{
 			GRPCPort:            wellknownports.EtcdCiliumGRPC,
 			QuarantinedGRPCPort: wellknownports.EtcdCiliumQuarantinedClientPort,
-			ClientPort:          4003,
-			PeerPort:            2382,
+			ClientPort:          wellknownports.EtcdCiliumClientPort,
+			PeerPort:            wellknownports.EtcdCiliumPeerPort,
+		}, nil
+
+	case "leases":
+		return Ports{
+			GRPCPort:            wellknownports.EtcdLeasesGRPC,
+			QuarantinedGRPCPort: wellknownports.EtcdLeasesQuarantinedClientPort,
+			ClientPort:          wellknownports.EtcdLeasesClientPort,
+			PeerPort:            wellknownports.EtcdLeasesPeerPort,
 		}, nil
 
 	default:

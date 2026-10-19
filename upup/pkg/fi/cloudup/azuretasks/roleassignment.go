@@ -52,6 +52,7 @@ type RoleAssignment struct {
 var (
 	_ fi.CloudupTask   = &RoleAssignment{}
 	_ fi.CompareWithID = &RoleAssignment{}
+	// RoleAssignment does not implement CloudupTaskNormalize because Azure role assignments do not support tags.
 )
 
 // CompareWithID returns the Name of the VM Scale Set.

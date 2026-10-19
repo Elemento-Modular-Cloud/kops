@@ -18,7 +18,6 @@ package scaleway
 
 import (
 	"fmt"
-	"strings"
 
 	domain "github.com/scaleway/scaleway-sdk-go/api/domain/v2beta1"
 	"github.com/scaleway/scaleway-sdk-go/scw"
@@ -53,7 +52,7 @@ func ListResources(cloud scaleway.ScwCloud, clusterInfo resources.ClusterInfo) (
 		listSSHKeys,
 		listVolumes,
 	}
-	if !strings.HasSuffix(clusterName, ".k8s.local") && !clusterInfo.UsesNoneDNS {
+	if clusterInfo.PublishesDNSRecords() {
 		listFunctions = append(listFunctions, listDNSRecords)
 	}
 
@@ -104,13 +103,11 @@ func listLoadBalancers(cloud fi.Cloud, clusterName string) ([]*resources.Resourc
 	resourceTrackers := []*resources.Resource(nil)
 	for _, loadBalancer := range lbs {
 		resourceTracker := &resources.Resource{
-			Name: loadBalancer.Name,
-			ID:   loadBalancer.ID,
-			Type: resourceTypeLoadBalancer,
-			Deleter: func(cloud fi.Cloud, tracker *resources.Resource) error {
-				return deleteLoadBalancer(cloud, tracker)
-			},
-			Obj: loadBalancer,
+			Name:    loadBalancer.Name,
+			ID:      loadBalancer.ID,
+			Type:    resourceTypeLoadBalancer,
+			Deleter: deleteLoadBalancer,
+			Obj:     loadBalancer,
 		}
 		resourceTrackers = append(resourceTrackers, resourceTracker)
 	}
@@ -128,13 +125,11 @@ func listServers(cloud fi.Cloud, clusterName string) ([]*resources.Resource, err
 	resourceTrackers := []*resources.Resource(nil)
 	for _, server := range servers {
 		resourceTracker := &resources.Resource{
-			Name: server.Name,
-			ID:   server.ID,
-			Type: resourceTypeServer,
-			Deleter: func(cloud fi.Cloud, tracker *resources.Resource) error {
-				return deleteServer(cloud, tracker)
-			},
-			Obj: server,
+			Name:    server.Name,
+			ID:      server.ID,
+			Type:    resourceTypeServer,
+			Deleter: deleteServer,
+			Obj:     server,
 		}
 		resourceTrackers = append(resourceTrackers, resourceTracker)
 	}
@@ -156,13 +151,11 @@ func listServerIPs(cloud fi.Cloud, clusterName string) ([]*resources.Resource, e
 	resourceTrackers := []*resources.Resource(nil)
 	for _, ip := range ips.IPs {
 		resourceTracker := &resources.Resource{
-			Name: ip.Address.String(),
-			ID:   ip.ID,
-			Type: resourceTypeServerIP,
-			Deleter: func(cloud fi.Cloud, tracker *resources.Resource) error {
-				return deleteServerIP(cloud, tracker)
-			},
-			Obj: ip,
+			Name:    ip.Address.String(),
+			ID:      ip.ID,
+			Type:    resourceTypeServerIP,
+			Deleter: deleteServerIP,
+			Obj:     ip,
 		}
 		resourceTrackers = append(resourceTrackers, resourceTracker)
 	}
@@ -180,13 +173,11 @@ func listSSHKeys(cloud fi.Cloud, clusterName string) ([]*resources.Resource, err
 	resourceTrackers := []*resources.Resource(nil)
 	for _, sshkey := range sshkeys {
 		resourceTracker := &resources.Resource{
-			Name: sshkey.Name,
-			ID:   sshkey.ID,
-			Type: resourceTypeSSHKey,
-			Deleter: func(cloud fi.Cloud, tracker *resources.Resource) error {
-				return deleteSSHKey(cloud, tracker)
-			},
-			Obj: sshkey,
+			Name:    sshkey.Name,
+			ID:      sshkey.ID,
+			Type:    resourceTypeSSHKey,
+			Deleter: deleteSSHKey,
+			Obj:     sshkey,
 		}
 		resourceTrackers = append(resourceTrackers, resourceTracker)
 	}
@@ -204,13 +195,11 @@ func listVolumes(cloud fi.Cloud, clusterName string) ([]*resources.Resource, err
 	resourceTrackers := []*resources.Resource(nil)
 	for _, volume := range volumes {
 		resourceTracker := &resources.Resource{
-			Name: volume.Name,
-			ID:   volume.ID,
-			Type: resourceTypeVolume,
-			Deleter: func(cloud fi.Cloud, tracker *resources.Resource) error {
-				return deleteVolume(cloud, tracker)
-			},
-			Obj: volume,
+			Name:    volume.Name,
+			ID:      volume.ID,
+			Type:    resourceTypeVolume,
+			Deleter: deleteVolume,
+			Obj:     volume,
 		}
 		if volume.Server != nil {
 			resourceTracker.Blocked = []string{resourceTypeServer + ":" + volume.Server.ID}

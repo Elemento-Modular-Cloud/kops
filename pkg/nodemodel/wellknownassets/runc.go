@@ -38,16 +38,6 @@ func FindRuncAsset(ig model.InstanceGroup, assetBuilder *assets.AssetBuilder, ar
 		return nil, fmt.Errorf("unable to find containerd config")
 	}
 
-	containerdVersion, err := semver.ParseTolerant(fi.ValueOf(containerd.Version))
-	if err != nil {
-		return nil, fmt.Errorf("unable to parse version string: %q", fi.ValueOf(containerd.Version))
-	}
-	// A compatible runc binary is bundled with containerd builds < v1.6.0
-	// https://github.com/containerd/containerd/issues/6541
-	if containerdVersion.LT(semver.MustParse("1.6.0")) {
-		return nil, nil
-	}
-
 	if containerd.Runc == nil {
 		return nil, fmt.Errorf("unable to find runc config")
 	}
@@ -87,7 +77,7 @@ func findRuncVersionUrl(arch architectures.Architecture, version string) (string
 	if err != nil {
 		return "", fmt.Errorf("unable to parse version string: %q", version)
 	}
-	if sv.LT(semver.MustParse("1.1.0")) {
+	if sv.LT(semver.MustParse("1.3.0")) {
 		return "", fmt.Errorf("unsupported runc version: %q", version)
 	}
 

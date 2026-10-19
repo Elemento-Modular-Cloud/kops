@@ -121,14 +121,14 @@ func (c *RollingUpdateCluster) RollingUpdate(ctx context.Context, groups map[str
 	nodeGroups := make(map[string]*cloudinstances.CloudInstanceGroup)
 	bastionGroups := make(map[string]*cloudinstances.CloudInstanceGroup)
 	for k, group := range groups {
-		switch group.InstanceGroup.Spec.Role {
-		case api.InstanceGroupRoleNode:
+		switch {
+		case group.InstanceGroup.Spec.Role.HasNode():
 			nodeGroups[k] = group
-		case api.InstanceGroupRoleAPIServer:
+		case group.InstanceGroup.Spec.Role.HasAPIServer():
 			apiServerGroups[k] = group
-		case api.InstanceGroupRoleControlPlane:
+		case group.InstanceGroup.Spec.Role.HasControlPlane():
 			masterGroups[k] = group
-		case api.InstanceGroupRoleBastion:
+		case group.InstanceGroup.Spec.Role.HasBastion():
 			bastionGroups[k] = group
 		default:
 			return fmt.Errorf("unknown group type for group %q", group.InstanceGroup.ObjectMeta.Name)
@@ -251,7 +251,10 @@ func sortGroups(groupMap map[string]*cloudinstances.CloudInstanceGroup) []string
 //
 // For example, if a cluster is unable to be validated by the deadline, then it
 // is unlikely that it will validate on the next instance roll, so an early exit as a
-// warning to the user is more appropriate.
+// warning to the user is more appropriate. Likewise, if we cannot deregister an
+// instance from cloud load balancers, continuing would leave traffic routed to
+// nodes that are being terminated, so we bail out instead of plowing through
+// the remaining instance groups.
 func isExitableError(err error) bool {
-	return stderrors.Is(err, &ValidationTimeoutError{})
+	return stderrors.Is(err, &ValidationTimeoutError{}) || stderrors.Is(err, &DeregisterError{})
 }

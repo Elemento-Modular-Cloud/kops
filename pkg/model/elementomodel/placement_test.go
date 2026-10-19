@@ -28,11 +28,16 @@ func placementBuilderFixture(t *testing.T) (*PlacementModelBuilder, *fi.CloudupM
 	}
 	groups := []*kops.InstanceGroup{newControlPlaneInstanceGroup("control-plane-europe"), {
 		ObjectMeta: metav1.ObjectMeta{Name: "nodes-europe"},
-		Spec:       kops.InstanceGroupSpec{Role: kops.InstanceGroupRoleNode, MinSize: fi.PtrTo(int32(1))},
+		Spec:       kops.InstanceGroupSpec{Role: kops.InstanceGroupRoleNode, MinSize: new(int32(1))},
 	}}
 	b := &PlacementModelBuilder{
 		ElementoModelContext: &ElementoModelContext{KopsModelContext: &model.KopsModelContext{
-			IAMModelContext:   iam.IAMModelContext{Cluster: &kops.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "test.k8s"}}},
+			IAMModelContext: iam.IAMModelContext{Cluster: &kops.Cluster{
+				ObjectMeta: metav1.ObjectMeta{Name: "test.k8s"},
+				Spec: kops.ClusterSpec{Networking: kops.NetworkingSpec{
+					Topology: &kops.TopologySpec{DNS: kops.DNSTypePrivate},
+				}},
+			}},
 			AllInstanceGroups: groups, InstanceGroups: groups,
 		}},
 		ConfigBase: vfs.NewMemFSPath(vfs.NewMemFSContext(), "memfs://state/test.k8s"),
@@ -104,7 +109,7 @@ func TestPlacementBuilderFailsBeforeAddingTasks(t *testing.T) {
 func TestPlacementNetworkDependency(t *testing.T) {
 	_, _ = placementBuilderFixture(t)
 	network := &elementotasks.Network{}
-	task := &fitasks.ManagedFile{Name: fi.PtrTo("elemento-placement")}
+	task := &fitasks.ManagedFile{Name: new("elemento-placement")}
 	tasks := map[string]fi.CloudupTask{"ManagedFile/elemento-placement": task, "Network/test.k8s": network}
 	deps := network.GetDependencies(tasks)
 	if len(deps) != 1 {
@@ -171,7 +176,7 @@ func TestExternalLoadBalancerDNSDependencies(t *testing.T) {
 
 	controlPlane := b.InstanceGroups[0]
 	legacyRecords, err := b.elementoDNSRecordTasksForInstanceGroup(controlPlane, fi.LifecycleSync,
-		&elementotasks.DNSZone{Name: fi.PtrTo("test.k8s")})
+		&elementotasks.DNSZone{Name: new("test.k8s")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +210,7 @@ func TestExternalPlacementDNSAndDHCPSources(t *testing.T) {
 		}
 		for _, group := range b.InstanceGroups {
 			records, err := b.elementoDNSRecordTasksForInstanceGroup(group, fi.LifecycleSync,
-				&elementotasks.DNSZone{Name: fi.PtrTo("test.k8s")})
+				&elementotasks.DNSZone{Name: new("test.k8s")})
 			if err != nil {
 				t.Fatal(err)
 			}

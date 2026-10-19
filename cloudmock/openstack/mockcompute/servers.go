@@ -25,7 +25,6 @@ import (
 	"strings"
 
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/ports"
-	"k8s.io/kops/upup/pkg/fi"
 
 	"github.com/google/uuid"
 	"github.com/gophercloud/gophercloud/v2"
@@ -212,11 +211,21 @@ func (m *MockClient) createServer(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusAccepted)
 
+	flavorId := create.Server.FlavorRef
+	flavor := m.flavors[flavorId]
+
 	server := servers.Server{
 		ID:       uuid.New().String(),
 		Name:     create.Server.Name,
 		Metadata: create.Server.Metadata,
 		Status:   "ACTIVE",
+		Flavor: map[string]any{
+			"id":    flavor.ID,
+			"name":  flavor.Name,
+			"ram":   flavor.RAM,
+			"vcpus": flavor.VCPUs,
+			"disk":  flavor.Disk,
+		},
 	}
 	securityGroups := make([]map[string]interface{}, len(create.Server.SecurityGroups))
 	for i, groupName := range create.Server.SecurityGroups {
@@ -226,7 +235,7 @@ func (m *MockClient) createServer(w http.ResponseWriter, r *http.Request) {
 
 	portID := create.Server.Networks[0].Port
 	ports.Update(r.Context(), m.networkClient, portID, ports.UpdateOpts{
-		DeviceID: fi.PtrTo(server.ID),
+		DeviceID: new(server.ID),
 	})
 
 	// Assign an IP address

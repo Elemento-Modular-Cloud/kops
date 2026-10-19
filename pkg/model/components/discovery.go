@@ -75,6 +75,13 @@ func (b *DiscoveryOptionsBuilder) BuildOptions(o *kops.Cluster) error {
 			default:
 				return fmt.Errorf("locationStore=%q is of unexpected type %T", store, base)
 			}
+		} else if said != nil && said.DiscoveryService != nil {
+			discoveryService := said.DiscoveryService
+
+			serviceAccountIssuer = discoveryService.URL
+			if serviceAccountIssuer == "" {
+				return fmt.Errorf("discoveryService URL must be specified")
+			}
 		} else {
 			if supportsPublicJWKS(clusterSpec) && clusterSpec.API.PublicName != "" {
 				serviceAccountIssuer = "https://" + clusterSpec.API.PublicName
@@ -84,7 +91,7 @@ func (b *DiscoveryOptionsBuilder) BuildOptions(o *kops.Cluster) error {
 		}
 		kubeAPIServer.ServiceAccountIssuer = &serviceAccountIssuer
 	}
-	kubeAPIServer.ServiceAccountJWKSURI = fi.PtrTo(*kubeAPIServer.ServiceAccountIssuer + "/openid/v1/jwks")
+	kubeAPIServer.ServiceAccountJWKSURI = new(*kubeAPIServer.ServiceAccountIssuer + "/openid/v1/jwks")
 	// We set apiserver ServiceAccountKey and ServiceAccountSigningKeyFile in nodeup
 
 	return nil

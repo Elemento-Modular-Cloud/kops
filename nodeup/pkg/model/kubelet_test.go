@@ -20,7 +20,9 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,6 +33,7 @@ import (
 	"k8s.io/kops/pkg/apis/nodeup"
 	"k8s.io/kops/pkg/assets"
 	"k8s.io/kops/pkg/client/simple/vfsclientset"
+	"k8s.io/kops/pkg/flagbuilder"
 	"k8s.io/kops/pkg/pki"
 	"k8s.io/kops/pkg/testutils"
 	"k8s.io/kops/upup/pkg/fi"
@@ -47,7 +50,7 @@ func TestTaintsApplied(t *testing.T) {
 		expectTaints []string
 	}{
 		{
-			version:      "1.28.0",
+			version:      "1.32.0",
 			taints:       []string{"foo", "bar", "baz"},
 			expectTaints: []string{"foo", "bar", "baz", "node-role.kubernetes.io/control-plane=:NoSchedule"},
 		},
@@ -100,8 +103,8 @@ func TestTaintsApplied(t *testing.T) {
 }
 
 func stringSlicesEqual(exp, other []string) bool {
-	sort.Sort(sort.StringSlice(exp))
-	sort.Sort(sort.StringSlice(other))
+	sort.Strings(exp)
+	sort.Strings(other)
 	if exp == nil && other != nil {
 		return false
 	}
@@ -131,6 +134,34 @@ func Test_RunKubeletBuilder(t *testing.T) {
 	h.SetupMockAWS()
 
 	basedir := "tests/kubelet/featuregates"
+
+	context := &fi.NodeupModelBuilderContext{
+		Tasks: make(map[string]fi.NodeupTask),
+	}
+
+	model, err := testutils.LoadModel(basedir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nodeUpModelContext, err := BuildNodeupModelContext(model)
+	if err != nil {
+		t.Fatalf("error loading model %q: %v", basedir, err)
+		return
+	}
+	runKubeletBuilder(t, context, nodeUpModelContext)
+
+	testutils.ValidateTasks(t, filepath.Join(basedir, "tasks.yaml"), context)
+}
+
+func Test_RunKubeletBuilderCgroupfs(t *testing.T) {
+	h := testutils.NewIntegrationTestHarness(t)
+	defer h.Close()
+
+	h.MockKopsVersion("1.18.0")
+	h.SetupMockAWS()
+
+	basedir := "tests/kubelet/cgroupfs"
 
 	context := &fi.NodeupModelBuilderContext{
 		Tasks: make(map[string]fi.NodeupTask),
@@ -195,7 +226,7 @@ func runKubeletBuilder(t *testing.T, context *fi.NodeupModelBuilderContext, node
 		return
 	}
 	{
-		fileTask, err := buildKubeletComponentConfig(kubeletConfig, "")
+		fileTask, err := builder.buildKubeletComponentConfig(kubeletConfig, "")
 		if err != nil {
 			t.Fatalf("error from KubeletBuilder buildKubeletComponentConfig: %v", err)
 			return
@@ -382,7 +413,7 @@ func RunGoldenTest(t *testing.T, basedir string, key string, builder func(*Nodeu
 
 	nodeupModelContext.KeyStore = keystore
 
-	nodeupModelContext.Distribution = distributions.DistributionUbuntu2004
+	nodeupModelContext.Distribution = distributions.DistributionUbuntu2604
 
 	if err := nodeupModelContext.Init(); err != nil {
 		t.Fatalf("error from nodeupModelContext.Init(): %v", err)
@@ -399,10 +430,108 @@ func Test_BuildComponentConfigFile(t *testing.T) {
 	componentConfig := kops.KubeletConfigSpec{
 		ShutdownGracePeriod:             &metav1.Duration{Duration: 30 * time.Second},
 		ShutdownGracePeriodCriticalPods: &metav1.Duration{Duration: 10 * time.Second},
+		ImageMaximumGCAge:               &metav1.Duration{Duration: 30 * time.Hour},
+		ImageMinimumGCAge:               &metav1.Duration{Duration: 30 * time.Minute},
+		MaxParallelImagePulls:           new(int32(5)),
 	}
 
-	_, err := buildKubeletComponentConfig(&componentConfig, "")
+	builder := &KubeletBuilder{NodeupModelContext: &NodeupModelContext{
+		NodeupConfig: &nodeup.Config{
+			ContainerdConfig: &kops.ContainerdConfig{},
+		},
+	}}
+
+	_, err := builder.buildKubeletComponentConfig(&componentConfig, "")
 	if err != nil {
 		t.Errorf("Failed to build component config file: %v", err)
+	}
+}
+
+func TestParseKeyValueList(t *testing.T) {
+	tests := []struct {
+		name            string
+		in              string
+		sep             string
+		want            map[string]string
+		wantErrContains string
+	}{
+		{name: "empty input returns nil map", in: "", sep: "<", want: nil},
+		{name: "less-than separator", in: "memory.available<100Mi,nodefs.available<10%", sep: "<", want: map[string]string{"memory.available": "100Mi", "nodefs.available": "10%"}},
+		{name: "equals separator", in: "memory.available=30s", sep: "=", want: map[string]string{"memory.available": "30s"}},
+		{name: "trims whitespace around keys and values", in: " memory.available = 100Mi ", sep: "=", want: map[string]string{"memory.available": "100Mi"}},
+		{name: "missing separator returns error", in: "memory.available", sep: "<", wantErrContains: "expected separator"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseKeyValueList(tc.in, tc.sep)
+			if tc.wantErrContains != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErrContains) {
+					t.Fatalf("parseKeyValueList(%q, %q) error = %v, want error containing %q", tc.in, tc.sep, err, tc.wantErrContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseKeyValueList(%q, %q) unexpected error: %v", tc.in, tc.sep, err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("parseKeyValueList(%q, %q) = %v, want %v", tc.in, tc.sep, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseFeatureGates(t *testing.T) {
+	tests := []struct {
+		name            string
+		in              map[string]string
+		want            map[string]bool
+		wantErrContains string
+	}{
+		{name: "nil input returns nil map", in: nil, want: nil},
+		{name: "valid bools", in: map[string]string{"A": "true", "B": "false"}, want: map[string]bool{"A": true, "B": false}},
+		{name: "invalid bool returns error naming the gate", in: map[string]string{"A": "yesplz"}, wantErrContains: `"A"="yesplz"`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseFeatureGates(tc.in)
+			if tc.wantErrContains != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErrContains) {
+					t.Fatalf("parseFeatureGates(%v) error = %v, want error containing %q", tc.in, err, tc.wantErrContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseFeatureGates(%v) unexpected error: %v", tc.in, err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("parseFeatureGates(%v) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func Test_Kubelet_BuildFlags(t *testing.T) {
+	tests := []struct {
+		name   string
+		config kops.KubeletConfigSpec
+		want   string
+	}{
+		{
+			name:   "ImageMaximumGCAge migrated to config file",
+			config: kops.KubeletConfigSpec{ImageMaximumGCAge: &metav1.Duration{Duration: 30 * time.Hour}},
+			want:   "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := flagbuilder.BuildFlags(&tc.config)
+			if err != nil {
+				t.Fatalf("BuildFlags(%+v) error = %v", tc.config, err)
+			}
+			if got != tc.want {
+				t.Errorf("BuildFlags(%+v) = %q, want %q", tc.config, got, tc.want)
+			}
+		})
 	}
 }

@@ -1,0 +1,35 @@
+# Helm values for azuredisk-csi-driver (chart version in regenerate.sh)
+# To regenerate the manifest:
+#   cd upup/models/cloudup/resources/addons/azuredisk-csi-driver.addons.k8s.io
+#   ./regenerate.sh
+#
+# Note: the controller and node load cloud config from the azure-cloud-provider Secret.
+#
+# Note: StorageClass is managed separately via storage-azure.addons.k8s.io
+
+controller:
+  replicas: 1
+  runOnControlPlane: true
+  hostNetwork: true
+  logLevel: 5
+  disableAvailabilitySetNodes: true
+  vmssCacheTTLInSeconds: 60
+
+linux:
+  enabled: true
+  hostNetwork: true
+
+node:
+  # cloudConfigSecretName/Namespace inherit the chart defaults (azure-cloud-provider
+  # in kube-system). allowEmptyCloudConfig=false makes the node restart until it exists.
+  allowEmptyCloudConfig: false
+
+windows:
+  enabled: false
+
+snapshot:
+  enabled: false
+
+driver:
+  userAgentSuffix: "kops"
+

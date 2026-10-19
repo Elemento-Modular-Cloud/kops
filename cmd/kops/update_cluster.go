@@ -153,6 +153,13 @@ func NewCmdUpdateCluster(f *util.Factory, out io.Writer) *cobra.Command {
 		Example:           updateClusterExample,
 		Args:              rootCommand.clusterNameArgs(&options.ClusterName),
 		ValidArgsFunction: commandutils.CompleteClusterName(f, true, false),
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			// Terraform treats omitted resources as deletions, so only render a complete configuration.
+			if options.Target == cloudup.TargetTerraform && (len(options.InstanceGroups) != 0 || len(options.InstanceGroupRoles) != 0) {
+				return fmt.Errorf("cannot use --target=terraform with --instance-group or --instance-group-roles; generate the full configuration and use terraform apply -target instead")
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, err := RunUpdateCluster(cmd.Context(), f, out, options)
 			return err
@@ -170,7 +177,10 @@ func NewCmdUpdateCluster(f *util.Factory, out io.Writer) *cobra.Command {
 	cmd.Flags().Lookup("admin").NoOptDefVal = kubeconfig.DefaultKubecfgAdminLifetime.String()
 	cmd.Flags().StringVar(&options.User, "user", options.User, "Existing user in kubeconfig file to use.  Implies --create-kube-config")
 	cmd.RegisterFlagCompletionFunc("user", completeKubecfgUser)
+
 	cmd.Flags().BoolVar(&options.Internal, "internal", options.Internal, "Use the cluster's internal DNS name. Implies --create-kube-config")
+	options.CreateKubecfgOptions.AddCommonFlags(cmd.Flags())
+
 	cmd.Flags().BoolVar(&options.AllowKopsDowngrade, "allow-kops-downgrade", options.AllowKopsDowngrade, "Allow an older version of kOps to update the cluster than last used")
 	cmd.Flags().StringSliceVar(&options.InstanceGroups, "instance-group", options.InstanceGroups, "Instance groups to update (defaults to all if not specified)")
 	cmd.RegisterFlagCompletionFunc("instance-group", completeInstanceGroup(f, &options.InstanceGroups, &options.InstanceGroupRoles))
@@ -356,9 +366,9 @@ func RunUpdateCluster(ctx context.Context, f *util.Factory, out io.Writer, c *Up
 	if !c.IgnoreKubeletVersionSkew {
 		minControlPlaneRunningVersion, err = checkControlPlaneRunningVersion(ctx, cluster.ObjectMeta.Name, minControlPlaneRunningVersion)
 		if err != nil {
-			klog.Warningf("error checking control plane running version, assuming no k8s upgrade in progress: %v", err)
+			klog.V(2).Infof("error checking control plane running version, assuming no k8s upgrade in progress: %v", err)
 		} else {
-			klog.V(2).Infof("successfully checked control plane running version: %v", minControlPlaneRunningVersion)
+			klog.V(2).Infof("found control plane running version: %v", minControlPlaneRunningVersion)
 		}
 	}
 	applyCmd := &cloudup.ApplyClusterCmd{
@@ -385,8 +395,8 @@ func RunUpdateCluster(ctx context.Context, f *util.Factory, out io.Writer, c *Up
 
 	results.Target = applyCmd.Target
 	results.TaskMap = applyCmd.TaskMap
-	results.ImageAssets = applyResults.AssetBuilder.ImageAssets
-	results.FileAssets = applyResults.AssetBuilder.FileAssets
+	results.ImageAssets = applyResults.AssetBuilder.ImageAssets()
+	results.FileAssets = applyResults.AssetBuilder.FileAssets()
 	results.Cluster = cluster
 
 	if isDryrun && !c.GetAssets {
@@ -408,6 +418,10 @@ func RunUpdateCluster(ctx context.Context, f *util.Factory, out io.Writer, c *Up
 			hasKubeconfig = true
 		}
 		firstRun = !hasKubeconfig
+
+		if c.CreateKubecfgOptions.UseKubeconfig {
+			klog.Infof("hint: passing --create-kube-config=true causes the kubeconfig to be overwritten, you may not want to use this flag with --use-kubeconfig=false")
+		}
 
 		klog.Infof("Exporting kubeconfig for cluster")
 
@@ -503,7 +517,7 @@ func parseLifecycle(lifecycle string) (fi.Lifecycle, error) {
 
 func usesBastion(instanceGroups []*kops.InstanceGroup) bool {
 	for _, ig := range instanceGroups {
-		if ig.Spec.Role == kops.InstanceGroupRoleBastion {
+		if ig.Spec.Role.HasBastion() {
 			return true
 		}
 	}

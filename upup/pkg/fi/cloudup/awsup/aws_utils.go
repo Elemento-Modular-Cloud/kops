@@ -25,7 +25,6 @@ import (
 	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsv2 "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/arn"
 	autoscalingtypes "github.com/aws/aws-sdk-go-v2/service/autoscaling/types"
 	ec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -75,7 +74,7 @@ func ValidateRegion(ctx context.Context, region string) error {
 	}
 
 	for _, r := range allRegions {
-		name := awsv2.ToString(r.RegionName)
+		name := aws.ToString(r.RegionName)
 		if name == region {
 			return nil
 		}
@@ -93,13 +92,18 @@ func ValidateRegion(ctx context.Context, region string) error {
 func FindRegion(cluster *kops.Cluster) (string, error) {
 	region := ""
 
-	nodeZones := make(map[string]bool)
 	for _, subnet := range cluster.Spec.Networking.Subnets {
+		if subnet.Zone == "" {
+			// The zone of a subnet specified by ID is looked up from the cloud later.
+			if subnet.ID == "" {
+				return "", fmt.Errorf("subnet %q must specify a zone or the ID of an existing subnet", subnet.Name)
+			}
+			continue
+		}
+
 		if len(subnet.Zone) <= 2 {
 			return "", fmt.Errorf("invalid AWS zone: %q in subnet %q", subnet.Zone, subnet.Name)
 		}
-
-		nodeZones[subnet.Zone] = true
 
 		zoneRegion := subnet.Zone[:len(subnet.Zone)-1]
 		if region != "" && zoneRegion != region {
@@ -109,7 +113,24 @@ func FindRegion(cluster *kops.Cluster) (string, error) {
 		region = zoneRegion
 	}
 
+	if region == "" {
+		return "", fmt.Errorf("could not determine cluster region: no subnet specifies a zone")
+	}
+
 	return region, nil
+}
+
+// SupportsS3BootstrapEndpoint reports whether the region uses the amazonaws.com partition DNS
+// suffix hard-coded by the nodeup bootstrap script. EC2 uses the same partition suffix as S3 and
+// can be resolved without a bucket.
+func SupportsS3BootstrapEndpoint(ctx context.Context, region string) (bool, error) {
+	resolver := ec2.NewDefaultEndpointResolverV2()
+	endpoint, err := resolver.ResolveEndpoint(ctx, ec2.EndpointParameters{Region: aws.String(region)})
+	if err != nil {
+		return false, fmt.Errorf("resolving EC2 endpoint for region %q: %w", region, err)
+	}
+
+	return endpoint.URI.Hostname() == fmt.Sprintf("ec2.%s.amazonaws.com", region), nil
 }
 
 // FindEC2Tag find the value of the tag with the specified key
@@ -215,7 +236,7 @@ func GetClusterName40(cluster string) string {
 // GetResourceName32 will attempt to calculate a meaningful name for a resource given a prefix
 // Will never return a string longer than 32 chars
 func GetResourceName32(cluster string, prefix string) string {
-	s := prefix + "-" + strings.Replace(cluster, ".", "-", -1)
+	s := prefix + "-" + strings.ReplaceAll(cluster, ".", "-")
 
 	// We always compute the hash and add it, lest we trick users into assuming that we never do this
 	opt := truncate.TruncateStringOptions{

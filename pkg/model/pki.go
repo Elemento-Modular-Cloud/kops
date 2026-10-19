@@ -35,16 +35,29 @@ var _ fi.CloudupModelBuilder = &PKIModelBuilder{}
 func (b *PKIModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	// TODO: Only create the CA via this task
 	defaultCA := &fitasks.Keypair{
-		Name:      fi.PtrTo(fi.CertificateIDCA),
+		Name:      new(fi.CertificateIDCA),
 		Lifecycle: b.Lifecycle,
 		Subject:   "cn=kubernetes-ca",
 		Type:      "ca",
 	}
 	c.AddTask(defaultCA)
 
+	if b.Cluster.Spec.ServiceAccountIssuerDiscovery != nil &&
+		b.Cluster.Spec.ServiceAccountIssuerDiscovery.DiscoveryService != nil &&
+		b.Cluster.Spec.ServiceAccountIssuerDiscovery.DiscoveryService.URL != "" {
+		// TODO: Only create the discovery CA via this task (but it's tricky because we need the ID so early)
+		discoveryCA := &fitasks.Keypair{
+			Name:      new(string(fi.DiscoveryCAID)),
+			Lifecycle: b.Lifecycle,
+			Subject:   "cn=" + fi.DiscoveryCAID,
+			Type:      "ca",
+		}
+		c.AddTask(discoveryCA)
+	}
+
 	{
 		aggregatorCA := &fitasks.Keypair{
-			Name:      fi.PtrTo("apiserver-aggregator-ca"),
+			Name:      new("apiserver-aggregator-ca"),
 			Lifecycle: b.Lifecycle,
 			Subject:   "cn=apiserver-aggregator-ca",
 			Type:      "ca",
@@ -55,7 +68,7 @@ func (b *PKIModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	{
 		serviceAccount := &fitasks.Keypair{
 			// We only need the private key, but it's easier to create a certificate as well.
-			Name:      fi.PtrTo("service-account"),
+			Name:      new("service-account"),
 			Lifecycle: b.Lifecycle,
 			Subject:   "cn=service-account",
 			Type:      "ca",
@@ -65,7 +78,7 @@ func (b *PKIModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 
 	// Create auth tokens (though this is deprecated)
 	for _, x := range tokens.GetKubernetesAuthTokens_Deprecated() {
-		c.AddTask(&fitasks.Secret{Name: fi.PtrTo(x), Lifecycle: b.Lifecycle})
+		c.AddTask(&fitasks.Secret{Name: new(x), Lifecycle: b.Lifecycle})
 	}
 
 	{
@@ -75,7 +88,7 @@ func (b *PKIModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		}
 
 		t := &fitasks.MirrorSecrets{
-			Name:       fi.PtrTo("mirror-secrets"),
+			Name:       new("mirror-secrets"),
 			Lifecycle:  b.Lifecycle,
 			MirrorPath: mirrorPath,
 		}
@@ -90,7 +103,7 @@ func (b *PKIModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 
 		// Keypair used by the kubelet
 		t := &fitasks.MirrorKeystore{
-			Name:       fi.PtrTo("mirror-keystore"),
+			Name:       new("mirror-keystore"),
 			Lifecycle:  b.Lifecycle,
 			MirrorPath: mirrorPath,
 		}

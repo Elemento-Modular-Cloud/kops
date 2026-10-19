@@ -21,11 +21,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/blang/semver/v4"
 	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
-	"k8s.io/kops/pkg/featureflag"
 	"k8s.io/kops/pkg/model/components"
-	"k8s.io/kops/pkg/urls"
 	"k8s.io/kops/upup/pkg/fi/loader"
 )
 
@@ -40,6 +39,20 @@ var _ loader.ClusterOptionsBuilder = &EtcdManagerOptionsBuilder{}
 func (b *EtcdManagerOptionsBuilder) BuildOptions(o *kops.Cluster) error {
 	clusterSpec := &o.Spec
 
+	// Image Volumes will become GA in Kubernetes 1.35
+	// https://github.com/kubernetes/enhancements/pull/5450
+	if b.ControlPlaneKubernetesVersion().IsLT("1.36.0") && o.HasImageVolumesSupport() {
+		if clusterSpec.ControlPlaneKubelet == nil {
+			clusterSpec.ControlPlaneKubelet = &kops.KubeletConfigSpec{}
+		}
+		if clusterSpec.ControlPlaneKubelet.FeatureGates == nil {
+			clusterSpec.ControlPlaneKubelet.FeatureGates = make(map[string]string)
+		}
+		if _, found := clusterSpec.ControlPlaneKubelet.FeatureGates["ImageVolume"]; !found {
+			clusterSpec.ControlPlaneKubelet.FeatureGates["ImageVolume"] = "true"
+		}
+	}
+
 	for i := range clusterSpec.EtcdClusters {
 		etcdCluster := &clusterSpec.EtcdClusters[i]
 		if etcdCluster.Backups == nil {
@@ -47,21 +60,20 @@ func (b *EtcdManagerOptionsBuilder) BuildOptions(o *kops.Cluster) error {
 		}
 		if etcdCluster.Backups.BackupStore == "" {
 			base := clusterSpec.ConfigStore.Base
-			etcdCluster.Backups.BackupStore = urls.Join(base, "backups", "etcd", etcdCluster.Name)
+			etcdCluster.Backups.BackupStore = join(base, "backups", "etcd", etcdCluster.Name)
 		}
 
 		if !etcdVersionIsSupported(etcdCluster.Version) {
-			if featureflag.SkipEtcdVersionCheck.Enabled() {
-				klog.Warningf("etcd version %q is not known to be supported, but ignoring because of SkipEtcdVersionCheck feature flag", etcdCluster.Version)
+			if etcdCluster.Image != "" {
+				klog.Warningf("etcd version %q is not bundled by kOps and has not been tested; using binaries from custom image %q", etcdCluster.Version, etcdCluster.Image)
 			} else {
 				klog.Warningf("Unsupported etcd version %q detected; please update etcd version.", etcdCluster.Version)
-				klog.Warningf("Use export KOPS_FEATURE_FLAGS=SkipEtcdVersionCheck to override this check.")
 				var versions []string
 				for _, v := range etcdSupportedVersions() {
 					versions = append(versions, v.Version)
 				}
 				klog.Warningf("Supported etcd versions: %s", strings.Join(versions, ", "))
-				return fmt.Errorf("etcd version %q is not supported with etcd-manager, please specify a supported version or remove the value to use the recommended version", etcdCluster.Version)
+				return fmt.Errorf("etcd version %q is not supported with etcd-manager, please specify a supported version, remove the value to use the recommended version, or also set the image field to run a custom version", etcdCluster.Version)
 			}
 		}
 	}
@@ -76,33 +88,54 @@ type etcdVersion struct {
 	SymlinkToVersion string
 }
 
-var etcdSupportedImages = []etcdVersion{
-	{Version: "3.4.3", SymlinkToVersion: "3.4.13"},
-	{Version: "3.4.13", Image: "registry.k8s.io/etcd:3.4.13-0"},
-	{Version: "3.5.0", SymlinkToVersion: "3.5.17"},
-	{Version: "3.5.1", SymlinkToVersion: "3.5.17"},
-	{Version: "3.5.3", SymlinkToVersion: "3.5.17"},
-	{Version: "3.5.4", SymlinkToVersion: "3.5.17"},
-	{Version: "3.5.6", SymlinkToVersion: "3.5.17"},
-	{Version: "3.5.7", SymlinkToVersion: "3.5.17"},
-	{Version: "3.5.9", SymlinkToVersion: "3.5.17"},
-	{Version: "3.5.13", SymlinkToVersion: "3.5.17"},
-	{Version: "3.5.17", Image: "registry.k8s.io/etcd:3.5.17-0"},
+// etcdLatestImages lists the latest etcd patch image bundled by kops for each
+// supported minor. All earlier patch versions within the same minor are
+// generated as SymlinkToVersion entries by etcdSupportedVersions.
+var etcdLatestImages = []etcdVersion{
+	{Version: components.LatestEtcd35Version, Image: "registry.k8s.io/etcd:v" + components.LatestEtcd35Version},
+	{Version: components.LatestEtcd36Version, Image: "registry.k8s.io/etcd:v" + components.LatestEtcd36Version},
+	{Version: components.LatestEtcd37Version, Image: "registry.k8s.io/etcd:v" + components.LatestEtcd37Version},
 }
 
 func etcdSupportedVersions() []etcdVersion {
 	var versions []etcdVersion
-	versions = append(versions, etcdSupportedImages...)
-	sort.Slice(versions, func(i, j int) bool { return versions[i].Version < versions[j].Version })
+	for _, latest := range etcdLatestImages {
+		sv := semver.MustParse(latest.Version)
+		versions = append(versions, latest)
+		for patch := uint64(0); patch < sv.Patch; patch++ {
+			versions = append(versions, etcdVersion{
+				Version:          fmt.Sprintf("%d.%d.%d", sv.Major, sv.Minor, patch),
+				SymlinkToVersion: latest.Version,
+			})
+		}
+	}
+	sort.Slice(versions, func(i, j int) bool {
+		return semver.MustParse(versions[i].Version).LT(semver.MustParse(versions[j].Version))
+	})
 	return versions
 }
 
 func etcdVersionIsSupported(version string) bool {
 	version = strings.TrimPrefix(version, "v")
-	for _, etcdVersion := range etcdSupportedImages {
+	for _, etcdVersion := range etcdSupportedVersions() {
 		if etcdVersion.Version == version {
 			return true
 		}
 	}
 	return false
+}
+
+func join(base string, others ...string) string {
+	u := base
+	for _, o := range others {
+		if !strings.HasSuffix(u, "/") {
+			u += "/"
+		}
+		if strings.HasPrefix(o, "/") {
+			u += o[1:]
+		} else {
+			u += o
+		}
+	}
+	return u
 }

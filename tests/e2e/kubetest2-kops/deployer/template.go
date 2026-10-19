@@ -40,7 +40,7 @@ func (d *deployer) renderTemplate(values map[string]interface{}) error {
 		return err
 	}
 	valuesPath := path.Join(dir, "values.yaml")
-	err = os.WriteFile(valuesPath, valuesBytes, 0o644)
+	err = os.WriteFile(valuesPath, valuesBytes, 0o600)
 	if err != nil {
 		return err
 	}
@@ -73,7 +73,7 @@ func (d *deployer) templateValues(zones []string, publicIP string) (map[string]i
 	if err != nil {
 		return nil, fmt.Errorf("error reading public key file: %q", err)
 	}
-	return map[string]interface{}{
+	values := map[string]interface{}{
 		"cloudProvider":     d.CloudProvider,
 		"clusterName":       d.ClusterName,
 		"kubernetesVersion": d.KubernetesVersion,
@@ -81,6 +81,11 @@ func (d *deployer) templateValues(zones []string, publicIP string) (map[string]i
 		"stateStore":        d.stateStore(),
 		"discoveryStore":    d.discoveryStore(),
 		"zones":             zones,
+		"region":            d.region,
 		"sshPublicKey":      string(publicKey),
-	}, nil
+	}
+	if d.GCPProject != "" {
+		values["project"] = d.GCPProject
+	}
+	return values, nil
 }

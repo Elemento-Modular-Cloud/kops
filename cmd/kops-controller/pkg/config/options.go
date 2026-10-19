@@ -17,12 +17,13 @@ limitations under the License.
 package config
 
 import (
+	"k8s.io/kops/pkg/bootstrap/awsbootstrap"
 	"k8s.io/kops/pkg/bootstrap/pkibootstrap"
-	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/azure"
 	"k8s.io/kops/upup/pkg/fi/cloudup/do"
 	gcetpm "k8s.io/kops/upup/pkg/fi/cloudup/gce/tpm"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner"
+	"k8s.io/kops/upup/pkg/fi/cloudup/linode"
 	"k8s.io/kops/upup/pkg/fi/cloudup/openstack"
 	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
 	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
@@ -39,11 +40,24 @@ type Options struct {
 	// EnableCloudIPAM enables the cloud IPAM controller.
 	EnableCloudIPAM bool `json:"enableCloudIPAM,omitempty"`
 
-	// Discovery configures options relating to discovery, particularly for gossip mode.
-	Discovery *DiscoveryOptions `json:"discovery,omitempty"`
+	// CAPI configures Cluster API (CAPI) support.
+	CAPI *CAPIOptions `json:"capi,omitempty"`
 }
 
 func (o *Options) PopulateDefaults() {
+}
+
+type CAPIOptions struct {
+	// Enabled specifies whether CAPI support is enabled.
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// IsEnabled returns true if CAPI support is enabled.
+func (o *CAPIOptions) IsEnabled() bool {
+	if o == nil || o.Enabled == nil {
+		return false
+	}
+	return *o.Enabled
 }
 
 type ServerOptions struct {
@@ -70,18 +84,13 @@ type ServerOptions struct {
 }
 
 type ServerProviderOptions struct {
-	AWS          *awsup.AWSVerifierOptions           `json:"aws,omitempty"`
+	AWS          *awsbootstrap.AWSVerifierOptions    `json:"aws,omitempty"`
 	GCE          *gcetpm.TPMVerifierOptions          `json:"gce,omitempty"`
 	Hetzner      *hetzner.HetznerVerifierOptions     `json:"hetzner,omitempty"`
 	OpenStack    *openstack.OpenStackVerifierOptions `json:"openstack,omitempty"`
 	DigitalOcean *do.DigitalOceanVerifierOptions     `json:"do,omitempty"`
 	Scaleway     *scaleway.ScalewayVerifierOptions   `json:"scaleway,omitempty"`
 	Azure        *azure.AzureVerifierOptions         `json:"azure,omitempty"`
+	Linode       *linode.LinodeVerifierOptions       `json:"linode,omitempty"`
 	Elemento     *elemento.ElementoVerifierOptions     `json:"elemento,omitempty"`
-}
-
-// DiscoveryOptions configures our support for discovery, particularly gossip DNS (i.e. k8s.local)
-type DiscoveryOptions struct {
-	// Enabled specifies whether support for discovery population is enabled.
-	Enabled bool `json:"enabled"`
 }

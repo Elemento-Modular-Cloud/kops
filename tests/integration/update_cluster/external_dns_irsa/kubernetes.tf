@@ -499,12 +499,6 @@ resource "aws_iam_role_policy" "masters-minimal-example-com" {
   role   = aws_iam_role.masters-minimal-example-com.name
 }
 
-resource "aws_iam_role_policy" "nodes-minimal-example-com" {
-  name   = "nodes.minimal.example.com"
-  policy = file("${path.module}/data/aws_iam_role_policy_nodes.minimal.example.com_policy")
-  role   = aws_iam_role.nodes-minimal-example-com.name
-}
-
 resource "aws_internet_gateway" "minimal-example-com" {
   tags = {
     "KubernetesCluster"                         = "minimal.example.com"
@@ -595,6 +589,21 @@ resource "aws_launch_template" "master-us-test-1a-masters-minimal-example-com" {
       "kubernetes.io/cluster/minimal.example.com"                                                             = "owned"
     }
   }
+  tag_specifications {
+    resource_type = "network-interface"
+    tags = {
+      "KubernetesCluster"                                                                                     = "minimal.example.com"
+      "Name"                                                                                                  = "master-us-test-1a.masters.minimal.example.com"
+      "aws-node-termination-handler/managed"                                                                  = ""
+      "k8s.io/cluster-autoscaler/node-template/label/kops.k8s.io/kops-controller-pki"                         = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node-role.kubernetes.io/control-plane"                   = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node.kubernetes.io/exclude-from-external-load-balancers" = ""
+      "k8s.io/role/control-plane"                                                                             = "1"
+      "k8s.io/role/master"                                                                                    = "1"
+      "kops.k8s.io/instancegroup"                                                                             = "master-us-test-1a"
+      "kubernetes.io/cluster/minimal.example.com"                                                             = "owned"
+    }
+  }
   tags = {
     "KubernetesCluster"                                                                                     = "minimal.example.com"
     "Name"                                                                                                  = "master-us-test-1a.masters.minimal.example.com"
@@ -661,6 +670,18 @@ resource "aws_launch_template" "nodes-minimal-example-com" {
   }
   tag_specifications {
     resource_type = "volume"
+    tags = {
+      "KubernetesCluster"                                                          = "minimal.example.com"
+      "Name"                                                                       = "nodes.minimal.example.com"
+      "aws-node-termination-handler/managed"                                       = ""
+      "k8s.io/cluster-autoscaler/node-template/label/node-role.kubernetes.io/node" = ""
+      "k8s.io/role/node"                                                           = "1"
+      "kops.k8s.io/instancegroup"                                                  = "nodes"
+      "kubernetes.io/cluster/minimal.example.com"                                  = "owned"
+    }
+  }
+  tag_specifications {
+    resource_type = "network-interface"
     tags = {
       "KubernetesCluster"                                                          = "minimal.example.com"
       "Name"                                                                       = "nodes.minimal.example.com"
@@ -758,6 +779,14 @@ resource "aws_s3_object" "kops-version-txt" {
   server_side_encryption = "AES256"
 }
 
+resource "aws_s3_object" "manifests-channels-kops-channels" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_object_manifests-channels-kops-channels_content")
+  key                    = "clusters.example.com/minimal.example.com/manifests/channels/kops-channels.yaml"
+  provider               = aws.files
+  server_side_encryption = "AES256"
+}
+
 resource "aws_s3_object" "manifests-etcdmanager-events-master-us-test-1a" {
   bucket                 = "testingBucket"
   content                = file("${path.module}/data/aws_s3_object_manifests-etcdmanager-events-master-us-test-1a_content")
@@ -810,6 +839,14 @@ resource "aws_s3_object" "minimal-example-com-addons-coredns-addons-k8s-io-k8s-1
   bucket                 = "testingBucket"
   content                = file("${path.module}/data/aws_s3_object_minimal.example.com-addons-coredns.addons.k8s.io-k8s-1.12_content")
   key                    = "clusters.example.com/minimal.example.com/addons/coredns.addons.k8s.io/k8s-1.12.yaml"
+  provider               = aws.files
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_object" "minimal-example-com-addons-dns-controller-addons-k8s-io-k8s-1-12" {
+  bucket                 = "testingBucket"
+  content                = file("${path.module}/data/aws_s3_object_minimal.example.com-addons-dns-controller.addons.k8s.io-k8s-1.12_content")
+  key                    = "clusters.example.com/minimal.example.com/addons/dns-controller.addons.k8s.io/k8s-1.12.yaml"
   provider               = aws.files
   server_side_encryption = "AES256"
 }
@@ -1086,7 +1123,7 @@ terraform {
     aws = {
       "configuration_aliases" = [aws.files]
       "source"                = "hashicorp/aws"
-      "version"               = ">= 5.0.0"
+      "version"               = ">= 6.57.1"
     }
   }
 }

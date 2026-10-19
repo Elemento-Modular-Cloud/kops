@@ -18,7 +18,6 @@ package components
 
 import (
 	"k8s.io/kops/pkg/apis/kops"
-	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/loader"
 )
 
@@ -53,23 +52,9 @@ func (b *KubeSchedulerOptionsBuilder) BuildOptions(o *kops.Cluster) error {
 	if config.LeaderElection == nil {
 		//  Doesn't seem to be any real downside to always doing a leader election
 		config.LeaderElection = &kops.LeaderElectionConfiguration{
-			LeaderElect: fi.PtrTo(true),
+			LeaderElect: new(true),
 		}
 	}
 
-	if clusterSpec.CloudProvider.AWS != nil {
-
-		if config.FeatureGates == nil {
-			config.FeatureGates = make(map[string]string)
-		}
-
-		if _, found := config.FeatureGates["InTreePluginAWSUnregister"]; !found && b.ControlPlaneKubernetesVersion().IsLT("1.31") {
-			config.FeatureGates["InTreePluginAWSUnregister"] = "true"
-		}
-
-		if _, found := config.FeatureGates["CSIMigrationAWS"]; !found && b.ControlPlaneKubernetesVersion().IsLT("1.27") {
-			config.FeatureGates["CSIMigrationAWS"] = "true"
-		}
-	}
 	return nil
 }
