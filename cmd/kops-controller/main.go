@@ -45,22 +45,21 @@ import (
 	nodeidentityazure "k8s.io/kops/pkg/nodeidentity/azure"
 	"k8s.io/kops/pkg/nodeidentity/clusterapi/capimanager"
 	nodeidentitydo "k8s.io/kops/pkg/nodeidentity/do"
+	nodeidentityelemento "k8s.io/kops/pkg/nodeidentity/elemento"
 	nodeidentitygce "k8s.io/kops/pkg/nodeidentity/gce"
 	nodeidentityhetzner "k8s.io/kops/pkg/nodeidentity/hetzner"
 	nodeidentitylinode "k8s.io/kops/pkg/nodeidentity/linode"
 	nodeidentitymetal "k8s.io/kops/pkg/nodeidentity/metal"
 	nodeidentityos "k8s.io/kops/pkg/nodeidentity/openstack"
 	nodeidentityscw "k8s.io/kops/pkg/nodeidentity/scaleway"
-	nodeidentityelemento "k8s.io/kops/pkg/nodeidentity/elemento"
-	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/azure"
 	"k8s.io/kops/upup/pkg/fi/cloudup/do"
+	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce/tpm/gcetpmverifier"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner"
 	linodecloudup "k8s.io/kops/upup/pkg/fi/cloudup/linode"
 	"k8s.io/kops/upup/pkg/fi/cloudup/openstack"
 	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
-	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
 	"k8s.io/kops/util/pkg/vfs"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -371,13 +370,7 @@ func addNodeController(ctx context.Context, mgr manager.Manager, opt *config.Opt
 		if err != nil {
 			return fmt.Errorf("error building node identifier: %w", err)
 		}
-	
-	case "elemento":
-		identifier, err = nodeidentityelemento.New(opt.CacheNodeidentityInfo)
-		if err != nil {
-			return fmt.Errorf("error building identifier: %w", err)
-		}
-	
+
 	case "elemento":
 		identifier, err = nodeidentityelemento.New(opt.CacheNodeidentityInfo)
 		if err != nil {

@@ -18,7 +18,6 @@ package elementomodel
 
 import (
 	"k8s.io/kops/pkg/model"
-	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
 	"k8s.io/kops/upup/pkg/fi/cloudup/elementotasks"
 )
@@ -47,7 +46,7 @@ func (b *ElementoModelContext) LinkToNetwork() *elementotasks.Network {
 			elemento.TagKubernetesClusterName: b.ClusterName(),
 		}
 	} else {
-		network.ID = fi.PtrTo(b.Cluster.Spec.Networking.NetworkID)
+		network.ID = new(b.Cluster.Spec.Networking.NetworkID)
 	}
 
 	return network

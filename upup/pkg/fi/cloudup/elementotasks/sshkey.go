@@ -42,7 +42,7 @@ type SSHKey struct {
 var _ fi.CompareWithID = &SSHKey{}
 
 func (v *SSHKey) CompareWithID() *string {
-	return fi.PtrTo(strconv.Itoa(fi.ValueOf(v.ID)))
+	return new(strconv.Itoa(fi.ValueOf(v.ID)))
 }
 
 func (v *SSHKey) Find(c *fi.CloudupContext) (*SSHKey, error) {
@@ -63,7 +63,7 @@ func (v *SSHKey) Find(c *fi.CloudupContext) (*SSHKey, error) {
 			matches := &SSHKey{
 				Name:      v.Name,
 				Lifecycle: v.Lifecycle,
-				ID:        fi.PtrTo(sshkey.ID),
+				ID:        new(sshkey.ID),
 				PublicKey: sshkey.PublicKey,
 				Labels:    v.Labels,
 			}
@@ -122,7 +122,7 @@ func (*SSHKey) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes *SSHK
 		if err != nil {
 			return err
 		}
-		e.ID = fi.PtrTo(sshkey.ID)
+		e.ID = new(sshkey.ID)
 	}
 
 	return nil

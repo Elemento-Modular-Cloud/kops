@@ -248,7 +248,7 @@ func (*ServerGroup) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes 
 
 		opts := ecloud.ServerCreateOpts{
 			Name:             name,
-			StartAfterCreate: fi.PtrTo(true),
+			StartAfterCreate: new(true),
 			Networks: []*ecloud.Network{
 				{
 					ID: fi.ValueOf(e.Network.ID),

@@ -61,7 +61,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/spf13/viper v1.21.0
-    github.com/Elemento-Modular-Cloud/tesi-paolobeci/ecloud v0.0.1
+	github.com/Elemento-Modular-Cloud/ecloud-go v1.0.2
 	github.com/spotinst/spotinst-sdk-go v1.372.0
 	github.com/stretchr/testify v1.12.1
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.70.0

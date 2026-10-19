@@ -56,6 +56,8 @@ github.com/AzureAD/microsoft-authentication-extensions-for-go/cache v0.1.1 h1:WJ
 github.com/AzureAD/microsoft-authentication-extensions-for-go/cache v0.1.1/go.mod h1:tCcJZ0uHAmvjsVYzEFivsRTN00oz5BEsRgQHu5JZ9WE=
 github.com/AzureAD/microsoft-authentication-library-for-go v1.7.2 h1:RHK7bS+HQMslb1sZpAokUt+zTVmue0hKSs2C791hhzU=
 github.com/AzureAD/microsoft-authentication-library-for-go v1.7.2/go.mod h1:HKpQxkWaGLJ+D/5H8QRpyQXA1eKjxkFlOMwck5+33Jk=
+github.com/Elemento-Modular-Cloud/ecloud-go v1.0.2 h1:NuoNZ1r2gHL4qQrTRdHXRD6EstXuXWXAQ22iocyvEsM=
+github.com/Elemento-Modular-Cloud/ecloud-go v1.0.2/go.mod h1:SOaussacHPWtMDpnnKcifax2TkHncGyO8ci6N3er07o=
 github.com/GoogleCloudPlatform/confidential-space/server v0.0.0-20260522213940-e5c6d01a3007 h1:DoeEFwEGBdqcawmpiWtSsSVVZ+wk3zpqvcvssO2JLmY=
 github.com/GoogleCloudPlatform/confidential-space/server v0.0.0-20260522213940-e5c6d01a3007/go.mod h1:s8F0JYEods/WL03WxZaGsWCnumZeeLD+WKHzspOV9u0=
 github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.33.0 h1:l7+6kwRMJNwdCvYdDl7Eax+wzEYHSnNY7zrrfbhDdTA=

@@ -57,7 +57,7 @@ func (v *Network) Find(c *fi.CloudupContext) (*Network, error) {
 			return &Network{
 				Name:      v.Name,
 				Lifecycle: v.Lifecycle,
-				ID:        fi.PtrTo(network.ID),
+				ID:        new(network.ID),
 			}, nil
 		}
 	}
@@ -77,7 +77,7 @@ func (v *Network) Find(c *fi.CloudupContext) (*Network, error) {
 	matches := &Network{
 		Name:      v.Name,
 		Lifecycle: v.Lifecycle,
-		ID:        fi.PtrTo(network.ID),
+		ID:        new(network.ID),
 	}
 
 	if v.ID == nil {
@@ -157,7 +157,7 @@ func (*Network) RenderElemento(t *elemento.ElementoAPITarget, a, e, changes *Net
 		if err != nil {
 			return err
 		}
-		e.ID = fi.PtrTo(network.ID)
+		e.ID = new(network.ID)
 	} else {
 		// Network exists, get it
 		var err error
