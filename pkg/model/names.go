@@ -63,6 +63,12 @@ func (b *KopsModelContext) AutoscalingGroupName(ig *kops.InstanceGroup) string {
 		return ig.ObjectMeta.Name + ".masters." + b.ClusterName()
 	case kops.InstanceGroupRoleAPIServer:
 		return ig.ObjectMeta.Name + ".apiservers." + b.ClusterName()
+	case kops.InstanceGroupRoleEtcd:
+		return ig.ObjectMeta.Name + ".etcd." + b.ClusterName()
+	case kops.InstanceGroupRoleScheduler:
+		return ig.ObjectMeta.Name + ".scheduler." + b.ClusterName()
+	case kops.InstanceGroupRoleKubeControllerManager:
+		return ig.ObjectMeta.Name + ".kcm." + b.ClusterName()
 	case kops.InstanceGroupRoleNode, kops.InstanceGroupRoleBastion:
 		return ig.ObjectMeta.Name + "." + b.ClusterName()
 
@@ -93,22 +99,12 @@ func (b *KopsModelContext) LBName32(prefix string) string {
 	return awsup.GetResourceName32(b.Cluster.ObjectMeta.Name, prefix)
 }
 
-// CLBName returns CLB name plus cluster name
-func (b *KopsModelContext) CLBName(prefix string) string {
-	return prefix + "." + b.ClusterName()
-}
-
 func (b *KopsModelContext) NLBName(prefix string) string {
 	return prefix + "." + b.ClusterName()
 }
 
 func (b *KopsModelContext) NLBTargetGroupName(prefix string) string {
 	return awsup.GetResourceName32(b.Cluster.ObjectMeta.Name, prefix)
-}
-
-func (b *KopsModelContext) LinkToCLB(prefix string) *awstasks.ClassicLoadBalancer {
-	name := b.CLBName(prefix)
-	return &awstasks.ClassicLoadBalancer{Name: &name}
 }
 
 func (b *KopsModelContext) LinkToNLB(prefix string) *awstasks.NetworkLoadBalancer {
@@ -132,7 +128,7 @@ func (b *KopsModelContext) LinkToVPC() *awstasks.VPC {
 }
 
 func (b *KopsModelContext) LinkToAmazonVPCIPv6CIDR() *awstasks.VPCAmazonIPv6CIDRBlock {
-	return &awstasks.VPCAmazonIPv6CIDRBlock{Name: fi.PtrTo("AmazonIPv6")}
+	return &awstasks.VPCAmazonIPv6CIDRBlock{Name: new("AmazonIPv6")}
 }
 
 func (b *KopsModelContext) LinkToDNSZone() *awstasks.DNSZone {
@@ -153,6 +149,12 @@ func (b *KopsModelContext) IAMName(role kops.InstanceGroupRole) string {
 		rolename = "masters." + b.ClusterName()
 	case kops.InstanceGroupRoleAPIServer:
 		rolename = "apiservers." + b.ClusterName()
+	case kops.InstanceGroupRoleEtcd:
+		rolename = "etcds." + b.ClusterName()
+	case kops.InstanceGroupRoleScheduler:
+		rolename = "schedulers." + b.ClusterName()
+	case kops.InstanceGroupRoleKubeControllerManager:
+		rolename = "kcms." + b.ClusterName()
 	case kops.InstanceGroupRoleBastion:
 		rolename = "bastions." + b.ClusterName()
 	case kops.InstanceGroupRoleNode:
@@ -220,7 +222,7 @@ func (b *KopsModelContext) NamePublicRouteTableInZone(zoneName string) string {
 }
 
 func (b *KopsModelContext) LinkToPublicRouteTableInZone(zoneName string) *awstasks.RouteTable {
-	return &awstasks.RouteTable{Name: fi.PtrTo(b.NamePublicRouteTableInZone(zoneName))}
+	return &awstasks.RouteTable{Name: new(b.NamePublicRouteTableInZone(zoneName))}
 }
 
 func (b *KopsModelContext) NamePrivateRouteTableInZone(zoneName string) string {
@@ -228,7 +230,7 @@ func (b *KopsModelContext) NamePrivateRouteTableInZone(zoneName string) string {
 }
 
 func (b *KopsModelContext) LinkToPrivateRouteTableInZone(zoneName string) *awstasks.RouteTable {
-	return &awstasks.RouteTable{Name: fi.PtrTo(b.NamePrivateRouteTableInZone(zoneName))}
+	return &awstasks.RouteTable{Name: new(b.NamePrivateRouteTableInZone(zoneName))}
 }
 
 func (b *KopsModelContext) InstanceName(ig *kops.InstanceGroup, suffix string) string {

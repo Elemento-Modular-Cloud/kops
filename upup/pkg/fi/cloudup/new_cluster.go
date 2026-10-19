@@ -26,7 +26,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/blang/semver/v4"
 	"k8s.io/apimachinery/pkg/api/resource"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -131,15 +130,13 @@ type NewClusterOptions struct {
 
 	// ControlPlaneCount is the number of control-plane nodes to create. Defaults to the length of ControlPlaneZones.
 	// if ControlPlaneZones is explicitly nonempty, otherwise defaults to 1.
-	ControlPlaneCount int32
+	ControlPlaneCount *int32
 	// APIServerCount is the number of API servers to create. Defaults to 0.
 	APIServerCount int32
 	// EtcdCount is the number of API servers to create. Defaults to 0.
 	EtcdCount int32
 	// SchedulerCount is the number of API servers to create. Defaults to 0.
 	SchedulerCount int32
-	// CloudControllerManagerCount is the number of API servers to create. Defaults to 0.
-	CloudControllerManagerCount int32
 	// KubeControllerManagerCount is the number of API servers to create. Defaults to 0.
 	KubeControllerManagerCount int32
 	// EncryptEtcdStorage is whether to encrypt the etcd volumes.
@@ -167,10 +164,8 @@ type NewClusterOptions struct {
 	// DNSZone is the DNS zone to use.
 	DNSZone string
 
-	// APILoadBalancerClass determines whether to use classic or network load balancers for the API
-	APILoadBalancerClass string
 	// APILoadBalancerType is the Kubernetes API loadbalancer type to use; "public" or "internal".
-	// Defaults to using DNS instead of a load balancer if using public topology and not gossip, otherwise "public".
+	// Defaults to using DNS instead of a load balancer if using public topology with DNS, otherwise "public".
 	APILoadBalancerType string
 	// APISSLCertificate is the SSL certificate to use for the API loadbalancer.
 	// Currently only supported in AWS.
@@ -179,17 +174,16 @@ type NewClusterOptions struct {
 	// InstanceManager specifies which manager to use for managing instances.
 	InstanceManager string
 
-	Image                       string
-	NodeImage                   string
-	ControlPlaneImage           string
-	BastionImage                string
-	ControlPlaneSizes           []string
-	APIServerSizes              []string
-	EtcdSizes                   []string
-	SchedulerSizes              []string
-	CloudControllerManagerSizes []string
-	KubeControllerManagerSizes  []string
-	NodeSizes                   []string
+	Image                      string
+	NodeImage                  string
+	ControlPlaneImage          string
+	BastionImage               string
+	ControlPlaneSizes          []string
+	APIServerSizes             []string
+	EtcdSizes                  []string
+	SchedulerSizes             []string
+	KubeControllerManagerSizes []string
+	NodeSizes                  []string
 }
 
 func (o *NewClusterOptions) InitDefaults() {
@@ -278,7 +272,7 @@ func NewCluster(opt *NewClusterOptions, clientset simple.Clientset) (*NewCluster
 		AllowContainerRegistry: true,
 	}
 	cluster.Spec.Kubelet = &api.KubeletConfigSpec{
-		AnonymousAuth: fi.PtrTo(false),
+		AnonymousAuth: new(false),
 	}
 
 	if len(opt.KubernetesFeatureGates) > 0 {
@@ -297,19 +291,16 @@ func NewCluster(opt *NewClusterOptions, clientset simple.Clientset) (*NewCluster
 		}
 
 		for _, featureGate := range opt.KubernetesFeatureGates {
-			enabled := true
-			if featureGate[0] == '+' {
-				featureGate = featureGate[1:]
+			featureGate, enabled, err := parseKubernetesFeatureGate(featureGate)
+			if err != nil {
+				return nil, err
 			}
-			if featureGate[0] == '-' {
-				enabled = false
-				featureGate = featureGate[1:]
-			}
-			cluster.Spec.Kubelet.FeatureGates[featureGate] = strconv.FormatBool(enabled)
-			cluster.Spec.KubeAPIServer.FeatureGates[featureGate] = strconv.FormatBool(enabled)
-			cluster.Spec.KubeControllerManager.FeatureGates[featureGate] = strconv.FormatBool(enabled)
-			cluster.Spec.KubeProxy.FeatureGates[featureGate] = strconv.FormatBool(enabled)
-			cluster.Spec.KubeScheduler.FeatureGates[featureGate] = strconv.FormatBool(enabled)
+			value := strconv.FormatBool(enabled)
+			cluster.Spec.Kubelet.FeatureGates[featureGate] = value
+			cluster.Spec.KubeAPIServer.FeatureGates[featureGate] = value
+			cluster.Spec.KubeControllerManager.FeatureGates[featureGate] = value
+			cluster.Spec.KubeProxy.FeatureGates[featureGate] = value
+			cluster.Spec.KubeScheduler.FeatureGates[featureGate] = value
 		}
 	}
 
@@ -367,17 +358,17 @@ func NewCluster(opt *NewClusterOptions, clientset simple.Clientset) (*NewCluster
 	case api.CloudProviderOpenstack:
 		cluster.Spec.CloudProvider.Openstack = &api.OpenstackSpec{
 			Router: &api.OpenstackRouter{
-				ExternalNetwork: fi.PtrTo(opt.OpenstackExternalNet),
+				ExternalNetwork: new(opt.OpenstackExternalNet),
 			},
 			BlockStorage: &api.OpenstackBlockStorageConfig{
-				Version:     fi.PtrTo("v3"),
-				IgnoreAZ:    fi.PtrTo(opt.OpenstackStorageIgnoreAZ),
+				Version:     new("v3"),
+				IgnoreAZ:    new(opt.OpenstackStorageIgnoreAZ),
 				ClusterName: opt.ClusterName,
 			},
 			Monitor: &api.OpenstackMonitor{
-				Delay:      fi.PtrTo("15s"),
-				Timeout:    fi.PtrTo("10s"),
-				MaxRetries: fi.PtrTo(3),
+				Delay:      new("15s"),
+				Timeout:    new("10s"),
+				MaxRetries: new(3),
 			},
 		}
 		initializeOpenstack(opt, cluster)
@@ -414,7 +405,7 @@ func NewCluster(opt *NewClusterOptions, clientset simple.Clientset) (*NewCluster
 		}
 		if cluster.GetCloudProvider() == api.CloudProviderAWS {
 			cluster.Spec.ServiceAccountIssuerDiscovery.EnableAWSOIDCProvider = true
-			cluster.Spec.IAM.UseServiceAccountExternalPermissions = fi.PtrTo(true)
+			cluster.Spec.IAM.UseServiceAccountExternalPermissions = new(true)
 		}
 	}
 
@@ -468,7 +459,7 @@ func NewCluster(opt *NewClusterOptions, clientset simple.Clientset) (*NewCluster
 		}
 		if cluster.GetCloudProvider() == api.CloudProviderAWS {
 			cluster.Spec.ServiceAccountIssuerDiscovery.EnableAWSOIDCProvider = true
-			cluster.Spec.IAM.UseServiceAccountExternalPermissions = fi.PtrTo(true)
+			cluster.Spec.IAM.UseServiceAccountExternalPermissions = new(true)
 		}
 	}
 
@@ -500,6 +491,66 @@ func NewCluster(opt *NewClusterOptions, clientset simple.Clientset) (*NewCluster
 		return nil, err
 	}
 
+	etcds, err := setupEtcdNodes(opt, cluster, zoneToSubnetsMap)
+	if err != nil {
+		return nil, err
+	}
+
+	schedulers, err := setupSchedulerNodes(opt, cluster, zoneToSubnetsMap)
+	if err != nil {
+		return nil, err
+	}
+
+	kcms, err := setupKCMNodes(opt, cluster, zoneToSubnetsMap)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build the Etcd clusters
+	{
+		cloudProvider := cluster.GetCloudProvider()
+		controlPlaneAZs := sets.NewString()
+		duplicateAZs := false
+
+		etcdMembersIGs := controlPlanes
+		if len(etcds) > 0 {
+			etcdMembersIGs = etcds
+		}
+
+		for _, ig := range etcdMembersIGs {
+			zones, err := model.FindZonesForInstanceGroup(cluster, ig)
+			if err != nil {
+				return nil, err
+			}
+			for _, zone := range zones {
+				if controlPlaneAZs.Has(zone) {
+					duplicateAZs = true
+				}
+				controlPlaneAZs.Insert(zone)
+			}
+		}
+
+		if duplicateAZs {
+			klog.Warningf("Running with etcd/control-plane nodes in the same AZs; redundancy will be reduced")
+		}
+
+		clusters := opt.EtcdClusters
+		if opt.Networking == "cilium-etcd" {
+			clusters = append(clusters, "cilium")
+		}
+
+		encryptEtcdStorage := false
+		if opt.EncryptEtcdStorage != nil {
+			encryptEtcdStorage = fi.ValueOf(opt.EncryptEtcdStorage)
+		} else if cloudProvider == api.CloudProviderAWS {
+			encryptEtcdStorage = true
+		}
+		for _, etcdCluster := range clusters {
+			etcd := createEtcdCluster(etcdCluster, etcdMembersIGs, encryptEtcdStorage, opt.EtcdStorageType)
+			cluster.Spec.EtcdClusters = append(cluster.Spec.EtcdClusters, etcd)
+		}
+	}
+
 	err = setupAPI(opt, cluster)
 	if err != nil {
 		return nil, err
@@ -507,6 +558,9 @@ func NewCluster(opt *NewClusterOptions, clientset simple.Clientset) (*NewCluster
 
 	instanceGroups := append([]*api.InstanceGroup(nil), controlPlanes...)
 	instanceGroups = append(instanceGroups, apiservers...)
+	instanceGroups = append(instanceGroups, etcds...)
+	instanceGroups = append(instanceGroups, schedulers...)
+	instanceGroups = append(instanceGroups, kcms...)
 	instanceGroups = append(instanceGroups, nodes...)
 	instanceGroups = append(instanceGroups, bastions...)
 
@@ -554,9 +608,7 @@ func NewCluster(opt *NewClusterOptions, clientset simple.Clientset) (*NewCluster
 					return nil, fmt.Errorf("etcd nodes requires the ExperimentalRoles feature flag to be enabled")
 				case g.Spec.Role.HasScheduler():
 					return nil, fmt.Errorf("scheduler nodes requires the ExperimentalRoles feature flag to be enabled")
-				case g.Spec.Role.HasCloudControllerManager():
-					return nil, fmt.Errorf("cloud-controller-manager nodes requires the ExperimentalRoles feature flag to be enabled")
-				case g.Spec.Role.HasKubControllerManager():
+				case g.Spec.Role.HasKubeControllerManager():
 					return nil, fmt.Errorf("kube-controller-manager nodes requires the ExperimentalRoles feature flag to be enabled")
 				}
 			}
@@ -625,6 +677,28 @@ func NewCluster(opt *NewClusterOptions, clientset simple.Clientset) (*NewCluster
 	return &result, nil
 }
 
+func parseKubernetesFeatureGate(featureGate string) (string, bool, error) {
+	featureGate = strings.TrimSpace(featureGate)
+	if featureGate == "" {
+		return "", false, fmt.Errorf("kubernetes feature gate must not be empty")
+	}
+
+	enabled := true
+	switch featureGate[0] {
+	case '+':
+		featureGate = strings.TrimSpace(featureGate[1:])
+	case '-':
+		enabled = false
+		featureGate = strings.TrimSpace(featureGate[1:])
+	}
+
+	if featureGate == "" {
+		return "", false, fmt.Errorf("kubernetes feature gate must include a feature name")
+	}
+
+	return featureGate, enabled, nil
+}
+
 func setupVPC(opt *NewClusterOptions, cluster *api.Cluster, cloud fi.Cloud) error {
 	ctx := context.TODO()
 	cluster.Spec.Networking.NetworkID = opt.NetworkID
@@ -647,10 +721,10 @@ func setupVPC(opt *NewClusterOptions, cluster *api.Cluster, cloud fi.Cloud) erro
 
 		if featureflag.Spotinst.Enabled() {
 			if opt.SpotinstProduct != "" {
-				cluster.Spec.CloudProvider.AWS.SpotinstProduct = fi.PtrTo(opt.SpotinstProduct)
+				cluster.Spec.CloudProvider.AWS.SpotinstProduct = new(opt.SpotinstProduct)
 			}
 			if opt.SpotinstOrientation != "" {
-				cluster.Spec.CloudProvider.AWS.SpotinstOrientation = fi.PtrTo(opt.SpotinstOrientation)
+				cluster.Spec.CloudProvider.AWS.SpotinstOrientation = new(opt.SpotinstOrientation)
 			}
 		}
 
@@ -695,10 +769,10 @@ func setupVPC(opt *NewClusterOptions, cluster *api.Cluster, cloud fi.Cloud) erro
 		}
 
 		if opt.OpenstackDNSServers != "" {
-			cluster.Spec.CloudProvider.Openstack.Router.DNSServers = fi.PtrTo(opt.OpenstackDNSServers)
+			cluster.Spec.CloudProvider.Openstack.Router.DNSServers = new(opt.OpenstackDNSServers)
 		}
 		if opt.OpenstackExternalSubnet != "" {
-			cluster.Spec.CloudProvider.Openstack.Router.ExternalSubnet = fi.PtrTo(opt.OpenstackExternalSubnet)
+			cluster.Spec.CloudProvider.Openstack.Router.ExternalSubnet = new(opt.OpenstackExternalSubnet)
 		}
 	case api.CloudProviderAzure:
 		// TODO(kenji): Find a right place for this.
@@ -779,7 +853,7 @@ func setupZones(opt *NewClusterOptions, cluster *api.Cluster, allZones sets.Stri
 			return nil, fmt.Errorf("linode cloud provider currently supports one region only")
 		}
 
-		// For Linode (Akamai) we pass regions via --zones.
+		// For Akamai (Linode) we pass regions via --zones.
 		region := opt.Zones[0]
 		subnet := model.FindSubnet(cluster, region)
 
@@ -970,28 +1044,27 @@ func setupControlPlane(opt *NewClusterOptions, cluster *api.Cluster, zoneToSubne
 	// The control-plane count is the number of control-plane zones unless explicitly set.
 	// We then round-robin around the zones.
 	{
-		controlPlaneCount := opt.ControlPlaneCount
 		controlPlaneZones := opt.ControlPlaneZones
-		if len(controlPlaneZones) != 0 {
-			if controlPlaneCount != 0 && controlPlaneCount < int32(len(controlPlaneZones)) {
-				return nil, fmt.Errorf("specified %d control-plane zones, but also requested %d control-plane nodes.  If specifying both, the count should match.", len(controlPlaneZones), controlPlaneCount)
+		var controlPlaneCount int32
+		if opt.ControlPlaneCount != nil {
+			controlPlaneCount = *opt.ControlPlaneCount
+			if len(controlPlaneZones) == 0 {
+				controlPlaneZones = opt.Zones
 			}
-
-			if controlPlaneCount == 0 {
-				// If control-plane count is not specified, default to the number of control-plane zones
-				controlPlaneCount = int32(len(controlPlaneZones))
+			if controlPlaneCount != 0 && len(opt.ControlPlaneZones) != 0 && controlPlaneCount < int32(len(opt.ControlPlaneZones)) {
+				return nil, fmt.Errorf("specified %d control-plane zones, but also requested %d control-plane nodes.  If specifying both, the count should match.", len(opt.ControlPlaneZones), controlPlaneCount)
 			}
 		} else {
-			// controlPlaneZones not set; default to same as node Zones
-			controlPlaneZones = opt.Zones
-
-			if controlPlaneCount == 0 {
-				// If control-plane count is not specified, default to 1
+			// Defaulting
+			if len(controlPlaneZones) != 0 {
+				controlPlaneCount = int32(len(controlPlaneZones))
+			} else {
+				controlPlaneZones = opt.Zones
 				controlPlaneCount = 1
 			}
 		}
 
-		if len(controlPlaneZones) == 0 {
+		if controlPlaneCount > 0 && len(controlPlaneZones) == 0 {
 			// Should be unreachable
 			return nil, fmt.Errorf("cannot determine control-plane zones")
 		}
@@ -1011,8 +1084,8 @@ func setupControlPlane(opt *NewClusterOptions, cluster *api.Cluster, zoneToSubne
 
 			g := &api.InstanceGroup{}
 			g.Spec.Role = api.InstanceGroupRoleControlPlane
-			g.Spec.MinSize = fi.PtrTo(int32(1))
-			g.Spec.MaxSize = fi.PtrTo(int32(1))
+			g.Spec.MinSize = new(int32(1))
+			g.Spec.MaxSize = new(int32(1))
 			g.ObjectMeta.Name = "control-plane-" + name
 
 			subnets := zoneToSubnetsMap[zone]
@@ -1048,46 +1121,6 @@ func setupControlPlane(opt *NewClusterOptions, cluster *api.Cluster, zoneToSubne
 			g.Spec.Image = opt.ControlPlaneImage
 
 			controlPlanes = append(controlPlanes, g)
-		}
-	}
-
-	// Build the Etcd clusters
-	{
-		controlPlaneAZs := sets.NewString()
-		duplicateAZs := false
-		for _, ig := range controlPlanes {
-			zones, err := model.FindZonesForInstanceGroup(cluster, ig)
-			if err != nil {
-				return nil, err
-			}
-			for _, zone := range zones {
-				if controlPlaneAZs.Has(zone) {
-					duplicateAZs = true
-				}
-
-				controlPlaneAZs.Insert(zone)
-			}
-		}
-
-		if duplicateAZs {
-			klog.Warningf("Running with control-plane nodes in the same AZs; redundancy will be reduced")
-		}
-
-		clusters := opt.EtcdClusters
-
-		if opt.Networking == "cilium-etcd" {
-			clusters = append(clusters, "cilium")
-		}
-
-		encryptEtcdStorage := false
-		if opt.EncryptEtcdStorage != nil {
-			encryptEtcdStorage = fi.ValueOf(opt.EncryptEtcdStorage)
-		} else if cloudProvider == api.CloudProviderAWS {
-			encryptEtcdStorage = true
-		}
-		for _, etcdCluster := range clusters {
-			etcd := createEtcdCluster(etcdCluster, controlPlanes, encryptEtcdStorage, opt.EtcdStorageType)
-			cluster.Spec.EtcdClusters = append(cluster.Spec.EtcdClusters, etcd)
 		}
 	}
 
@@ -1137,8 +1170,8 @@ func setupNodes(opt *NewClusterOptions, cluster *api.Cluster, zoneToSubnetsMap m
 
 		g := &api.InstanceGroup{}
 		g.Spec.Role = api.InstanceGroupRoleNode
-		g.Spec.MinSize = fi.PtrTo(nodeCount)
-		g.Spec.MaxSize = fi.PtrTo(nodeCount)
+		g.Spec.MinSize = new(nodeCount)
+		g.Spec.MaxSize = new(nodeCount)
 		g.ObjectMeta.Name = "nodes"
 
 		for _, zone := range opt.Zones {
@@ -1186,8 +1219,8 @@ func setupNodes(opt *NewClusterOptions, cluster *api.Cluster, zoneToSubnetsMap m
 
 		g := &api.InstanceGroup{}
 		g.Spec.Role = api.InstanceGroupRoleNode
-		g.Spec.MinSize = fi.PtrTo(count)
-		g.Spec.MaxSize = fi.PtrTo(count)
+		g.Spec.MinSize = new(count)
+		g.Spec.MaxSize = new(count)
 		g.ObjectMeta.Name = "nodes-" + zone
 
 		subnets := zoneToSubnetsMap[zone]
@@ -1239,7 +1272,7 @@ func setupKarpenterNodes(opt *NewClusterOptions) ([]*api.InstanceGroup, error) {
 	g.Spec.Manager = api.InstanceManagerKarpenter
 	g.ObjectMeta.Name = "nodes"
 	if opt.NodeCount > 0 {
-		g.Spec.MinSize = fi.PtrTo(opt.NodeCount)
+		g.Spec.MinSize = new(opt.NodeCount)
 	}
 
 	for i, size := range opt.NodeSizes {
@@ -1280,8 +1313,8 @@ func setupAPIServers(opt *NewClusterOptions, cluster *api.Cluster, zoneToSubnets
 
 		g := &api.InstanceGroup{}
 		g.Spec.Role = api.InstanceGroupRoleAPIServer
-		g.Spec.MinSize = fi.PtrTo(count)
-		g.Spec.MaxSize = fi.PtrTo(count)
+		g.Spec.MinSize = new(count)
+		g.Spec.MaxSize = new(count)
 		g.ObjectMeta.Name = "apiserver-" + zone
 
 		subnets := zoneToSubnetsMap[zone]
@@ -1319,8 +1352,6 @@ func setupNetworking(opt *NewClusterOptions, cluster *api.Cluster) error {
 		cluster.Spec.Networking.External = &api.ExternalNetworkingSpec{}
 	case "cni":
 		cluster.Spec.Networking.CNI = &api.CNINetworkingSpec{}
-	case "kopeio-vxlan", "kopeio":
-		cluster.Spec.Networking.Kopeio = &api.KopeioNetworkingSpec{}
 	case "flannel", "flannel-vxlan":
 		cluster.Spec.Networking.Flannel = &api.FlannelNetworkingSpec{
 			Backend: "vxlan",
@@ -1470,8 +1501,8 @@ func setupTopology(opt *NewClusterOptions, cluster *api.Cluster, allZones sets.S
 			bastionGroup := &api.InstanceGroup{}
 			bastionGroup.Spec.Role = api.InstanceGroupRoleBastion
 			bastionGroup.ObjectMeta.Name = "bastions"
-			bastionGroup.Spec.MaxSize = fi.PtrTo(int32(1))
-			bastionGroup.Spec.MinSize = fi.PtrTo(int32(1))
+			bastionGroup.Spec.MaxSize = new(int32(1))
+			bastionGroup.Spec.MinSize = new(int32(1))
 			bastions = append(bastions, bastionGroup)
 
 			if cluster.PublishesDNSRecords() {
@@ -1519,10 +1550,6 @@ func setupDNSTopology(opt *NewClusterOptions, cluster *api.Cluster) error {
 			// Use dns=public if zone is specified
 			cluster.Spec.Networking.Topology.DNS = api.DNSTypePublic
 		} else {
-			if cluster.UsesLegacyGossip() {
-				// Warn about using dns=none instead of Gossip
-				klog.Warningf("Gossip is deprecated, using None DNS instead")
-			}
 			// Default to dns=none instead of dns=public for all cloud providers
 			cluster.Spec.Networking.Topology.DNS = api.DNSTypeNone
 		}
@@ -1546,8 +1573,8 @@ func setupAPI(opt *NewClusterOptions, cluster *api.Cluster) error {
 	} else {
 		switch opt.Topology {
 		case api.TopologyPublic:
-			if cluster.UsesLegacyGossip() || cluster.UsesNoneDNS() {
-				// gossip DNS names don't work outside the cluster, so we use a LoadBalancer instead
+			if cluster.UsesNoneDNS() {
+				// there are no DNS records for the API, so we use a LoadBalancer instead
 				cluster.Spec.API.LoadBalancer = &api.LoadBalancerAccessSpec{}
 			} else {
 				cluster.Spec.API.DNS = &api.DNSAccessSpec{}
@@ -1577,15 +1604,7 @@ func setupAPI(opt *NewClusterOptions, cluster *api.Cluster) error {
 	}
 
 	if cluster.Spec.API.LoadBalancer != nil && cluster.Spec.API.LoadBalancer.Class == "" && cluster.GetCloudProvider() == api.CloudProviderAWS {
-		switch opt.APILoadBalancerClass {
-		case "classic":
-			klog.Warning("AWS Classic Load Balancer support for API is deprecated and should not be used for newly created clusters")
-			cluster.Spec.API.LoadBalancer.Class = api.LoadBalancerClassClassic
-		case "", "network":
-			cluster.Spec.API.LoadBalancer.Class = api.LoadBalancerClassNetwork
-		default:
-			return fmt.Errorf("unknown api-loadbalancer-class: %q", opt.APILoadBalancerClass)
-		}
+		cluster.Spec.API.LoadBalancer.Class = api.LoadBalancerClassNetwork
 	}
 
 	return nil
@@ -1608,14 +1627,14 @@ func initializeOpenstack(opt *NewClusterOptions, cluster *api.Cluster) {
 			LbMethod = "SOURCE_IP_PORT"
 		}
 		cluster.Spec.CloudProvider.Openstack.Loadbalancer = &api.OpenstackLoadbalancerConfig{
-			FloatingNetwork: fi.PtrTo(opt.OpenstackExternalNet),
-			Method:          fi.PtrTo(LbMethod),
-			Provider:        fi.PtrTo(provider),
-			UseOctavia:      fi.PtrTo(opt.OpenstackLBOctavia),
+			FloatingNetwork: new(opt.OpenstackExternalNet),
+			Method:          new(LbMethod),
+			Provider:        new(provider),
+			UseOctavia:      new(opt.OpenstackLBOctavia),
 		}
 
 		if opt.OpenstackLBSubnet != "" {
-			cluster.Spec.CloudProvider.Openstack.Loadbalancer.FloatingSubnet = fi.PtrTo(opt.OpenstackLBSubnet)
+			cluster.Spec.CloudProvider.Openstack.Loadbalancer.FloatingSubnet = new(opt.OpenstackLBSubnet)
 		}
 	}
 
@@ -1640,7 +1659,7 @@ func createEtcdCluster(etcdCluster string, controlPlanes []*api.InstanceGroup, e
 	etcd := api.EtcdClusterSpec{
 		Name: etcdCluster,
 		Manager: &api.EtcdManagerSpec{
-			BackupRetentionDays: fi.PtrTo[uint32](90),
+			BackupRetentionDays: new(uint32(90)),
 		},
 	}
 
@@ -1676,11 +1695,11 @@ func createEtcdCluster(etcdCluster string, controlPlanes []*api.InstanceGroup, e
 			m.EncryptedVolume = &encryptEtcdStorage
 		}
 		if len(etcdStorageType) > 0 {
-			m.VolumeType = fi.PtrTo(etcdStorageType)
+			m.VolumeType = new(etcdStorageType)
 		}
 		m.Name = names[i]
 
-		m.InstanceGroup = fi.PtrTo(ig.ObjectMeta.Name)
+		m.InstanceGroup = new(ig.ObjectMeta.Name)
 		etcd.Members = append(etcd.Members, m)
 	}
 
@@ -1724,36 +1743,19 @@ func defaultImage(cluster *api.Cluster, channel *api.Channel, architecture archi
 		}
 	}
 
-	if kubernetesVersion.LT(semver.MustParse("1.32.0")) {
-		switch cluster.GetCloudProvider() {
-		case api.CloudProviderDO:
-			return defaultDOImageJammy, nil
-		case api.CloudProviderHetzner:
-			return defaultHetznerImageJammy, nil
-		case api.CloudProviderScaleway:
-			return defaultScalewayImageJammy, nil
-		case api.CloudProviderLinode:
-			return defaultLinodeImageJammy, nil
-		case api.CloudProviderMetal:
-			return "dummy-metal-image", nil
-		case api.CloudProviderElemento:
-			return defaultElementoImageJammy, nil
-		}
-	} else {
-		switch cluster.GetCloudProvider() {
-		case api.CloudProviderDO:
-			return defaultDOImageNoble, nil
-		case api.CloudProviderHetzner:
-			return defaultHetznerImageNoble, nil
-		case api.CloudProviderScaleway:
-			return defaultScalewayImageNoble, nil
-		case api.CloudProviderLinode:
-			return defaultLinodeImageNoble, nil
-		case api.CloudProviderMetal:
-			return "dummy-metal-image", nil
-		case api.CloudProviderElemento:
-			return defaultElementoImageNoble, nil
-		}
+	switch cluster.GetCloudProvider() {
+	case api.CloudProviderDO:
+		return defaultDOImageNoble, nil
+	case api.CloudProviderHetzner:
+		return defaultHetznerImageNoble, nil
+	case api.CloudProviderScaleway:
+		return defaultScalewayImageNoble, nil
+	case api.CloudProviderLinode:
+		return defaultLinodeImageNoble, nil
+	case api.CloudProviderMetal:
+		return "dummy-metal-image", nil
+	case api.CloudProviderElemento:
+		return defaultElementoImageNoble, nil
 	}
 
 	return "", fmt.Errorf("unable to determine default image for cloud provider %q and architecture %q", cluster.GetCloudProvider(), architecture)
@@ -1823,4 +1825,142 @@ func discoveryUniverseID(ctx context.Context, keystore fi.Keystore) (string, err
 	}
 
 	return discoveryapi.ComputeUniverseIDFromCertificate(keyset.Primary.Certificate.Certificate), nil
+}
+
+func setupEtcdNodes(opt *NewClusterOptions, cluster *api.Cluster, zoneToSubnetsMap map[string][]*api.ClusterSubnetSpec) ([]*api.InstanceGroup, error) {
+	cloudProvider := cluster.GetCloudProvider()
+	var nodes []*api.InstanceGroup
+	numZones := len(opt.Zones)
+	nodeCount := opt.EtcdCount
+	if nodeCount == 0 {
+		return nodes, nil
+	}
+	countPerIG := nodeCount / int32(numZones)
+	remainder := int(nodeCount) % numZones
+	for i, zone := range opt.Zones {
+		count := countPerIG
+		if i < remainder {
+			count++
+		}
+		g := &api.InstanceGroup{}
+		g.Spec.Role = api.InstanceGroupRoleEtcd
+		g.Spec.MinSize = new(count)
+		g.Spec.MaxSize = new(count)
+		g.ObjectMeta.Name = "etcd-" + zone
+
+		subnets := zoneToSubnetsMap[zone]
+		if len(subnets) == 0 {
+			klog.Fatalf("subnet not found in zoneToSubnetsMap")
+		}
+		for _, subnet := range subnets {
+			g.Spec.Subnets = append(g.Spec.Subnets, subnet.Name)
+		}
+
+		if cloudProvider == api.CloudProviderGCE || cloudProvider == api.CloudProviderAzure {
+			g.Spec.Zones = []string{zone}
+		}
+
+		for i, size := range opt.EtcdSizes {
+			if i == 0 {
+				g.Spec.MachineType = size
+			}
+			if i > 0 {
+				klog.Fatalf("multiple machine types for IG group not currently supported")
+			}
+		}
+		nodes = append(nodes, g)
+	}
+	return nodes, nil
+}
+
+func setupSchedulerNodes(opt *NewClusterOptions, cluster *api.Cluster, zoneToSubnetsMap map[string][]*api.ClusterSubnetSpec) ([]*api.InstanceGroup, error) {
+	cloudProvider := cluster.GetCloudProvider()
+	var nodes []*api.InstanceGroup
+	numZones := len(opt.Zones)
+	nodeCount := opt.SchedulerCount
+	if nodeCount == 0 {
+		return nodes, nil
+	}
+	countPerIG := nodeCount / int32(numZones)
+	remainder := int(nodeCount) % numZones
+	for i, zone := range opt.Zones {
+		count := countPerIG
+		if i < remainder {
+			count++
+		}
+		g := &api.InstanceGroup{}
+		g.Spec.Role = api.InstanceGroupRoleScheduler
+		g.Spec.MinSize = new(count)
+		g.Spec.MaxSize = new(count)
+		g.ObjectMeta.Name = "scheduler-" + zone
+
+		subnets := zoneToSubnetsMap[zone]
+		if len(subnets) == 0 {
+			klog.Fatalf("subnet not found in zoneToSubnetsMap")
+		}
+		for _, subnet := range subnets {
+			g.Spec.Subnets = append(g.Spec.Subnets, subnet.Name)
+		}
+
+		if cloudProvider == api.CloudProviderGCE || cloudProvider == api.CloudProviderAzure {
+			g.Spec.Zones = []string{zone}
+		}
+
+		for i, size := range opt.SchedulerSizes {
+			if i == 0 {
+				g.Spec.MachineType = size
+			}
+			if i > 0 {
+				klog.Fatalf("multiple machine types for IG group not currently supported")
+			}
+		}
+		nodes = append(nodes, g)
+	}
+	return nodes, nil
+}
+
+func setupKCMNodes(opt *NewClusterOptions, cluster *api.Cluster, zoneToSubnetsMap map[string][]*api.ClusterSubnetSpec) ([]*api.InstanceGroup, error) {
+	cloudProvider := cluster.GetCloudProvider()
+	var nodes []*api.InstanceGroup
+	numZones := len(opt.Zones)
+	nodeCount := opt.KubeControllerManagerCount
+	if nodeCount == 0 {
+		return nodes, nil
+	}
+	countPerIG := nodeCount / int32(numZones)
+	remainder := int(nodeCount) % numZones
+	for i, zone := range opt.Zones {
+		count := countPerIG
+		if i < remainder {
+			count++
+		}
+		g := &api.InstanceGroup{}
+		g.Spec.Role = api.InstanceGroupRoleKubeControllerManager
+		g.Spec.MinSize = new(count)
+		g.Spec.MaxSize = new(count)
+		g.ObjectMeta.Name = "kcm-" + zone
+
+		subnets := zoneToSubnetsMap[zone]
+		if len(subnets) == 0 {
+			klog.Fatalf("subnet not found in zoneToSubnetsMap")
+		}
+		for _, subnet := range subnets {
+			g.Spec.Subnets = append(g.Spec.Subnets, subnet.Name)
+		}
+
+		if cloudProvider == api.CloudProviderGCE || cloudProvider == api.CloudProviderAzure {
+			g.Spec.Zones = []string{zone}
+		}
+
+		for i, size := range opt.KubeControllerManagerSizes {
+			if i == 0 {
+				g.Spec.MachineType = size
+			}
+			if i > 0 {
+				klog.Fatalf("multiple machine types for IG group not currently supported")
+			}
+		}
+		nodes = append(nodes, g)
+	}
+	return nodes, nil
 }

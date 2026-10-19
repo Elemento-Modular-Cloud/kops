@@ -370,12 +370,6 @@ resource "aws_iam_role_policy" "masters-externallb-example-com" {
   role   = aws_iam_role.masters-externallb-example-com.name
 }
 
-resource "aws_iam_role_policy" "nodes-externallb-example-com" {
-  name   = "nodes.externallb.example.com"
-  policy = file("${path.module}/data/aws_iam_role_policy_nodes.externallb.example.com_policy")
-  role   = aws_iam_role.nodes-externallb-example-com.name
-}
-
 resource "aws_internet_gateway" "externallb-example-com" {
   tags = {
     "KubernetesCluster"                            = "externallb.example.com"
@@ -976,7 +970,7 @@ terraform {
     aws = {
       "configuration_aliases" = [aws.files]
       "source"                = "hashicorp/aws"
-      "version"               = ">= 5.0.0"
+      "version"               = ">= 6.57.1"
     }
   }
 }

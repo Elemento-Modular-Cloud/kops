@@ -37,6 +37,8 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/gcetasks"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetznertasks"
+	"k8s.io/kops/upup/pkg/fi/cloudup/linode"
+	"k8s.io/kops/upup/pkg/fi/cloudup/linodetasks"
 	"k8s.io/kops/upup/pkg/fi/cloudup/openstack"
 	"k8s.io/kops/upup/pkg/fi/cloudup/openstacktasks"
 	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
@@ -127,6 +129,9 @@ func (b *MasterVolumeBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			case kops.CloudProviderElemento:
 				// Nothing special to do for Elemento (yet) , TODO in the future
 
+			case kops.CloudProviderLinode:
+				b.addLinodeVolume(c, name, volumeSize, zone, etcd, m, allMembers)
+
 			case kops.CloudProviderMetal:
 				// Nothing special to do for Metal (yet)
 
@@ -164,7 +169,7 @@ func (b *MasterVolumeBuilder) addAWSVolume(c *fi.CloudupModelBuilderContext, nam
 		return err
 	}
 
-	// The tags are how protokube knows to mount the volume and use it for etcd
+	// The tags are how etcd-manager knows to mount the volume and use it for etcd
 	tags := make(map[string]string)
 
 	// Apply all user defined labels on the volumes
@@ -185,22 +190,22 @@ func (b *MasterVolumeBuilder) addAWSVolume(c *fi.CloudupModelBuilderContext, nam
 	encrypted := fi.ValueOf(m.EncryptedVolume)
 
 	t := &awstasks.EBSVolume{
-		Name:      fi.PtrTo(name),
+		Name:      new(name),
 		Lifecycle: b.Lifecycle,
 
-		AvailabilityZone: fi.PtrTo(zone),
-		SizeGB:           fi.PtrTo(int32(volumeSize)),
+		AvailabilityZone: new(zone),
+		SizeGB:           new(int32(volumeSize)),
 		VolumeType:       ec2types.VolumeType(volumeType),
 		KmsKeyId:         m.KmsKeyID,
-		Encrypted:        fi.PtrTo(encrypted),
+		Encrypted:        new(encrypted),
 		Tags:             tags,
 	}
 	switch ec2types.VolumeType(volumeType) {
 	case ec2types.VolumeTypeGp3:
-		t.VolumeThroughput = fi.PtrTo(int32(volumeThroughput))
+		t.VolumeThroughput = new(int32(volumeThroughput))
 		fallthrough
 	case ec2types.VolumeTypeIo1, ec2types.VolumeTypeIo2:
-		t.VolumeIops = fi.PtrTo(int32(volumeIops))
+		t.VolumeIops = new(int32(volumeIops))
 	}
 
 	c.AddTask(t)
@@ -248,10 +253,10 @@ func (b *MasterVolumeBuilder) addDOVolume(c *fi.CloudupModelBuilderContext, name
 	tags[do.TagKubernetesClusterNamePrefix] = do.SafeClusterName(b.Cluster.ObjectMeta.Name)
 
 	t := &dotasks.Volume{
-		Name:      fi.PtrTo(name),
+		Name:      new(name),
 		Lifecycle: b.Lifecycle,
-		SizeGB:    fi.PtrTo(int64(volumeSize)),
-		Region:    fi.PtrTo(zone),
+		SizeGB:    new(int64(volumeSize)),
+		Region:    new(zone),
 		Tags:      tags,
 	}
 
@@ -274,7 +279,7 @@ func (b *MasterVolumeBuilder) addGCEVolume(c *fi.CloudupModelBuilderContext, pre
 
 	clusterLabel := gce.LabelForCluster(b.ClusterName())
 
-	// The tags are how protokube knows to mount the volume and use it for etcd
+	// The tags are how etcd-manager knows to mount the volume and use it for etcd
 	tags := make(map[string]string)
 	tags[clusterLabel.Key] = clusterLabel.Value
 	tags[gce.GceLabelNameRolePrefix+"master"] = "master" // Can't start with a number
@@ -291,20 +296,20 @@ func (b *MasterVolumeBuilder) addGCEVolume(c *fi.CloudupModelBuilderContext, pre
 	volumeThroughput := fi.ValueOf(m.VolumeThroughput)
 
 	t := &gcetasks.Disk{
-		Name:      fi.PtrTo(name),
+		Name:      new(name),
 		Lifecycle: b.Lifecycle,
 
-		Zone:       fi.PtrTo(zone),
-		SizeGB:     fi.PtrTo(int64(volumeSize)),
-		VolumeType: fi.PtrTo(volumeType),
+		Zone:       new(zone),
+		SizeGB:     new(int64(volumeSize)),
+		VolumeType: new(volumeType),
 		Labels:     tags,
 	}
 
 	if volumeIops > 0 {
-		t.VolumeIops = fi.PtrTo(int64(volumeIops))
+		t.VolumeIops = new(int64(volumeIops))
 	}
 	if volumeThroughput > 0 {
-		t.VolumeThroughput = fi.PtrTo(int64(volumeThroughput))
+		t.VolumeThroughput = new(int64(volumeThroughput))
 	}
 
 	c.AddTask(t)
@@ -317,7 +322,7 @@ func (b *MasterVolumeBuilder) addHetznerVolume(c *fi.CloudupModelBuilderContext,
 	tags[hetzner.TagKubernetesVolumeRole] = etcd.Name
 
 	t := &hetznertasks.Volume{
-		Name:      fi.PtrTo(name),
+		Name:      new(name),
 		Lifecycle: b.Lifecycle,
 		Size:      int(volumeSize),
 		Location:  zone,
@@ -329,7 +334,7 @@ func (b *MasterVolumeBuilder) addHetznerVolume(c *fi.CloudupModelBuilderContext,
 func (b *MasterVolumeBuilder) addOpenstackVolume(c *fi.CloudupModelBuilderContext, name string, volumeSize int32, zone string, etcd kops.EtcdClusterSpec, m kops.EtcdMemberSpec, allMembers []string) error {
 	volumeType := fi.ValueOf(m.VolumeType)
 
-	// The tags are how protokube knows to mount the volume and use it for etcd
+	// The tags are how etcd-manager knows to mount the volume and use it for etcd
 	tags := make(map[string]string)
 	// Apply all user defined labels on the volumes
 	for k, v := range b.Cluster.Spec.CloudLabels {
@@ -346,10 +351,10 @@ func (b *MasterVolumeBuilder) addOpenstackVolume(c *fi.CloudupModelBuilderContex
 		zone = fi.ValueOf(b.Cluster.Spec.CloudProvider.Openstack.BlockStorage.OverrideAZ)
 	}
 	t := &openstacktasks.Volume{
-		Name:             fi.PtrTo(name),
-		AvailabilityZone: fi.PtrTo(zone),
-		VolumeType:       fi.PtrTo(volumeType),
-		SizeGB:           fi.PtrTo(int64(volumeSize)),
+		Name:             new(name),
+		AvailabilityZone: new(zone),
+		VolumeType:       new(volumeType),
+		SizeGB:           new(int64(volumeSize)),
 		Tags:             tags,
 		Lifecycle:        b.Lifecycle,
 	}
@@ -371,22 +376,22 @@ func (b *MasterVolumeBuilder) addAzureVolume(
 	if volumeType == "" {
 		volumeType = DefaultAZUREEtcdVolumeType
 	}
-	// The tags are use by Protokube to mount the volume and use it for etcd.
+	// The tags are how etcd-manager knows to mount the volume and use it for etcd.
 	tags := map[string]*string{
 		// This is the configuration of the etcd cluster.
-		azure.TagNameEtcdClusterPrefix + etcd.Name: fi.PtrTo(m.Name + "/" + strings.Join(allMembers, ",")),
+		azure.TagNameEtcdClusterPrefix + etcd.Name: new(m.Name + "/" + strings.Join(allMembers, ",")),
 		// This says "only mount on a control plane node".
-		azure.TagNameRolePrefix + azure.TagRoleControlPlane: fi.PtrTo("1"),
-		azure.TagNameRolePrefix + azure.TagRoleMaster:       fi.PtrTo("1"),
+		azure.TagNameRolePrefix + azure.TagRoleControlPlane: new("1"),
+		azure.TagNameRolePrefix + azure.TagRoleMaster:       new("1"),
 		// We always add an owned tags (these can't be shared).
 		// Use dash (_) as a splitter. Other CSPs use slash (/), but slash is not
 		// allowed as a tag key in Azure.
-		"kubernetes.io_cluster_" + b.Cluster.ObjectMeta.Name: fi.PtrTo("owned"),
+		"kubernetes.io_cluster_" + b.Cluster.ObjectMeta.Name: new("owned"),
 	}
 
 	// Apply all user defined labels on the volumes.
 	for k, v := range b.Cluster.Spec.CloudLabels {
-		tags[k] = fi.PtrTo(v)
+		tags[k] = new(v)
 	}
 
 	zoneNumber, err := azure.ZoneToAvailabilityZoneNumber(zone)
@@ -396,15 +401,15 @@ func (b *MasterVolumeBuilder) addAzureVolume(
 
 	// TODO(kenji): Respect m.EncryptedVolume.
 	t := &azuretasks.Disk{
-		Name:      fi.PtrTo(name),
+		Name:      new(name),
 		Lifecycle: b.Lifecycle,
 		// We cannot use AzureModelContext.LinkToResourceGroup() here because of cyclic dependency.
 		ResourceGroup: &azuretasks.ResourceGroup{
-			Name: fi.PtrTo(b.Cluster.AzureResourceGroupName()),
+			Name: new(b.Cluster.AzureResourceGroupName()),
 		},
-		SizeGB:     fi.PtrTo(volumeSize),
+		SizeGB:     new(volumeSize),
 		Tags:       tags,
-		VolumeType: fi.PtrTo(armcompute.DiskStorageAccountTypes(volumeType)),
+		VolumeType: new(armcompute.DiskStorageAccountTypes(volumeType)),
 		Zones:      []*string{&zoneNumber},
 	}
 	c.AddTask(t)
@@ -424,12 +429,29 @@ func (b *MasterVolumeBuilder) addScalewayVolume(c *fi.CloudupModelBuilderContext
 	}
 
 	t := &scalewaytasks.Volume{
-		Name:      fi.PtrTo(name),
+		Name:      new(name),
 		Lifecycle: b.Lifecycle,
-		Size:      fi.PtrTo(int64(volumeSize) * 1e9),
+		Size:      new(int64(volumeSize) * 1e9),
 		Zone:      &zone,
 		Tags:      volumeTags,
-		Type:      fi.PtrTo(string(instance.VolumeVolumeTypeBSSD)),
+		Type:      new(string(instance.VolumeVolumeTypeBSSD)),
+	}
+	c.AddTask(t)
+}
+
+func (b *MasterVolumeBuilder) addLinodeVolume(c *fi.CloudupModelBuilderContext, name string, volumeSize int32, zone string, etcd kops.EtcdClusterSpec, m kops.EtcdMemberSpec, allMembers []string) {
+	tags := []string{
+		fmt.Sprintf("%s:%s", linode.TagKubernetesClusterName, linode.NormalizeLinodeLabel(b.Cluster.ObjectMeta.Name)),
+		fmt.Sprintf("%s:%s", linode.TagKubernetesInstanceGroup, linode.NormalizeLinodeLabel(fi.ValueOf(m.InstanceGroup))),
+		fmt.Sprintf("%s:%s", linode.TagKubernetesVolumeRole, linode.NormalizeLinodeLabel(etcd.Name)),
+	}
+
+	t := &linodetasks.Volume{
+		Name:      new(name),
+		Lifecycle: b.Lifecycle,
+		SizeGB:    new(int(volumeSize)),
+		Region:    new(zone),
+		Tags:      tags,
 	}
 	c.AddTask(t)
 }

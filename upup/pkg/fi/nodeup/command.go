@@ -39,6 +39,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"go.uber.org/multierr"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog/v2"
 	"k8s.io/kops/nodeup/pkg/model"
 	"k8s.io/kops/nodeup/pkg/model/networking"
@@ -47,20 +48,21 @@ import (
 	"k8s.io/kops/pkg/apis/nodeup"
 	"k8s.io/kops/pkg/assets"
 	"k8s.io/kops/pkg/bootstrap"
+	"k8s.io/kops/pkg/bootstrap/awsbootstrap"
 	"k8s.io/kops/pkg/bootstrap/pkibootstrap"
 	"k8s.io/kops/pkg/configserver"
 	"k8s.io/kops/pkg/kopscontrollerclient"
 	"k8s.io/kops/pkg/wellknownports"
 	"k8s.io/kops/upup/pkg/fi"
-	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
-	"k8s.io/kops/upup/pkg/fi/cloudup/azure"
-	"k8s.io/kops/upup/pkg/fi/cloudup/do"
-	"k8s.io/kops/upup/pkg/fi/cloudup/gce/tpm/gcetpmsigner"
-	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner"
-	"k8s.io/kops/upup/pkg/fi/cloudup/linode"
-	"k8s.io/kops/upup/pkg/fi/cloudup/openstack"
-	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
+	"k8s.io/kops/upup/pkg/fi/cloudup/azure/azuremetadata"
+	"k8s.io/kops/upup/pkg/fi/cloudup/do/dometadata"
 	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
+	"k8s.io/kops/upup/pkg/fi/cloudup/gce/tpm/gcetpmsigner"
+	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner/hetznermetadata"
+	"k8s.io/kops/upup/pkg/fi/cloudup/linode/linodemetadata"
+	"k8s.io/kops/upup/pkg/fi/cloudup/openstack/openstackmetadata"
+	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway/scalewaymetadata"
+	"k8s.io/kops/upup/pkg/fi/nodeup/awsup"
 	"k8s.io/kops/upup/pkg/fi/nodeup/local"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
 	"k8s.io/kops/upup/pkg/fi/secrets"
@@ -163,7 +165,7 @@ func (c *NodeUpCommand) Run(out io.Writer) error {
 		}
 	}
 
-	err = evaluateSpec(&nodeupConfig, bootConfig.CloudProvider)
+	err = evaluateSpec(&nodeupConfig, bootConfig.CloudProvider, region)
 	if err != nil {
 		return err
 	}
@@ -187,14 +189,14 @@ func (c *NodeUpCommand) Run(out io.Writer) error {
 		}
 	}
 
-	var cloud fi.Cloud
+	// cloud holds the AWS clients, on AWS only.
+	var cloud *awsup.Cloud
 
 	if bootConfig.CloudProvider == api.CloudProviderAWS {
-		awsCloud, err := awsup.NewAWSCloud(region, nil)
+		cloud, err = awsup.NewCloud(ctx, region)
 		if err != nil {
 			return err
 		}
-		cloud = awsCloud
 	}
 
 	modelContext := &model.NodeupModelContext{
@@ -268,9 +270,8 @@ func (c *NodeUpCommand) Run(out io.Writer) error {
 		// If Nvidia is enabled in the cluster, check if this instance has support for it.
 		nvidia := modelContext.NodeupConfig.ContainerdConfig.NvidiaGPU
 		if nvidia != nil && fi.ValueOf(nvidia.Enabled) {
-			awsCloud := cloud.(awsup.AWSCloud)
 			// Get the instance type's detailed information.
-			instanceType, err := awsup.GetMachineTypeInfo(awsCloud, ec2types.InstanceType(modelContext.MachineType))
+			instanceType, err := cloud.GetMachineTypeInfo(ctx, ec2types.InstanceType(modelContext.MachineType))
 			if err != nil {
 				return err
 			}
@@ -300,7 +301,6 @@ func (c *NodeUpCommand) Run(out io.Writer) error {
 	loader.Builders = append(loader.Builders, &model.UpdateServiceBuilder{NodeupModelContext: modelContext})
 	loader.Builders = append(loader.Builders, &model.VolumesBuilder{NodeupModelContext: modelContext})
 	loader.Builders = append(loader.Builders, &model.ContainerdBuilder{NodeupModelContext: modelContext})
-	loader.Builders = append(loader.Builders, &model.ProtokubeBuilder{NodeupModelContext: modelContext})
 	loader.Builders = append(loader.Builders, &model.ChannelsBuilder{NodeupModelContext: modelContext})
 	loader.Builders = append(loader.Builders, &model.CloudConfigBuilder{NodeupModelContext: modelContext})
 	loader.Builders = append(loader.Builders, &model.FileAssetsBuilder{NodeupModelContext: modelContext})
@@ -377,25 +377,28 @@ func (c *NodeUpCommand) Run(out io.Writer) error {
 
 	context, err := fi.NewNodeupContext(ctx, target, keyStore, &bootConfig, &nodeupConfig, taskMap)
 	if err != nil {
-		klog.Exitf("error building context: %v", err)
+		return fmt.Errorf("error building context: %w", err)
 	}
 
 	var options fi.RunTasksOptions
 	options.InitDefaults()
 
+	// Return rather than exit, so that the retry loop in cmd/nodeup gets to run:
+	// kops-configuration.service is Type=oneshot, so a bootstrap that exits here is never
+	// retried and the node never joins the cluster.
 	err = context.RunTasks(options)
 	if err != nil {
-		klog.Exitf("error running tasks: %v", err)
+		return fmt.Errorf("error running tasks: %w", err)
 	}
 
 	err = target.Finish(taskMap)
 	if err != nil {
-		klog.Exitf("error closing target: %v", err)
+		return fmt.Errorf("error closing target: %w", err)
 	}
 
 	if nodeupConfig.EnableLifecycleHook {
 		if bootConfig.CloudProvider == api.CloudProviderAWS {
-			err := completeWarmingLifecycleAction(ctx, cloud.(awsup.AWSCloud), modelContext)
+			err := completeWarmingLifecycleAction(ctx, cloud, modelContext)
 			if err != nil {
 				return fmt.Errorf("failed to complete lifecylce action: %w", err)
 			}
@@ -427,11 +430,10 @@ func getMachineType(ctx context.Context) (string, error) {
 	return string(instanceTypeName), err
 }
 
-func completeWarmingLifecycleAction(ctx context.Context, cloud awsup.AWSCloud, modelContext *model.NodeupModelContext) error {
+func completeWarmingLifecycleAction(ctx context.Context, cloud *awsup.Cloud, modelContext *model.NodeupModelContext) error {
 	asgName := modelContext.BootConfig.InstanceGroupName + "." + modelContext.NodeupConfig.ClusterName
 	hookName := "kops-warmpool"
-	svc := cloud.Autoscaling()
-	hooks, err := svc.DescribeLifecycleHooks(ctx, &autoscaling.DescribeLifecycleHooksInput{
+	hooks, err := cloud.DescribeLifecycleHooks(ctx, &autoscaling.DescribeLifecycleHooksInput{
 		AutoScalingGroupName: &asgName,
 		LifecycleHookNames:   []string{hookName},
 	})
@@ -441,11 +443,11 @@ func completeWarmingLifecycleAction(ctx context.Context, cloud awsup.AWSCloud, m
 
 	if len(hooks.LifecycleHooks) > 0 {
 		klog.Info("Found ASG lifecycle hook")
-		_, err := svc.CompleteLifecycleAction(ctx, &autoscaling.CompleteLifecycleActionInput{
+		_, err := cloud.CompleteLifecycleAction(ctx, &autoscaling.CompleteLifecycleActionInput{
 			AutoScalingGroupName:  &asgName,
 			InstanceId:            &modelContext.InstanceID,
 			LifecycleHookName:     &hookName,
-			LifecycleActionResult: fi.PtrTo("CONTINUE"),
+			LifecycleActionResult: new("CONTINUE"),
 		})
 		if err != nil {
 			return fmt.Errorf("failed to complete lifecycle hook %q for %q: %v", hookName, modelContext.InstanceID, err)
@@ -457,8 +459,8 @@ func completeWarmingLifecycleAction(ctx context.Context, cloud awsup.AWSCloud, m
 	return nil
 }
 
-func evaluateSpec(nodeupConfig *nodeup.Config, cloudProvider api.CloudProviderID) error {
-	hostnameOverride, err := evaluateHostnameOverride(cloudProvider)
+func evaluateSpec(nodeupConfig *nodeup.Config, cloudProvider api.CloudProviderID, region string) error {
+	hostnameOverride, err := evaluateHostnameOverride(cloudProvider, nodeupConfig.UseIPBasedNodeNames, region)
 	if err != nil {
 		return err
 	}
@@ -476,15 +478,45 @@ func evaluateSpec(nodeupConfig *nodeup.Config, cloudProvider api.CloudProviderID
 	return nil
 }
 
-func evaluateHostnameOverride(cloudProvider api.CloudProviderID) (string, error) {
+func evaluateHostnameOverride(cloudProvider api.CloudProviderID, useIPBasedNodeNames bool, region string) (string, error) {
 	switch cloudProvider {
 	case api.CloudProviderAWS:
 		instanceIDBytes, err := vfs.Context.ReadFile("metadata://aws/meta-data/instance-id")
 		if err != nil {
 			return "", fmt.Errorf("error reading instance-id from AWS metadata: %v", err)
 		}
+		instanceID := string(instanceIDBytes)
 
-		return string(instanceIDBytes), nil
+		if !useIPBasedNodeNames {
+			return instanceID, nil
+		}
+
+		// The node name is the DNS name that EC2 generates for IP-named instances, built from the
+		// primary private IPv4 address. kops-controller derives it with the same formula when
+		// issuing certificates, so the two always agree. IMDS local-hostname is not usable for
+		// this: with a custom DHCP domain it differs from the generated name.
+		//
+		// An instance launched with a resource-based hostname keeps a resource-based name (it can
+		// only change while the instance is stopped), so an IP-based node name would not match its
+		// EC2 hostname; fail rather than join a misconfigured instance.
+		hostnameBytes, err := vfs.Context.ReadFile("metadata://aws/meta-data/local-hostname")
+		if err != nil {
+			return "", fmt.Errorf("error reading local-hostname from AWS metadata: %v", err)
+		}
+		if strings.HasPrefix(string(hostnameBytes), instanceID) {
+			return "", fmt.Errorf("instance %s was launched with a resource-based hostname; useIPBasedNodeNames requires subnets that assign IP-based hostnames", instanceID)
+		}
+
+		localIPv4Bytes, err := vfs.Context.ReadFile("metadata://aws/meta-data/local-ipv4")
+		if err != nil {
+			return "", fmt.Errorf("error reading local-ipv4 from AWS metadata: %v", err)
+		}
+		localIPv4 := string(localIPv4Bytes)
+		if net.ParseIP(localIPv4).To4() == nil {
+			return "", fmt.Errorf("local-ipv4 from AWS metadata is not a valid IPv4 address: %q", localIPv4)
+		}
+
+		return awsbootstrap.PrivateDNSName(localIPv4, region), nil
 
 	case api.CloudProviderGCE:
 		// This lets us tolerate broken hostnames (i.e. systemd)
@@ -511,12 +543,12 @@ func evaluateHostnameOverride(cloudProvider api.CloudProviderID) (string, error)
 
 		return hostname, nil
 	case api.CloudProviderLinode:
-		label, err := linode.GetMetadataValue(context.TODO(), "label")
+		label, err := linodemetadata.GetMetadataValue(context.TODO(), "label")
 		if err != nil {
 			return "", fmt.Errorf("error reading hostname from Linode metadata: %v", err)
 		}
 
-		// Linode cloud-init does not set the OS hostname.
+		// Akamai (Linode) cloud-init does not set the OS hostname.
 		// Set it here so the OS hostname matches the kubelet hostname override.
 		if err := os.WriteFile("/etc/hostname", []byte(label+"\n"), 0o644); err != nil { //nolint:gosec // /etc/hostname is conventionally world-readable system configuration.
 			klog.Warningf("Failed to write /etc/hostname: %v", err)
@@ -580,16 +612,19 @@ func modprobe(module string) error {
 // and used by some components to load its recommended modules.
 // TODO: Move to tasks architecture
 func loadKernelModules(context *model.NodeupModelContext, distribution distributions.Distribution) error {
+	var failed []string
 	if context.NodeupConfig.Networking.Kindnet != nil {
 		err := modprobe("nfnetlink_queue")
 		if err != nil {
 			klog.Warningf("error loading nfnetlink_queue module: %v", err)
+			failed = append(failed, "nfnetlink_queue")
 		}
 	} else {
 		err := modprobe("br_netfilter")
 		if err != nil {
 			// TODO: Return error in 1.11 (too risky for 1.10)
 			klog.Warningf("error loading br_netfilter module: %v", err)
+			failed = append(failed, "br_netfilter")
 		}
 	}
 	if distribution.ForceNftables() {
@@ -604,6 +639,23 @@ func loadKernelModules(context *model.NodeupModelContext, distribution distribut
 		for _, mod := range []string{"nf_tables", "nf_conntrack", "ip_set"} {
 			if err := modprobe(mod); err != nil {
 				klog.Warningf("error loading %s module: %v", mod, err)
+				failed = append(failed, mod)
+			}
+		}
+		// A module that is missing rather than merely unloaded means the image
+		// never got kernel-modules-extra, which is where ip_set and br_netfilter
+		// live alongside nft_compat and the xt_* matches that iptables-nft
+		// autoloads. Without it every iptables-nft rule carrying an xt match
+		// fails and the masquerade and CNI chains are left silently empty.
+		if len(failed) > 0 {
+			if err := installKernelModulesExtra(); err != nil {
+				klog.Warningf("error installing kernel-modules-extra: %v", err)
+			} else {
+				for _, mod := range failed {
+					if err := modprobe(mod); err != nil {
+						klog.Warningf("error loading %s module after installing kernel-modules-extra: %v", mod, err)
+					}
+				}
 			}
 		}
 	} else {
@@ -622,11 +674,37 @@ func loadKernelModules(context *model.NodeupModelContext, distribution distribut
 	return nil
 }
 
+// installKernelModulesExtra installs the kernel-modules-extra package matching the
+// running kernel. The RHEL10 and Rocky10 images drop it from the iptables-nft
+// dependency chain, so nft_compat, the xt_* matches, ip_set and br_netfilter are
+// simply absent from a freshly booted node.
+//
+// The package is pinned to the running kernel release because an unpinned install
+// resolves to the newest build in the repo, whose modules land under a /lib/modules
+// directory we have not booted, leaving the running kernel just as empty.
+//
+// TODO: Move to tasks architecture along with loadKernelModules. It has to happen
+// here for now because the modprobes above run before any task does.
+func installKernelModulesExtra() error {
+	release, err := os.ReadFile("/proc/sys/kernel/osrelease")
+	if err != nil {
+		return fmt.Errorf("error reading kernel release: %w", err)
+	}
+
+	pkg := "kernel-modules-extra-" + strings.TrimSpace(string(release))
+	klog.Infof("Installing %s", pkg)
+	cmd := exec.Command("/usr/bin/dnf", "install", "-y", pkg)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("error installing %s (%v): %s", pkg, err, string(output))
+	}
+	return nil
+}
+
 // getRegion queries the cloud provider for the region.
 func getRegion(ctx context.Context, bootConfig *nodeup.BootConfig) (string, error) {
 	switch bootConfig.CloudProvider {
 	case api.CloudProviderAWS:
-		region, err := awsup.RegionFromMetadata(ctx)
+		region, err := awsbootstrap.RegionFromMetadata(ctx)
 		if err != nil {
 			return "", err
 		}
@@ -637,13 +715,28 @@ func getRegion(ctx context.Context, bootConfig *nodeup.BootConfig) (string, erro
 	return "", nil
 }
 
+// bootstrapTimeout is how long we keep asking kops-controller for our node configuration
+// before giving up. It has to cover a control plane that is still coming up.
+const bootstrapTimeout = 45 * time.Minute
+
+// perServerBootstrapBackoff is how long a single server is tried before we move on to the
+// next one. Roughly a minute, so that a list of servers is traversed promptly while still
+// riding out a brief blip on a server that is otherwise healthy.
+var perServerBootstrapBackoff = wait.Backoff{
+	Duration: 1 * time.Second,
+	Factor:   2,
+	Jitter:   0.1,
+	Cap:      15 * time.Second,
+	Steps:    8,
+}
+
 // getNodeConfigFromServers queries kops-controllers for our node's configuration.
 func getNodeConfigFromServers(ctx context.Context, bootConfig *nodeup.BootConfig, region string) (*nodeup.BootstrapResponse, error) {
 	var authenticator bootstrap.Authenticator
 
 	switch bootConfig.CloudProvider {
 	case api.CloudProviderAWS:
-		a, err := awsup.NewAWSAuthenticator(ctx, region)
+		a, err := awsbootstrap.NewAWSAuthenticator(ctx, region)
 		if err != nil {
 			return nil, err
 		}
@@ -655,31 +748,31 @@ func getNodeConfigFromServers(ctx context.Context, bootConfig *nodeup.BootConfig
 		}
 		authenticator = a
 	case api.CloudProviderHetzner:
-		a, err := hetzner.NewHetznerAuthenticator()
+		a, err := hetznermetadata.NewHetznerAuthenticator()
 		if err != nil {
 			return nil, err
 		}
 		authenticator = a
 	case api.CloudProviderOpenstack:
-		a, err := openstack.NewOpenstackAuthenticator()
+		a, err := openstackmetadata.NewOpenstackAuthenticator()
 		if err != nil {
 			return nil, err
 		}
 		authenticator = a
 	case api.CloudProviderDO:
-		a, err := do.NewAuthenticator()
+		a, err := dometadata.NewAuthenticator()
 		if err != nil {
 			return nil, err
 		}
 		authenticator = a
 	case api.CloudProviderScaleway:
-		a, err := scaleway.NewScalewayAuthenticator()
+		a, err := scalewaymetadata.NewScalewayAuthenticator()
 		if err != nil {
 			return nil, err
 		}
 		authenticator = a
 	case api.CloudProviderAzure:
-		a, err := azure.NewAzureAuthenticator()
+		a, err := azuremetadata.NewAzureAuthenticator()
 		if err != nil {
 			return nil, err
 		}
@@ -699,7 +792,7 @@ func getNodeConfigFromServers(ctx context.Context, bootConfig *nodeup.BootConfig
 		}
 		authenticator = a
 	case api.CloudProviderLinode:
-		a, err := linode.NewLinodeAuthenticator()
+		a, err := linodemetadata.NewLinodeAuthenticator()
 		if err != nil {
 			return nil, err
 		}
@@ -729,33 +822,49 @@ func getNodeConfigFromServers(ctx context.Context, bootConfig *nodeup.BootConfig
 	client := kopscontrollerclient.NewWithTLSServerName(authenticator, []byte(bootConfig.ConfigServer.CACertificates), url.URL{}, bootConfig.ConfigServer.TLSServerName)
 	defer client.Close()
 
-	var merr error
-	for _, server := range bootConfig.ConfigServer.Servers {
-		u, err := url.Parse(server)
-		if err != nil {
-			merr = multierr.Append(merr, fmt.Errorf("unable to parse configuration server url %q: %w", server, err))
-			continue
-		}
-		client.BaseURL = *u
+	// Any one of these servers may be permanently unreachable from this node -- an IPv6-only
+	// cluster lists the load balancer's IPv4 address alongside its IPv6 one, and only the
+	// latter is routable from the nodes. So give each server a short turn and keep cycling
+	// through the list, rather than spending the whole budget on whichever happens to sort first.
+	client.Backoff = perServerBootstrapBackoff
 
-		request := nodeup.BootstrapRequest{
-			APIVersion:        nodeup.BootstrapAPIVersion,
-			IncludeNodeConfig: true,
+	deadline := time.Now().Add(bootstrapTimeout)
+	for {
+		var merr error
+		for _, server := range bootConfig.ConfigServer.Servers {
+			u, err := url.Parse(server)
+			if err != nil {
+				merr = multierr.Append(merr, fmt.Errorf("unable to parse configuration server url %q: %w", server, err))
+				continue
+			}
+			client.BaseURL = *u
+
+			request := nodeup.BootstrapRequest{
+				APIVersion:        nodeup.BootstrapAPIVersion,
+				IncludeNodeConfig: true,
+			}
+
+			if challengeListener != nil {
+				request.Challenge = challengeListener.CreateChallenge()
+			}
+
+			var resp nodeup.BootstrapResponse
+			err = client.Query(ctx, &request, &resp)
+			if err != nil {
+				merr = multierr.Append(merr, err)
+				continue
+			}
+			return &resp, nil
 		}
 
-		if challengeListener != nil {
-			request.Challenge = challengeListener.CreateChallenge()
+		if ctx.Err() != nil {
+			return nil, multierr.Append(merr, ctx.Err())
 		}
-
-		var resp nodeup.BootstrapResponse
-		err = client.Query(ctx, &request, &resp)
-		if err != nil {
-			merr = multierr.Append(merr, err)
-			continue
+		if !time.Now().Before(deadline) {
+			return nil, merr
 		}
-		return &resp, nil
+		klog.Warningf("no kops-controller server responded, retrying all %d servers: %v", len(bootConfig.ConfigServer.Servers), merr)
 	}
-	return nil, merr
 }
 
 func getAWSConfigurationMode(ctx context.Context, c *model.NodeupModelContext) (string, error) {

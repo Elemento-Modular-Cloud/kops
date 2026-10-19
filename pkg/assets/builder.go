@@ -38,6 +38,11 @@ import (
 	"k8s.io/kops/util/pkg/vfs"
 )
 
+// downloadedFileHashes caches hashes read from checksum files, keyed by resolved URL so
+// canonical and mirrored assets do not share entries. Commands can create multiple
+// AssetBuilders, but each builder must still remap and register its own assets.
+var downloadedFileHashes sync.Map // resolved URL -> *hashing.Hash
+
 // ImageDigestResolver looks up the manifest digest for an image, returning it in the form
 // "sha256:...".
 type ImageDigestResolver func(image string) (string, error)
@@ -381,6 +386,11 @@ func (a *AssetBuilder) findHash(file *FileAsset) (*hashing.Hash, error) {
 		return knownHash, nil
 	}
 
+	if cachedHash, found := downloadedFileHashes.Load(u.String()); found {
+		klog.V(8).Infof("using cached hash for %q", u)
+		return cachedHash.(*hashing.Hash), nil
+	}
+
 	klog.V(2).Infof("asset %q is not well-known, downloading hash", file.CanonicalURL)
 
 	// We now prefer sha256 hashes
@@ -413,7 +423,14 @@ func (a *AssetBuilder) findHash(file *FileAsset) (*hashing.Hash, error) {
 					klog.Infof("Hash file was empty %q", hashURL)
 					continue
 				}
-				return hashing.FromString(fields[0])
+				hash, err := hashing.FromString(fields[0])
+				if err != nil {
+					return nil, err
+				}
+
+				downloadedFileHashes.Store(u.String(), hash)
+
+				return hash, nil
 			}
 			if ext == ".sha256" {
 				klog.V(2).Infof("Unable to read new sha256 hash file (is this an older/unsupported kubernetes release?)")
@@ -442,6 +459,8 @@ func (a *AssetBuilder) remapURL(canonicalURL *url.URL) (*url.URL, error) {
 	}
 
 	fileRepo.Path = path.Join(fileRepo.Path, canonicalURL.Path)
+	// Escape commas, which are legal in a path but separate locations in CompactString.
+	fileRepo.RawPath = strings.ReplaceAll(fileRepo.EscapedPath(), ",", "%2C")
 
 	return fileRepo, nil
 }

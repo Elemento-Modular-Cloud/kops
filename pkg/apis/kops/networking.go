@@ -89,7 +89,7 @@ type NetworkingSpec struct {
 // ConfiguredOptions returns the set of networking options that are configured (non-nil)
 // in the struct.  We only expect a single option to be configured.
 func (n *NetworkingSpec) ConfiguredOptions() sets.Set[string] {
-	options, err := reflectutils.FindSetFields(n, "classic", "kubenet", "external", "cni", "kopeio", "weave", "flannel", "calico", "kubeRouter", "romana", "amazonVPC", "cilium", "lyftvpc", "gcp", "kindnet")
+	options, err := reflectutils.FindSetFields(n, "classic", "kubenet", "external", "cni", "weave", "flannel", "calico", "kubeRouter", "romana", "amazonVPC", "cilium", "lyftvpc", "gcp", "kindnet")
 	if err != nil {
 		klog.Fatalf("error getting set fields: %v", err)
 	}
@@ -108,9 +108,6 @@ func (n *NetworkingSpec) UsesKubenet() bool {
 		return true
 	} else if n.External != nil {
 		// external is based on kubenet
-		return true
-	} else if n.Kopeio != nil {
-		// Kopeio is based on kubenet / external
 		return true
 	}
 
@@ -322,7 +319,24 @@ type CanalNetworkingSpec struct {
 }
 
 // KuberouterNetworkingSpec declares that we want Kube-router networking
-type KuberouterNetworkingSpec struct{}
+type KuberouterNetworkingSpec struct {
+	// UseNFTablesForNetpol makes the network policy controller enforce
+	// NetworkPolicies with nftables instead of iptables and ipsets.
+	// This is experimental upstream and only affects the network policy
+	// controller; the service proxy and router controllers are unchanged.
+	// Default: false
+	UseNFTablesForNetpol *bool `json:"useNFTablesForNetpol,omitempty"`
+	// ExternalIPRanges are the CIDRs from which Service externalIPs are accepted.
+	// Setting this or LoadBalancerIPRanges turns on kube-router's strict external
+	// IP validation, which drops any address outside the configured ranges.
+	// Leaving both empty keeps strict validation off.
+	ExternalIPRanges []string `json:"externalIPRanges,omitempty"`
+	// LoadBalancerIPRanges are the CIDRs from which Service loadBalancerIPs are
+	// accepted. Setting this or ExternalIPRanges turns on kube-router's strict
+	// external IP validation, which drops any address outside the configured
+	// ranges. Leaving both empty keeps strict validation off.
+	LoadBalancerIPRanges []string `json:"loadBalancerIPRanges,omitempty"`
+}
 
 // RomanaNetworkingSpec declares that we want Romana networking
 // Romana is deprecated as of kOps 1.18 and removed as of kOps 1.19.

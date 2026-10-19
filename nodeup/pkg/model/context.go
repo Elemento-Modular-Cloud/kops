@@ -34,6 +34,7 @@ import (
 	"k8s.io/kops/pkg/apis/nodeup"
 	"k8s.io/kops/pkg/systemd"
 	"k8s.io/kops/upup/pkg/fi"
+	"k8s.io/kops/upup/pkg/fi/nodeup/awsup"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
 	"k8s.io/kops/upup/pkg/fi/utils"
 	"k8s.io/kops/util/pkg/architectures"
@@ -49,7 +50,8 @@ const (
 
 // NodeupModelContext is the context supplied the nodeup tasks
 type NodeupModelContext struct {
-	Cloud        fi.Cloud
+	// Cloud holds the AWS clients, on AWS only.
+	Cloud        *awsup.Cloud
 	Architecture architectures.Architecture
 	GPUVendor    architectures.GPUVendor
 	Assets       *fi.AssetStore
@@ -65,9 +67,6 @@ type NodeupModelContext struct {
 
 	// HasAPIServer is true if the InstanceGroup has a role of master or apiserver (pupulated by Init)
 	HasAPIServer bool
-
-	// usesLegacyGossip is true if the cluster runs (legacy) Gossip DNS.
-	usesLegacyGossip bool
 
 	// usesNoneDNS is true if the cluster runs with dns=none (which uses fixed IPs, for example a load balancer, instead of DNS)
 	usesNoneDNS bool
@@ -86,6 +85,13 @@ type NodeupModelContext struct {
 	ConfigurationMode string
 	InstanceID        string
 	MachineType       string
+}
+
+func (c NodeupModelContext) canSignCertificates() bool {
+	if c.IsMaster || c.BootConfig.InstanceGroupRole.IsControlPlaneType() {
+		return true
+	}
+	return false
 }
 
 // Init completes initialization of the object, for example pre-parsing the kubernetes version
@@ -109,7 +115,6 @@ func (c *NodeupModelContext) Init() error {
 	}
 
 	c.usesNoneDNS = c.NodeupConfig.UsesNoneDNS
-	c.usesLegacyGossip = c.NodeupConfig.UsesLegacyGossip
 	c.discoveryService = c.NodeupConfig.DiscoveryService
 
 	return nil
@@ -539,7 +544,7 @@ func (b *NodeupModelContext) AddCNIBinAssets(c *fi.NodeupModelBuilderContext) er
 			Path:     filepath.Join(b.CNIBinDir(), name),
 			Contents: res,
 			Type:     nodetasks.FileType_File,
-			Mode:     fi.PtrTo("0755"),
+			Mode:     new("0755"),
 		})
 	}
 
@@ -662,10 +667,6 @@ func (c *NodeupModelContext) findFileAsset(path string) *kops.FileAssetSpec {
 	return nil
 }
 
-func (c *NodeupModelContext) UsesLegacyGossip() bool {
-	return c.usesLegacyGossip
-}
-
 func (c *NodeupModelContext) UsesNoneDNS() bool {
 	return c.usesNoneDNS
 }
@@ -676,8 +677,5 @@ func (c *NodeupModelContext) DiscoveryServiceOptions() *nodeup.DiscoveryServiceO
 }
 
 func (c *NodeupModelContext) PublishesDNSRecords() bool {
-	if c.UsesLegacyGossip() || c.UsesNoneDNS() {
-		return false
-	}
-	return true
+	return !c.UsesNoneDNS()
 }

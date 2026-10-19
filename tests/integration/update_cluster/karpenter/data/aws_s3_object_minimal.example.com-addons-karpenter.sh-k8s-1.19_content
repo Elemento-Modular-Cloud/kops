@@ -2999,6 +2999,16 @@ spec:
   - name: images/hvm-ssd-gp3/ubuntu-resolute-26.04-amd64-server-20220404
     owner: "099720109477"
   associatePublicIPAddress: true
+  blockDeviceMappings:
+  - deviceName: /dev/xvda
+    ebs:
+      deleteOnTermination: true
+      encrypted: true
+      iops: 3000
+      throughput: 125
+      volumeSize: 128Gi
+      volumeType: gp3
+    rootVolume: true
   instanceProfile: nodes.minimal.example.com
   kubelet:
     kubeReserved:
@@ -3028,10 +3038,10 @@ spec:
     set -o nounset
     set -o pipefail
 
-    NODEUP_URL_AMD64=https://artifacts.k8s.io/binaries/kops/1.34.0-beta.1/linux/amd64/nodeup,https://github.com/kubernetes/kops/releases/download/v1.34.0-beta.1/nodeup-linux-amd64
-    NODEUP_HASH_AMD64=c86e072f622b91546b7b3f3cb1a0f8a131e48b966ad018a0ac1520ceedf37725
-    NODEUP_URL_ARM64=https://artifacts.k8s.io/binaries/kops/1.34.0-beta.1/linux/arm64/nodeup,https://github.com/kubernetes/kops/releases/download/v1.34.0-beta.1/nodeup-linux-arm64
-    NODEUP_HASH_ARM64=64a9a9510538a449e85d05e13e3cd98b80377d68a673447c26821d40f00f0075
+    NODEUP_URL_AMD64=https://artifacts.k8s.io/binaries/kops/1.37.0-beta.1/linux/amd64/nodeup.xz,https://github.com/kubernetes/kops/releases/download/v1.37.0-beta.1/nodeup-linux-amd64.xz
+    NODEUP_HASH_AMD64=a899417ddb4fa0bba91c07c8d10b10747088a1067ca3dfa83097c1720eeda9ea
+    NODEUP_URL_ARM64=https://artifacts.k8s.io/binaries/kops/1.37.0-beta.1/linux/arm64/nodeup.xz,https://github.com/kubernetes/kops/releases/download/v1.37.0-beta.1/nodeup-linux-arm64.xz
+    NODEUP_HASH_ARM64=c2e424da38473c3ee1b9309e84e4167857fe8c01ea0df0328f49f6472aebac0e
 
     export AWS_REGION=us-test-1
 
@@ -3055,7 +3065,7 @@ spec:
       cd ${INSTALL_DIR}
     }
 
-    # Retry a download until we get it. args: name, sha, urls
+    # Retry until a compressed archive is downloaded, validated, and decompressed. args: name, sha, urls
     download-or-bust() {
       echo "== Downloading $1 with hash $2 from $3 =="
       local -r file="$1"
@@ -3063,36 +3073,26 @@ spec:
       local -a urls
       IFS=, read -r -a urls <<< "$3"
 
-      if [[ -f "${file}" ]]; then
-        if ! validate-hash "${file}" "${hash}"; then
-          rm -f "${file}"
-        else
-          return 0
-        fi
-      fi
-
       while true; do
         for url in "${urls[@]}"; do
-          commands=(
-            "curl -f --compressed -Lo ${file} --connect-timeout 20 --retry 6 --retry-delay 10"
-            "wget --compression=auto -O ${file} --connect-timeout=20 --tries=6 --wait=10"
-            "curl -f -Lo ${file} --connect-timeout 20 --retry 6 --retry-delay 10"
-            "wget -O ${file} --connect-timeout=20 --tries=6 --wait=10"
-          )
-          for cmd in "${commands[@]}"; do
-            echo "== Downloading ${url} using ${cmd} =="
-            if ! (${cmd} "${url}"); then
-              echo "== Failed to download ${url} using ${cmd} =="
-              continue
-            fi
-            if ! validate-hash "${file}" "${hash}"; then
-              echo "== Failed to validate hash for ${url} =="
-              rm -f "${file}"
-            else
-              echo "== Downloaded ${url} with hash ${hash} =="
-              return 0
-            fi
-          done
+          echo "== Downloading ${url} =="
+          rm -f "${file}.xz"
+          if ! curl -f -Lo "${file}.xz" --connect-timeout 20 --retry 6 --retry-delay 10 "${url}"; then
+            echo "== Failed to download ${url} =="
+            rm -f "${file}.xz"
+          elif ! validate-hash "${file}.xz" "${hash}"; then
+            echo "== Failed to validate compressed hash for ${url} =="
+            rm -f "${file}.xz"
+          elif ! xz -df "${file}.xz"; then
+            echo "== Failed to decompress ${url} =="
+            rm -f "${file}" "${file}.xz"
+          elif ! chmod +x "${file}"; then
+            echo "== Failed to make ${file} executable =="
+            rm -f "${file}"
+          else
+            echo "== Downloaded ${url}, validated hash ${hash} and decompressed =="
+            return 0
+          fi
         done
 
         echo "== All downloads failed; sleeping before retrying =="
@@ -3130,8 +3130,6 @@ spec:
 
       cd ${INSTALL_DIR}/bin
       download-or-bust nodeup "${NODEUP_HASH}" "${NODEUP_URL}"
-
-      chmod +x nodeup
 
       echo "== Running nodeup =="
       # We can't run in the foreground because of https://github.com/docker/docker/issues/23793
@@ -3174,7 +3172,7 @@ spec:
       - https://kops-controller.internal.minimal.example.com:3988/
     InstanceGroupName: karpenter-nodes-default
     InstanceGroupRole: Node
-    NodeupConfigHash: m1tyoXl7dXXQAJ5d73bqlkKmPW+j3QjmlrQZBUOSksc=
+    NodeupConfigHash: EAmpK0iG6ORF5m1m/9T5lJPh7/MUtRwqlnNvgzRFdo4=
 
     __EOF_KUBE_ENV
 
@@ -3208,6 +3206,35 @@ spec:
         operator: In
         values:
         - linux
+      - key: node.kubernetes.io/instance-type
+        operator: In
+        values:
+        - t2.medium
+      - key: karpenter.k8s.aws/instance-cpu
+        operator: Gte
+        values:
+        - "2"
+      - key: karpenter.k8s.aws/instance-cpu
+        operator: Lte
+        values:
+        - "16"
+      - key: karpenter.k8s.aws/instance-memory
+        operator: Gte
+        values:
+        - "2048"
+      - key: karpenter.k8s.aws/instance-memory
+        operator: Lte
+        values:
+        - "65536"
+      - key: karpenter.k8s.aws/instance-family
+        operator: NotIn
+        values:
+        - c3
+        - m3
+      - key: node.kubernetes.io/instance-type
+        operator: NotIn
+        values:
+        - t2.nano
       - key: karpenter.sh/capacity-type
         operator: In
         values:
@@ -3229,6 +3256,17 @@ spec:
   - name: images/hvm-ssd-gp3/ubuntu-resolute-26.04-amd64-server-20220404
     owner: "099720109477"
   associatePublicIPAddress: true
+  blockDeviceMappings:
+  - deviceName: /dev/xvda
+    ebs:
+      deleteOnTermination: true
+      encrypted: true
+      iops: 4000
+      kmsKeyID: arn:aws-test:kms:us-test-1:000000000000:key/1234abcd-12ab-34cd-56ef-1234567890ab
+      throughput: 200
+      volumeSize: 200Gi
+      volumeType: gp3
+    rootVolume: true
   instanceProfile: nodes.minimal.example.com
   securityGroupSelectorTerms:
   - tags:
@@ -3250,10 +3288,10 @@ spec:
     set -o nounset
     set -o pipefail
 
-    NODEUP_URL_AMD64=https://artifacts.k8s.io/binaries/kops/1.34.0-beta.1/linux/amd64/nodeup,https://github.com/kubernetes/kops/releases/download/v1.34.0-beta.1/nodeup-linux-amd64
-    NODEUP_HASH_AMD64=c86e072f622b91546b7b3f3cb1a0f8a131e48b966ad018a0ac1520ceedf37725
-    NODEUP_URL_ARM64=https://artifacts.k8s.io/binaries/kops/1.34.0-beta.1/linux/arm64/nodeup,https://github.com/kubernetes/kops/releases/download/v1.34.0-beta.1/nodeup-linux-arm64
-    NODEUP_HASH_ARM64=64a9a9510538a449e85d05e13e3cd98b80377d68a673447c26821d40f00f0075
+    NODEUP_URL_AMD64=https://artifacts.k8s.io/binaries/kops/1.37.0-beta.1/linux/amd64/nodeup.xz,https://github.com/kubernetes/kops/releases/download/v1.37.0-beta.1/nodeup-linux-amd64.xz
+    NODEUP_HASH_AMD64=a899417ddb4fa0bba91c07c8d10b10747088a1067ca3dfa83097c1720eeda9ea
+    NODEUP_URL_ARM64=https://artifacts.k8s.io/binaries/kops/1.37.0-beta.1/linux/arm64/nodeup.xz,https://github.com/kubernetes/kops/releases/download/v1.37.0-beta.1/nodeup-linux-arm64.xz
+    NODEUP_HASH_ARM64=c2e424da38473c3ee1b9309e84e4167857fe8c01ea0df0328f49f6472aebac0e
 
     export AWS_REGION=us-test-1
 
@@ -3277,7 +3315,7 @@ spec:
       cd ${INSTALL_DIR}
     }
 
-    # Retry a download until we get it. args: name, sha, urls
+    # Retry until a compressed archive is downloaded, validated, and decompressed. args: name, sha, urls
     download-or-bust() {
       echo "== Downloading $1 with hash $2 from $3 =="
       local -r file="$1"
@@ -3285,36 +3323,26 @@ spec:
       local -a urls
       IFS=, read -r -a urls <<< "$3"
 
-      if [[ -f "${file}" ]]; then
-        if ! validate-hash "${file}" "${hash}"; then
-          rm -f "${file}"
-        else
-          return 0
-        fi
-      fi
-
       while true; do
         for url in "${urls[@]}"; do
-          commands=(
-            "curl -f --compressed -Lo ${file} --connect-timeout 20 --retry 6 --retry-delay 10"
-            "wget --compression=auto -O ${file} --connect-timeout=20 --tries=6 --wait=10"
-            "curl -f -Lo ${file} --connect-timeout 20 --retry 6 --retry-delay 10"
-            "wget -O ${file} --connect-timeout=20 --tries=6 --wait=10"
-          )
-          for cmd in "${commands[@]}"; do
-            echo "== Downloading ${url} using ${cmd} =="
-            if ! (${cmd} "${url}"); then
-              echo "== Failed to download ${url} using ${cmd} =="
-              continue
-            fi
-            if ! validate-hash "${file}" "${hash}"; then
-              echo "== Failed to validate hash for ${url} =="
-              rm -f "${file}"
-            else
-              echo "== Downloaded ${url} with hash ${hash} =="
-              return 0
-            fi
-          done
+          echo "== Downloading ${url} =="
+          rm -f "${file}.xz"
+          if ! curl -f -Lo "${file}.xz" --connect-timeout 20 --retry 6 --retry-delay 10 "${url}"; then
+            echo "== Failed to download ${url} =="
+            rm -f "${file}.xz"
+          elif ! validate-hash "${file}.xz" "${hash}"; then
+            echo "== Failed to validate compressed hash for ${url} =="
+            rm -f "${file}.xz"
+          elif ! xz -df "${file}.xz"; then
+            echo "== Failed to decompress ${url} =="
+            rm -f "${file}" "${file}.xz"
+          elif ! chmod +x "${file}"; then
+            echo "== Failed to make ${file} executable =="
+            rm -f "${file}"
+          else
+            echo "== Downloaded ${url}, validated hash ${hash} and decompressed =="
+            return 0
+          fi
         done
 
         echo "== All downloads failed; sleeping before retrying =="
@@ -3352,8 +3380,6 @@ spec:
 
       cd ${INSTALL_DIR}/bin
       download-or-bust nodeup "${NODEUP_HASH}" "${NODEUP_URL}"
-
-      chmod +x nodeup
 
       echo "== Running nodeup =="
       # We can't run in the foreground because of https://github.com/docker/docker/issues/23793
@@ -3396,7 +3422,7 @@ spec:
       - https://kops-controller.internal.minimal.example.com:3988/
     InstanceGroupName: karpenter-nodes-single-machinetype
     InstanceGroupRole: Node
-    NodeupConfigHash: FdpVuNwRF5WZJjCr3yQxfsvjeJ8T848wrdCI88BEScc=
+    NodeupConfigHash: Re6UObJS0qed9S+EwBa+yjcitO0OqVoOFBkF9sfYrjU=
 
     __EOF_KUBE_ENV
 

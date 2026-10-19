@@ -20,7 +20,6 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/model"
-	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gcetasks"
 )
@@ -94,8 +93,18 @@ func (c *GCEModelContext) GCETagForRole(role kops.InstanceGroupRole) string {
 
 // HasAPIServerOnlyInstanceGroups returns true if the cluster has any APIServer-only instance groups.
 func (c *GCEModelContext) HasAPIServerOnlyInstanceGroups() bool {
-	for _, ig := range c.InstanceGroups {
+	for _, ig := range c.AllInstanceGroups {
 		if ig.Spec.Role.HasAPIServer() {
+			return true
+		}
+	}
+	return false
+}
+
+// HasEtcdOnlyInstanceGroups returns true if the cluster has any Etcd-only instance groups.
+func (c *GCEModelContext) HasEtcdOnlyInstanceGroups() bool {
+	for _, ig := range c.AllInstanceGroups {
+		if ig.IsEtcdOnly() {
 			return true
 		}
 	}
@@ -170,7 +179,7 @@ func (c *GCEModelContext) LinkToServiceAccount(ig *kops.InstanceGroup) *gcetasks
 		return &gcetasks.ServiceAccount{
 			Name:   s("shared"),
 			Email:  &c.Cluster.Spec.CloudProvider.GCE.ServiceAccount,
-			Shared: fi.PtrTo(true),
+			Shared: new(true),
 		}
 	}
 
@@ -178,7 +187,7 @@ func (c *GCEModelContext) LinkToServiceAccount(ig *kops.InstanceGroup) *gcetasks
 
 	name := ""
 	switch role {
-	case kops.InstanceGroupRoleAPIServer, kops.InstanceGroupRoleControlPlane:
+	case kops.InstanceGroupRoleAPIServer, kops.InstanceGroupRoleControlPlane, kops.InstanceGroupRoleEtcd, kops.InstanceGroupRoleScheduler, kops.InstanceGroupRoleKubeControllerManager:
 		name = gce.ControlPlane
 
 	case kops.InstanceGroupRoleBastion:

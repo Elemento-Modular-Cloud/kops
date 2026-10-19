@@ -50,7 +50,7 @@ func TestTaintsApplied(t *testing.T) {
 		expectTaints []string
 	}{
 		{
-			version:      "1.31.0",
+			version:      "1.32.0",
 			taints:       []string{"foo", "bar", "baz"},
 			expectTaints: []string{"foo", "bar", "baz", "node-role.kubernetes.io/control-plane=:NoSchedule"},
 		},
@@ -134,6 +134,34 @@ func Test_RunKubeletBuilder(t *testing.T) {
 	h.SetupMockAWS()
 
 	basedir := "tests/kubelet/featuregates"
+
+	context := &fi.NodeupModelBuilderContext{
+		Tasks: make(map[string]fi.NodeupTask),
+	}
+
+	model, err := testutils.LoadModel(basedir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nodeUpModelContext, err := BuildNodeupModelContext(model)
+	if err != nil {
+		t.Fatalf("error loading model %q: %v", basedir, err)
+		return
+	}
+	runKubeletBuilder(t, context, nodeUpModelContext)
+
+	testutils.ValidateTasks(t, filepath.Join(basedir, "tasks.yaml"), context)
+}
+
+func Test_RunKubeletBuilderCgroupfs(t *testing.T) {
+	h := testutils.NewIntegrationTestHarness(t)
+	defer h.Close()
+
+	h.MockKopsVersion("1.18.0")
+	h.SetupMockAWS()
+
+	basedir := "tests/kubelet/cgroupfs"
 
 	context := &fi.NodeupModelBuilderContext{
 		Tasks: make(map[string]fi.NodeupTask),
@@ -404,7 +432,7 @@ func Test_BuildComponentConfigFile(t *testing.T) {
 		ShutdownGracePeriodCriticalPods: &metav1.Duration{Duration: 10 * time.Second},
 		ImageMaximumGCAge:               &metav1.Duration{Duration: 30 * time.Hour},
 		ImageMinimumGCAge:               &metav1.Duration{Duration: 30 * time.Minute},
-		MaxParallelImagePulls:           fi.PtrTo(int32(5)),
+		MaxParallelImagePulls:           new(int32(5)),
 	}
 
 	builder := &KubeletBuilder{NodeupModelContext: &NodeupModelContext{

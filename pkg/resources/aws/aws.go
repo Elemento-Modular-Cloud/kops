@@ -38,7 +38,6 @@ import (
 	route53types "github.com/aws/aws-sdk-go-v2/service/route53/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
-	"k8s.io/kops/pkg/dns"
 	"k8s.io/kops/pkg/featureflag"
 	"k8s.io/kops/pkg/resources"
 	"k8s.io/kops/pkg/resources/spotinst"
@@ -59,7 +58,6 @@ type listFn func(fi.Cloud, string, string) ([]*resources.Resource, error)
 
 func ListResourcesAWS(cloud awsup.AWSCloud, clusterInfo resources.ClusterInfo) (map[string]*resources.Resource, error) {
 	clusterName := clusterInfo.Name
-	clusterUsesNoneDNS := clusterInfo.UsesNoneDNS
 
 	resourceTrackers := make(map[string]*resources.Resource)
 
@@ -93,7 +91,7 @@ func ListResourcesAWS(cloud awsup.AWSCloud, clusterInfo resources.ClusterInfo) (
 		ListEventBridgeRules,
 	}
 
-	if !dns.IsGossipClusterName(clusterName) && !clusterUsesNoneDNS {
+	if clusterInfo.PublishesDNSRecords() {
 		// Route 53
 		listFunctions = append(listFunctions, ListRoute53Records)
 	}
@@ -480,6 +478,8 @@ func guessSSHUser(image *ec2types.Image) string {
 		return "ubuntu"
 	case awsup.WellKnownAccountFlatcar:
 		return "core"
+	case awsup.WellKnownAccountRockyLinux:
+		return "rocky"
 	}
 
 	name := aws.ToString(image.Name)
@@ -1440,7 +1440,7 @@ func DeleteAutoScalingGroupLaunchTemplate(cloud fi.Cloud, r *resources.Resource)
 	klog.V(2).Infof("Deleting EC2 LaunchTemplate %q", r.ID)
 
 	if _, err := c.EC2().DeleteLaunchTemplate(ctx, &ec2.DeleteLaunchTemplateInput{
-		LaunchTemplateId: fi.PtrTo(r.ID),
+		LaunchTemplateId: new(r.ID),
 	}); err != nil {
 		return fmt.Errorf("error deleting ec2 LaunchTemplate %q: %v", r.ID, err)
 	}
@@ -2176,7 +2176,7 @@ func ListIAMOIDCProviders(cloud fi.Cloud, vpcID, clusterName string) ([]*resourc
 func DeleteIAMOIDCProvider(cloud fi.Cloud, r *resources.Resource) error {
 	ctx := context.TODO()
 	c := cloud.(awsup.AWSCloud)
-	arn := fi.PtrTo(r.ID)
+	arn := new(r.ID)
 	{
 		klog.V(2).Infof("Deleting IAM OIDC Provider %v", arn)
 		request := &iam.DeleteOpenIDConnectProviderInput{

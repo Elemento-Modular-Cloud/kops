@@ -34,8 +34,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/bootstrap"
+	"k8s.io/kops/pkg/dns"
 	"k8s.io/kops/upup/pkg/fi"
-	"k8s.io/kops/upup/pkg/fi/cloudup"
 	"k8s.io/kops/util/pkg/vfs"
 )
 
@@ -48,7 +48,26 @@ type Client struct {
 	// BaseURL is the base URL for the server
 	BaseURL url.URL
 
+	// Backoff controls how long a single Query keeps retrying BaseURL before giving up.
+	// If unset, DefaultBackoff is used. Callers that have more than one server to try
+	// should set a shorter backoff, so that one unreachable server does not consume the
+	// whole budget.
+	Backoff wait.Backoff
+
 	httpClient *http.Client
+}
+
+// DefaultBackoff is the retry behaviour of a Query whose caller has not set Client.Backoff.
+// The interval is capped so a control plane that takes a long time to become reachable does not
+// push the next attempt tens of minutes out. Without a cap, doubling from 1s reaches a 17
+// minute wait by attempt 11, so a node that has been failing for 17 minutes then sits idle
+// for another 17 even once kops-controller is serving.
+var DefaultBackoff = wait.Backoff{
+	Duration: 1 * time.Second,
+	Factor:   2,
+	Jitter:   0.1,
+	Cap:      30 * time.Second,
+	Steps:    100,
 }
 
 func New(authenticator bootstrap.Authenticator, cas []byte, baseURL url.URL) *Client {
@@ -89,7 +108,7 @@ func (b *Client) Query(ctx context.Context, req any, resp any) error {
 			return fi.NewTryAgainLaterError(fmt.Sprintf("kops-controller DNS not setup yet (not found: %v)", dnsErr))
 		}
 		return err
-	} else if len(ips) == 1 && (ips[0].String() == cloudup.PlaceholderIP || ips[0].String() == cloudup.PlaceholderIPv6) {
+	} else if len(ips) == 1 && (ips[0].String() == dns.PlaceholderIP || ips[0].String() == dns.PlaceholderIPv6) {
 		return fi.NewTryAgainLaterError(fmt.Sprintf("kops-controller DNS not setup yet (placeholder IP found: %v)", ips))
 	}
 
@@ -101,11 +120,9 @@ func (b *Client) Query(ctx context.Context, req any, resp any) error {
 	bootstrapURL := b.BaseURL
 	bootstrapURL.Path = path.Join(bootstrapURL.Path, "/bootstrap")
 
-	backoff := wait.Backoff{
-		Duration: 1 * time.Second,
-		Factor:   2,
-		Jitter:   0.1,
-		Steps:    100,
+	backoff := b.Backoff
+	if backoff.Steps == 0 {
+		backoff = DefaultBackoff
 	}
 
 	var response *http.Response

@@ -108,7 +108,7 @@ func (v *ServerGroup) classifyServers(servers []*hcloud.Server, userDataHash str
 			needUpdate = append(needUpdate, server.Name)
 			continue
 		}
-		if server.Datacenter == nil || server.Datacenter.Location == nil || server.Datacenter.Location.Name != v.Location {
+		if server.Location == nil || server.Location.Name != v.Location {
 			needUpdate = append(needUpdate, server.Name)
 			continue
 		}
@@ -226,7 +226,7 @@ func (_ *ServerGroup) RenderHetzner(t *hetzner.HetznerAPITarget, a, e, changes *
 
 		opts := hcloud.ServerCreateOpts{
 			Name:             name,
-			StartAfterCreate: fi.PtrTo(true),
+			StartAfterCreate: new(true),
 			Networks: []*hcloud.Network{
 				{
 					ID: networkID,
@@ -309,19 +309,19 @@ type terraformServerPublicNet struct {
 func (_ *ServerGroup) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *ServerGroup) error {
 	name := terraformWriter.LiteralWithIndex(fi.ValueOf(e.Name))
 	tf := &terraformServer{
-		Count:      fi.PtrTo(e.Count),
+		Count:      new(e.Count),
 		Name:       name,
-		Location:   fi.PtrTo(e.Location),
-		ServerType: fi.PtrTo(e.Size),
-		Image:      fi.PtrTo(e.Image),
+		Location:   new(e.Location),
+		ServerType: new(e.Size),
+		Image:      new(e.Image),
 		Network: []*terraformServerNetwork{
 			{
 				ID: e.Network.TerraformLink(),
 			},
 		},
 		PublicNet: &terraformServerPublicNet{
-			EnableIPv4: fi.PtrTo(e.EnableIPv4),
-			EnableIPv6: fi.PtrTo(e.EnableIPv6),
+			EnableIPv4: new(e.EnableIPv4),
+			EnableIPv6: new(e.EnableIPv6),
 		},
 		Labels: e.Labels,
 	}

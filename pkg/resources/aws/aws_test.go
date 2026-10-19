@@ -30,7 +30,6 @@ import (
 	"k8s.io/kops/cloudmock/aws/mockec2"
 	"k8s.io/kops/cloudmock/aws/mockiam"
 	"k8s.io/kops/pkg/resources"
-	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 )
 
@@ -110,7 +109,7 @@ func TestListIAMInstanceProfiles(t *testing.T) {
 	tags := []iamtypes.Tag{
 		{
 			Key:   &ownershipTagKey,
-			Value: fi.PtrTo("owned"),
+			Value: new("owned"),
 		},
 	}
 
@@ -139,7 +138,7 @@ func TestListIAMInstanceProfiles(t *testing.T) {
 			Tags: []iamtypes.Tag{
 				{
 					Key:   &owner,
-					Value: fi.PtrTo("owned"),
+					Value: new("owned"),
 				},
 			},
 		}
@@ -184,7 +183,7 @@ func TestListIAMRoles(t *testing.T) {
 	tags := []iamtypes.Tag{
 		{
 			Key:   &ownershipTagKey,
-			Value: fi.PtrTo("owned"),
+			Value: new("owned"),
 		},
 	}
 
@@ -213,7 +212,7 @@ func TestListIAMRoles(t *testing.T) {
 			Tags: []iamtypes.Tag{
 				{
 					Key:   &owner,
-					Value: fi.PtrTo("owned"),
+					Value: new("owned"),
 				},
 			},
 		}
@@ -355,12 +354,12 @@ func TestMatchesElbTags(t *testing.T) {
 			tags: map[string]string{"tagkey1": "tagvalue1"},
 			actual: []elbtypes.Tag{
 				{
-					Key:   fi.PtrTo("tagkey1"),
-					Value: fi.PtrTo("tagvalue1"),
+					Key:   new("tagkey1"),
+					Value: new("tagvalue1"),
 				},
 				{
-					Key:   fi.PtrTo("tagkey2"),
-					Value: fi.PtrTo("tagvalue2"),
+					Key:   new("tagkey2"),
+					Value: new("tagvalue2"),
 				},
 			},
 			expected: true,
@@ -369,12 +368,12 @@ func TestMatchesElbTags(t *testing.T) {
 			tags: map[string]string{"tagkey2": "tagvalue2"},
 			actual: []elbtypes.Tag{
 				{
-					Key:   fi.PtrTo("tagkey1"),
-					Value: fi.PtrTo("tagvalue1"),
+					Key:   new("tagkey1"),
+					Value: new("tagvalue1"),
 				},
 				{
-					Key:   fi.PtrTo("tagkey2"),
-					Value: fi.PtrTo("tagvalue2"),
+					Key:   new("tagkey2"),
+					Value: new("tagvalue2"),
 				},
 			},
 			expected: true,
@@ -383,12 +382,12 @@ func TestMatchesElbTags(t *testing.T) {
 			tags: map[string]string{"tagkey3": "tagvalue3"},
 			actual: []elbtypes.Tag{
 				{
-					Key:   fi.PtrTo("tagkey1"),
-					Value: fi.PtrTo("tagvalue1"),
+					Key:   new("tagkey1"),
+					Value: new("tagvalue1"),
 				},
 				{
-					Key:   fi.PtrTo("tagkey2"),
-					Value: fi.PtrTo("tagvalue2"),
+					Key:   new("tagkey2"),
+					Value: new("tagvalue2"),
 				},
 			},
 			expected: false,
@@ -400,5 +399,45 @@ func TestMatchesElbTags(t *testing.T) {
 		if got != test.expected {
 			t.Fatalf("unexpected result from testcase %d, expected %v, got %v", i, test.expected, got)
 		}
+	}
+}
+
+func TestGuessSSHUser(t *testing.T) {
+	cases := []struct {
+		name     string
+		ownerID  string
+		image    string
+		expected string
+	}{
+		{name: "amazon linux 2023", ownerID: awsup.WellKnownAccountAmazonLinux2023, expected: "ec2-user"},
+		{name: "redhat", ownerID: awsup.WellKnownAccountRedhat, expected: "ec2-user"},
+		{name: "debian", ownerID: awsup.WellKnownAccountDebian, expected: "admin"},
+		{name: "ubuntu", ownerID: awsup.WellKnownAccountUbuntu, expected: "ubuntu"},
+		{name: "flatcar", ownerID: awsup.WellKnownAccountFlatcar, expected: "core"},
+		{name: "rocky linux", ownerID: awsup.WellKnownAccountRockyLinux, expected: "rocky"},
+		{
+			name:     "centos is matched on the image name",
+			ownerID:  "123456789012",
+			image:    "CentOS-Stream-ec2-9-20260101.0.x86_64",
+			expected: "centos",
+		},
+		{
+			name:     "an unrecognized image has no known user",
+			ownerID:  "123456789012",
+			image:    "my-custom-image",
+			expected: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			image := &ec2types.Image{
+				OwnerId: aws.String(tc.ownerID),
+				Name:    aws.String(tc.image),
+			}
+			if actual := guessSSHUser(image); actual != tc.expected {
+				t.Errorf("guessSSHUser(owner=%q, name=%q) = %q, expected %q", tc.ownerID, tc.image, actual, tc.expected)
+			}
+		})
 	}
 }

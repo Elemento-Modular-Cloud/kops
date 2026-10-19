@@ -230,7 +230,7 @@ func enrollHost(ctx context.Context, ig *kops.InstanceGroup, bootstrapData *Boot
 
 	// We can't create the host resource in the API server for control-plane nodes,
 	// because the API server (likely) isn't running yet.
-	if !ig.IsControlPlane() {
+	if !ig.IsControlPlane() && !ig.IsEtcdOnly() && !ig.IsAPIServerOnly() {
 		if err := kubeClient.Create(ctx, hostData); err != nil {
 			return fmt.Errorf("failed to create host %s/%s: %w", hostData.Namespace, hostData.Name, err)
 		}
@@ -588,9 +588,10 @@ func (b *ConfigBuilder) GetFullInstanceGroup(ctx context.Context) (*kops.Instanc
 		return nil, err
 	}
 
+	// The channel only provides optional defaults, and kops-controller may be unable to read it.
 	channel, err := cloudup.ChannelForCluster(clientset.VFSContext(), fullCluster)
 	if err != nil {
-		return nil, fmt.Errorf("getting channel for cluster %q: %w", fullCluster.Name, err)
+		klog.Warningf("getting channel for cluster %q: %v", fullCluster.Name, err)
 	}
 
 	// Build full IG spec to ensure we end up with a valid IG
@@ -843,14 +844,18 @@ func (b *ConfigBuilder) GetBootstrapData(ctx context.Context) (*BootstrapData, e
 
 	nodeupScript.CloudProvider = string(cluster.GetCloudProvider())
 
-	bootConfig.ConfigBase = fi.PtrTo("file:///etc/kubernetes/kops/config")
+	bootConfig.ConfigBase = new("file:///etc/kubernetes/kops/config")
+
+	vfsContext := clientset.VFSContext()
+
+	if err := nodeupScript.ResolveS3Region(ctx, vfsContext); err != nil {
+		return nil, err
+	}
 
 	nodeupScriptResource, err := nodeupScript.Build()
 	if err != nil {
 		return nil, err
 	}
-
-	vfsContext := clientset.VFSContext()
 
 	// If this is the control plane, we want to copy the config from s3/gcs to the local file system on the target node,
 	// so that we don't need credentials to the state store.

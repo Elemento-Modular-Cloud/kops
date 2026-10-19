@@ -96,8 +96,7 @@ spec:
                               stored in the root if not configured.
                             type: string
                           interval:
-                            description: Interval is publishing interval in minutes.
-                              This parameter is only used with classic load balancer.
+                            description: Interval is unused
                             type: integer
                         type: object
                       additionalSecurityGroups:
@@ -108,15 +107,14 @@ spec:
                         type: array
                       class:
                         description: 'LoadBalancerClass specifies the class of load
-                          balancer to create: Classic, Network'
+                          balancer to create: Network'
                         type: string
                       crossZoneLoadBalancing:
                         description: CrossZoneLoadBalancing allows you to enable the
                           cross zone load balancing
                         type: boolean
                       idleTimeoutSeconds:
-                        description: IdleTimeoutSeconds sets the timeout of the api
-                          loadbalancer.
+                        description: IdleTimeoutSeconds is unused
                         format: int64
                         type: integer
                       securityGroupOverride:
@@ -327,6 +325,12 @@ spec:
               certManager:
                 description: CertManager determines the metrics server configuration.
                 properties:
+                  cainjectorFeatureGates:
+                    additionalProperties:
+                      type: boolean
+                    description: CAInjectorFeatureGates is a list of experimental
+                      features that can be enabled or disabled for the cainjector.
+                    type: object
                   defaultIssuer:
                     description: |-
                       defaultIssuer sets a default clusterIssuer
@@ -366,6 +370,12 @@ spec:
                     items:
                       type: string
                     type: array
+                  webhookFeatureGates:
+                    additionalProperties:
+                      type: boolean
+                    description: WebhookFeatureGates is a list of experimental features
+                      that can be enabled or disabled for the webhook.
+                    type: object
                 type: object
               channel:
                 description: The Channel we are following
@@ -373,6 +383,10 @@ spec:
               cloudConfig:
                 description: CloudConfiguration defines the cloud provider configuration
                 properties:
+                  awsBinariesLocation:
+                    description: AWSBinariesLocation is the location of the AWS cloud
+                      provider binaries.
+                    type: string
                   awsEBSCSIDriver:
                     description: AWSEBSCSIDriver is the config for the AWS EBS CSI
                       driver
@@ -470,6 +484,10 @@ spec:
                       ElbSecurityGroup specifies an existing AWS Security group for the Cloud Controller
                       Manager to assign to each ELB provisioned for a Service, instead of creating
                       one per ELB (AWS only).
+                    type: string
+                  gceBinariesLocation:
+                    description: GCEBinariesLocation is the location of the GCE cloud
+                      provider binaries.
                     type: string
                   gceServiceAccount:
                     description: GCEServiceAccount specifies the service account with
@@ -636,6 +654,11 @@ spec:
                   spotinstProduct:
                     description: Spotinst cloud-config specs
                     type: string
+                  useIPBasedNodeNames:
+                    description: |-
+                      UseIPBasedNodeNames names Kubernetes nodes after the EC2 private DNS name instead of the EC2
+                      instance ID (AWS only).
+                    type: boolean
                   vSphereCoreDNSServer:
                     description: VSphereCoreDNSServer is unused.
                     type: string
@@ -1094,8 +1117,9 @@ spec:
                     type: string
                 type: object
               dnsControllerGossipConfig:
-                description: DNSControllerGossipConfig for the cluster assuming the
-                  use of gossip DNS
+                description: |-
+                  DNSControllerGossipConfig has no effect and must not be set; gossip DNS support was removed in kOps 1.37.
+                  Deprecated: remove this field from the cluster spec.
                 properties:
                   listen:
                     type: string
@@ -1555,8 +1579,9 @@ spec:
                   type: object
                 type: array
               gossipConfig:
-                description: GossipConfig for the cluster assuming the use of gossip
-                  DNS
+                description: |-
+                  GossipConfig has no effect and must not be set; gossip DNS support was removed in kOps 1.37.
+                  Deprecated: remove this field from the cluster spec.
                 properties:
                   listen:
                     type: string
@@ -2028,7 +2053,9 @@ spec:
                               description: Selects a key of a ConfigMap.
                               properties:
                                 key:
-                                  description: The key to select.
+                                  description: |-
+                                    The key to select from the ConfigMap's Data field.
+                                    Keys in the BinaryData field are not currently propagated to container env vars.
                                   type: string
                                 name:
                                   default: ""
@@ -2407,6 +2434,19 @@ spec:
                   storageBackend:
                     description: StorageBackend is the backend storage
                     type: string
+                  storageInitializationTimeout:
+                    description: |-
+                      StorageInitializationTimeout is the maximum amount of time to wait for the storage layer to initialize before declaring kube-apiserver ready.
+                      Increasing this value allows etcd more time to become ready on new control-plane nodes before kube-apiserver gives up and crashes.
+                      Default is 1m0s.
+                    type: string
+                  strictTransportSecurityDirectives:
+                    description: 'StrictTransportSecurityDirectives is a list of directives
+                      for HSTS, comma separated. If this list is empty, then HSTS
+                      directives will not be added. Example: ''max-age=31536000,includeSubDomains,preload'''
+                    items:
+                      type: string
+                    type: array
                   tlsCertFile:
                     type: string
                   tlsCipherSuites:
@@ -4221,7 +4261,7 @@ spec:
                   cgroupDriver:
                     description: |-
                       CgroupDriver allows the explicit setting of the kubelet cgroup driver.
-                      DEPRECATED: The cgroup driver is automatically detected.
+                      Valid values are "systemd" (the default) and "cgroupfs". containerd is configured to use the same driver.
                     type: string
                   cgroupRoot:
                     description: cgroupRoot is the root cgroup to use for pods. This
@@ -4707,7 +4747,7 @@ spec:
                   cgroupDriver:
                     description: |-
                       CgroupDriver allows the explicit setting of the kubelet cgroup driver.
-                      DEPRECATED: The cgroup driver is automatically detected.
+                      Valid values are "systemd" (the default) and "cgroupfs". containerd is configured to use the same driver.
                     type: string
                   cgroupRoot:
                     description: cgroupRoot is the root cgroup to use for pods. This
@@ -6081,6 +6121,33 @@ spec:
                   kuberouter:
                     description: KuberouterNetworkingSpec declares that we want Kube-router
                       networking
+                    properties:
+                      externalIPRanges:
+                        description: |-
+                          ExternalIPRanges are the CIDRs from which Service externalIPs are accepted.
+                          Setting this or LoadBalancerIPRanges turns on kube-router's strict external
+                          IP validation, which drops any address outside the configured ranges.
+                          Leaving both empty keeps strict validation off.
+                        items:
+                          type: string
+                        type: array
+                      loadBalancerIPRanges:
+                        description: |-
+                          LoadBalancerIPRanges are the CIDRs from which Service loadBalancerIPs are
+                          accepted. Setting this or ExternalIPRanges turns on kube-router's strict
+                          external IP validation, which drops any address outside the configured
+                          ranges. Leaving both empty keeps strict validation off.
+                        items:
+                          type: string
+                        type: array
+                      useNFTablesForNetpol:
+                        description: |-
+                          UseNFTablesForNetpol makes the network policy controller enforce
+                          NetworkPolicies with nftables instead of iptables and ipsets.
+                          This is experimental upstream and only affects the network policy
+                          controller; the service proxy and router controllers are unchanged.
+                          Default: false
+                        type: boolean
                     type: object
                   lyftvpc:
                     description: |-

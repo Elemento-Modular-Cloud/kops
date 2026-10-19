@@ -17,6 +17,16 @@ limitations under the License.
 package networking
 
 import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
+
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
 	"k8s.io/kops/util/pkg/distributions"
@@ -35,16 +45,17 @@ import (
 // services, disable the timers, remove the drop-in files that add pod IPs as /32
 // addresses, and restart systemd-networkd to flush the stale address assignments.
 //
-// AL2023 only.
+// Amazon Linux only.
 func maskEC2NetUtilsUdevRules(c *fi.NodeupModelBuilderContext, dist distributions.Distribution) {
-	if dist != distributions.DistributionAmazonLinux2023 {
+	if !dist.IsAmazonLinux() {
 		return
 	}
 
 	c.AddTask(&nodetasks.File{
-		Path:     "/etc/udev/rules.d/99-vpc-policy-routes.rules",
-		Contents: fi.NewStringResource(""),
-		Type:     nodetasks.FileType_File,
+		Path:          "/etc/udev/rules.d/99-vpc-policy-routes.rules",
+		Contents:      fi.NewStringResource(""),
+		Type:          nodetasks.FileType_File,
+		AfterPackages: true,
 		OnChangeExecute: [][]string{
 			// Reload udev rules so the empty mask file takes effect for future ENI attach events.
 			{"udevadm", "control", "--reload-rules"},
@@ -67,11 +78,11 @@ func maskEC2NetUtilsUdevRules(c *fi.NodeupModelBuilderContext, dist distribution
 
 // disableManageForeignRoutes configures systemd-networkd to not remove foreign routes/rules
 // added by CNI. Without this, systemd-networkd may unexpectedly delete IP rules and routes.
-// AL2023, Ubuntu 22.04+, and Debian 12+.
+// Amazon Linux, Ubuntu 22.04+, and Debian 12+.
 func disableManageForeignRoutes(c *fi.NodeupModelBuilderContext, dist distributions.Distribution) {
 	if !((dist.IsUbuntu() && dist.Version() >= 22.04) ||
 		(dist.IsDebian() && dist.Version() >= 12) ||
-		dist == distributions.DistributionAmazonLinux2023) {
+		dist.IsAmazonLinux()) {
 		return
 	}
 
@@ -85,20 +96,21 @@ ManageForeignRoutingPolicyRules=no
 		Path:            "/usr/lib/systemd/networkd.conf.d/40-disable-manage-foreign-routes.conf",
 		Contents:        fi.NewStringResource(contents),
 		Type:            nodetasks.FileType_File,
+		AfterPackages:   true,
 		OnChangeExecute: [][]string{{"systemctl", "restart", "systemd-networkd"}},
 	})
 }
 
 // setMACAddressPolicyNone prevents systemd-networkd from assigning predictable MAC-based
 // names to ENIs, which can interfere with CNI interface management.
-// AL2023, Ubuntu 22.04+, and Debian 12+.
+// Amazon Linux, Ubuntu 22.04+, and Debian 12+.
 // ref: https://github.com/aws/amazon-vpc-cni-k8s/issues/2103
 // ref: https://github.com/aws/amazon-vpc-cni-k8s/issues/2839
 // ref: https://github.com/kubernetes/kops/issues/16255
 func setMACAddressPolicyNone(c *fi.NodeupModelBuilderContext, dist distributions.Distribution) {
 	if !((dist.IsUbuntu() && dist.Version() >= 22.04) ||
 		(dist.IsDebian() && dist.Version() >= 12) ||
-		dist == distributions.DistributionAmazonLinux2023) {
+		dist.IsAmazonLinux()) {
 		return
 	}
 
@@ -114,34 +126,119 @@ MACAddressPolicy=none
 		Path:            "/etc/systemd/network/99-default.link",
 		Contents:        fi.NewStringResource(contents),
 		Type:            nodetasks.FileType_File,
+		AfterPackages:   true,
 		OnChangeExecute: [][]string{{"systemctl", "restart", "systemd-networkd"}},
 	})
 }
 
-// markSecondaryENIsUnmanaged tells systemd-networkd to ignore secondary ENIs (ens6+).
-// Without this, systemd-networkd fully manages secondary ENIs via DHCP, creating
-// competing routes that interfere with CNI networking.
+// markSecondaryENIsUnmanaged causes systemd-networkd to ignore the secondary ENIs that use the
+// "ena" driver. Without this file, systemd-networkd starts DHCP on these ENIs and makes routes
+// that do not agree with the CNI routing.
 // AL2023 and Debian 12+.
 // ref: https://github.com/aws/amazon-vpc-cni-k8s/issues/3524
-func markSecondaryENIsUnmanaged(c *fi.NodeupModelBuilderContext, dist distributions.Distribution) {
-	if !(dist == distributions.DistributionAmazonLinux2023 ||
+//
+// It is not possible to find the secondary ENIs by their names. The names change with the
+// instance family and the systemd naming scheme. Examples: the primary network interface is
+// "ens5" on most Nitro instances, "ens34" on Graviton4 instances (c8g etc.), and "enp39s0" on
+// 8th-generation Intel instances (c8i etc.). Thus the file finds all the interfaces that use
+// the "ena" driver, but does not include the primary network interface, which nodeup finds at
+// boot time. The file uses the udev property "INTERFACE" for this, because a negated "Name="
+// test also agrees with the alternative names of an interface.
+//
+// The file name starts with 75. This puts the file after the per-interface files
+// ("10-netplan-*" on Debian, "70-*" on AL2023) and before the AL2023 catch-all file
+// "80-ec2.network". systemd-networkd uses the first file that agrees with an interface. Thus,
+// if the primary network interface has a per-interface file, systemd-networkd uses that file.
+func markSecondaryENIsUnmanaged(c *fi.NodeupModelBuilderContext, dist distributions.Distribution) error {
+	if !(dist.IsAmazonLinux() ||
 		(dist.IsDebian() && dist.Version() >= 12)) {
-		return
+		return nil
 	}
 
-	contents := `
+	primary, err := primaryInterfaceName(c.Context())
+	if err != nil {
+		// Do not make the file if the primary network interface is not known. A match that
+		// includes the primary network interface causes systemd-networkd to ignore it, and
+		// then systemd-resolved has no DNS servers for it.
+		return fmt.Errorf("finding primary network interface: %w", err)
+	}
+
+	contents := fmt.Sprintf(`
 [Match]
-Name=ens[6-9]* ens[1-9][0-9]*
+Driver=ena
+Property=!INTERFACE=%s
 
 [Link]
 Unmanaged=yes
-`
+`, primary)
+
 	c.AddTask(&nodetasks.File{
-		Path:            "/etc/systemd/network/10-eni-secondary.network",
+		Path:            "/etc/systemd/network/75-eni-secondary.network",
 		Contents:        fi.NewStringResource(contents),
 		Type:            nodetasks.FileType_File,
+		AfterPackages:   true,
 		OnChangeExecute: [][]string{{"systemctl", "restart", "systemd-networkd"}},
 	})
+	return nil
+}
+
+// primaryInterfaceName gives the name of the primary network interface. It gets the MAC address
+// of the primary ENI (device-number 0) from the IMDS item "mac". Then it compares this MAC
+// address with the physical network interfaces in sysfs.
+func primaryInterfaceName(ctx context.Context) (string, error) {
+	config, err := awsconfig.LoadDefaultConfig(ctx)
+	if err != nil {
+		return "", fmt.Errorf("loading AWS config: %w", err)
+	}
+	metadata := imds.NewFromConfig(config)
+	resp, err := metadata.GetMetadata(ctx, &imds.GetMetadataInput{Path: "mac"})
+	if err != nil {
+		return "", fmt.Errorf("getting primary MAC address from ec2 metadata: %w", err)
+	}
+	defer resp.Content.Close()
+	mac, err := io.ReadAll(resp.Content)
+	if err != nil {
+		return "", fmt.Errorf("reading primary MAC address from ec2 metadata: %w", err)
+	}
+
+	return findPhysicalInterfaceByMAC("/sys/class/net", strings.TrimSpace(string(mac)))
+}
+
+// findPhysicalInterfaceByMAC gives the name of the physical network interface that has the
+// specified MAC address. The function ignores the virtual interfaces (veths, bridges, VLANs),
+// because a virtual interface can have the same MAC address as a physical interface. The
+// function gives an error if it does not find exactly one physical interface with this MAC
+// address.
+func findPhysicalInterfaceByMAC(sysClassNet string, mac string) (string, error) {
+	entries, err := os.ReadDir(sysClassNet)
+	if err != nil {
+		return "", fmt.Errorf("reading %s: %w", sysClassNet, err)
+	}
+
+	var matches []string
+	for _, entry := range entries {
+		name := entry.Name()
+		// The scan uses the "device" symlink in sysfs to know if an interface is physical.
+		if _, err := os.Stat(filepath.Join(sysClassNet, name, "device")); err != nil {
+			continue
+		}
+		address, err := os.ReadFile(filepath.Join(sysClassNet, name, "address"))
+		if err != nil {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(string(address)), mac) {
+			matches = append(matches, name)
+		}
+	}
+
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return "", fmt.Errorf("no physical network interface found with MAC address %q", mac)
+	default:
+		return "", fmt.Errorf("multiple physical network interfaces found with MAC address %q: %v", mac, matches)
+	}
 }
 
 // narrowCloudIfupdownHelperRule rewrites Debian 11's

@@ -18,9 +18,9 @@ package gcemodel
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 
-	"golang.org/x/exp/slices"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/apis/kops/model"
 	"k8s.io/kops/pkg/wellknownports"
@@ -161,10 +161,11 @@ func (b *APILoadBalancerBuilder) createInternalLB(c *fi.CloudupModelBuilderConte
 	// includes both (both serve the kube-apiserver), while the kops-controller and
 	// etcd backend services only include ControlPlane MIGs.
 	var apiIGMs []*gcetasks.InstanceGroupManager
-	var controlPlaneIGMs []*gcetasks.InstanceGroupManager // Currently these contain etcd instances
+	var etcdIGMs []*gcetasks.InstanceGroupManager
+	var kopsControllerIGMs []*gcetasks.InstanceGroupManager
 	requireEtcdLB := false
-	for _, ig := range b.InstanceGroups {
-		if !ig.HasAPIServer() {
+	for _, ig := range b.AllInstanceGroups {
+		if !ig.RunsAPIServer() && !ig.RunsEtcd() {
 			continue
 		}
 		if len(ig.Spec.Zones) > 1 {
@@ -174,14 +175,21 @@ func (b *APILoadBalancerBuilder) createInternalLB(c *fi.CloudupModelBuilderConte
 			return fmt.Errorf("instance group %q must specify exactly one zone", ig.GetName())
 		}
 		zone := ig.Spec.Zones[0]
-		igm := &gcetasks.InstanceGroupManager{Name: s(gce.NameForInstanceGroupManager(b.Cluster.ObjectMeta.Name, ig.ObjectMeta.Name, zone)), Zone: s(zone)}
-		apiIGMs = append(apiIGMs, igm)
-		if ig.IsControlPlane() {
-			controlPlaneIGMs = append(controlPlaneIGMs, igm)
-		} else if ig.IsAPIServerOnly() {
+		igm := b.linkToInstanceGroupManager(c, ig, zone)
+		if ig.RunsAPIServer() {
+			apiIGMs = append(apiIGMs, igm)
+		}
+		if ig.RunsEtcd() {
+			etcdIGMs = append(etcdIGMs, igm)
+		}
+		if ig.IsControlPlane() || ig.RunsAPIServer() /* && Check for no control plane */ {
+			kopsControllerIGMs = append(kopsControllerIGMs, igm)
+		}
+		if ig.IsAPIServerOnly() {
 			requireEtcdLB = b.Cluster.UsesNoneDNS()
-		} else {
-			return fmt.Errorf("instance group %q neither control-plane nor api-server", ig.GetName())
+		}
+		if ig.IsEtcdOnly() {
+			requireEtcdLB = true
 		}
 	}
 	backendService := &gcetasks.BackendService{
@@ -194,12 +202,9 @@ func (b *APILoadBalancerBuilder) createInternalLB(c *fi.CloudupModelBuilderConte
 	}
 	c.AddTask(backendService)
 
-	// controlPlaneBS is a backend service that only targets ControlPlane MIGs.
-	// It is used for kops-controller and etcd forwarding rules, which only run
-	// on ControlPlane nodes. When there are no dedicated APIServer IGs, this is
-	// the same set of backends as the API backend service.
-	controlPlaneBS := backendService
-	if b.HasAPIServerOnlyInstanceGroups() {
+	// kopsControllerBS is a backend service that targets ControlPlane or MIGs.
+	kopsControllerBS := backendService
+	if b.HasAPIServerOnlyInstanceGroups() || b.HasEtcdOnlyInstanceGroups() {
 		controlPlaneHC := &gcetasks.HealthCheck{
 			Name:      s(b.NameForHealthCheck("kops-controller")),
 			Port:      wellknownports.KopsControllerPort,
@@ -207,15 +212,15 @@ func (b *APILoadBalancerBuilder) createInternalLB(c *fi.CloudupModelBuilderConte
 			Lifecycle: b.Lifecycle,
 		}
 		c.AddTask(controlPlaneHC)
-		controlPlaneBS = &gcetasks.BackendService{
+		kopsControllerBS = &gcetasks.BackendService{
 			Name:                  s(b.NameForBackendService("kops-controller")),
 			Protocol:              s("TCP"),
 			HealthChecks:          []*gcetasks.HealthCheck{controlPlaneHC},
 			Lifecycle:             b.Lifecycle,
 			LoadBalancingScheme:   s("INTERNAL"),
-			InstanceGroupManagers: controlPlaneIGMs,
+			InstanceGroupManagers: kopsControllerIGMs,
 		}
-		c.AddTask(controlPlaneBS)
+		c.AddTask(kopsControllerBS)
 	}
 
 	network, err := b.LinkToNetwork()
@@ -225,8 +230,8 @@ func (b *APILoadBalancerBuilder) createInternalLB(c *fi.CloudupModelBuilderConte
 
 	for _, sn := range b.Cluster.Spec.Networking.Subnets {
 		var subnet *gcetasks.Subnet
-		for _, ig := range b.InstanceGroups {
-			if ig.HasAPIServer() && slices.Contains(ig.Spec.Subnets, sn.Name) {
+		for _, ig := range b.AllInstanceGroups {
+			if ig.RunsAPIServer() && slices.Contains(ig.Spec.Subnets, sn.Name) {
 				subnet = b.LinkToSubnet(&sn)
 				break
 			}
@@ -267,7 +272,7 @@ func (b *APILoadBalancerBuilder) createInternalLB(c *fi.CloudupModelBuilderConte
 			fr := &gcetasks.ForwardingRule{
 				Name:                s(b.NameForForwardingRule("kops-controller-" + sn.Name)),
 				Lifecycle:           b.Lifecycle,
-				BackendService:      controlPlaneBS,
+				BackendService:      kopsControllerBS,
 				Ports:               []string{strconv.Itoa(wellknownports.KopsControllerPort)},
 				IPAddress:           ipAddress,
 				IPProtocol:          "TCP",
@@ -286,10 +291,22 @@ func (b *APILoadBalancerBuilder) createInternalLB(c *fi.CloudupModelBuilderConte
 		}
 
 		if model.UseCiliumEtcd(b.Cluster) {
+			etcdBS := kopsControllerBS
+			if b.HasEtcdOnlyInstanceGroups() {
+				etcdBS = &gcetasks.BackendService{
+					Name:                  s(b.NameForBackendService("cilium-etcd")),
+					Protocol:              s("TCP"),
+					HealthChecks:          []*gcetasks.HealthCheck{hc},
+					Lifecycle:             b.Lifecycle,
+					LoadBalancingScheme:   s("INTERNAL"),
+					InstanceGroupManagers: etcdIGMs,
+				}
+				c.AddTask(etcdBS)
+			}
 			c.AddTask(&gcetasks.ForwardingRule{
 				Name:                s(b.NameForForwardingRule("cilium-etcd-" + sn.Name)),
 				Lifecycle:           b.Lifecycle,
-				BackendService:      controlPlaneBS,
+				BackendService:      etcdBS,
 				Ports:               []string{strconv.Itoa(wellknownports.EtcdCiliumClientPort)},
 				IPAddress:           ipAddress,
 				IPProtocol:          "TCP",
@@ -305,12 +322,28 @@ func (b *APILoadBalancerBuilder) createInternalLB(c *fi.CloudupModelBuilderConte
 	}
 
 	if requireEtcdLB {
-		if err := b.createEtcdInternalLB(c, controlPlaneIGMs); err != nil {
+		if err := b.createEtcdInternalLB(c, etcdIGMs); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// linkToInstanceGroupManager returns a link to the MIG of an instance group in a zone. The MIGs of
+// the instance groups not being updated are not built, so they are added with the Ignore lifecycle,
+// like the tasks of the other phases, to be linked to without being changed.
+func (b *APILoadBalancerBuilder) linkToInstanceGroupManager(c *fi.CloudupModelBuilderContext, ig *kops.InstanceGroup, zone string) *gcetasks.InstanceGroupManager {
+	igm := &gcetasks.InstanceGroupManager{
+		Name: s(gce.NameForInstanceGroupManager(b.Cluster.ObjectMeta.Name, ig.ObjectMeta.Name, zone)),
+		Zone: s(zone),
+	}
+	if !slices.ContainsFunc(b.InstanceGroups, func(updating *kops.InstanceGroup) bool { return updating.Name == ig.Name }) {
+		c.AddTask(igm)
+		// AddTask applies the lifecycle overrides, but this task only names the MIG and must never run.
+		igm.Lifecycle = fi.LifecycleIgnore
+	}
+	return igm
 }
 
 func (b *APILoadBalancerBuilder) createEtcdInternalLB(c *fi.CloudupModelBuilderContext, etcdIGMs []*gcetasks.InstanceGroupManager) error {
@@ -348,8 +381,8 @@ func (b *APILoadBalancerBuilder) createEtcdInternalLB(c *fi.CloudupModelBuilderC
 	}
 	for _, sn := range b.Cluster.Spec.Networking.Subnets {
 		var subnet *gcetasks.Subnet
-		for _, ig := range b.InstanceGroups {
-			if ig.HasAPIServer() && slices.Contains(ig.Spec.Subnets, sn.Name) {
+		for _, ig := range b.AllInstanceGroups {
+			if ig.RunsAPIServer() && slices.Contains(ig.Spec.Subnets, sn.Name) {
 				subnet = b.LinkToSubnet(&sn)
 				break
 			}

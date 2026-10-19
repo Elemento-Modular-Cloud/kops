@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/kops/pkg/client/simple/vfsclientset"
 	"k8s.io/kops/util/pkg/vfs"
 	"sigs.k8s.io/yaml"
 
@@ -194,30 +195,6 @@ func TestSetupNetworking(t *testing.T) {
 		},
 		{
 			options: NewClusterOptions{
-				Networking: "kopeio",
-			},
-			expected: api.Cluster{
-				Spec: api.ClusterSpec{
-					Networking: api.NetworkingSpec{
-						Kopeio: &api.KopeioNetworkingSpec{},
-					},
-				},
-			},
-		},
-		{
-			options: NewClusterOptions{
-				Networking: "kopeio-vxlan",
-			},
-			expected: api.Cluster{
-				Spec: api.ClusterSpec{
-					Networking: api.NetworkingSpec{
-						Kopeio: &api.KopeioNetworkingSpec{},
-					},
-				},
-			},
-		},
-		{
-			options: NewClusterOptions{
 				Networking: "flannel",
 			},
 			expected: api.Cluster{
@@ -277,7 +254,7 @@ func TestSetupNetworking(t *testing.T) {
 			expected: api.Cluster{
 				Spec: api.ClusterSpec{
 					KubeProxy: &api.KubeProxyConfig{
-						Enabled: fi.PtrTo(false),
+						Enabled: new(false),
 					},
 					Networking: api.NetworkingSpec{
 						KubeRouter: &api.KuberouterNetworkingSpec{},
@@ -316,7 +293,7 @@ func TestSetupNetworking(t *testing.T) {
 			expected: api.Cluster{
 				Spec: api.ClusterSpec{
 					KubeProxy: &api.KubeProxyConfig{
-						Enabled: fi.PtrTo(false),
+						Enabled: new(false),
 					},
 					Networking: api.NetworkingSpec{
 						Cilium: &api.CiliumNetworkingSpec{
@@ -333,7 +310,7 @@ func TestSetupNetworking(t *testing.T) {
 			expected: api.Cluster{
 				Spec: api.ClusterSpec{
 					KubeProxy: &api.KubeProxyConfig{
-						Enabled: fi.PtrTo(false),
+						Enabled: new(false),
 					},
 					Networking: api.NetworkingSpec{
 						Cilium: &api.CiliumNetworkingSpec{
@@ -419,7 +396,7 @@ func TestSetupTopology(t *testing.T) {
 					Name: "test",
 				},
 				Spec: api.ClusterSpec{
-					KubernetesVersion: "v1.31.0",
+					KubernetesVersion: "v1.32.0",
 					Networking: api.NetworkingSpec{
 						Topology: &api.TopologySpec{
 							DNS: api.DNSTypeNone,
@@ -432,7 +409,7 @@ func TestSetupTopology(t *testing.T) {
 					Name: "test",
 				},
 				Spec: api.ClusterSpec{
-					KubernetesVersion: "v1.31.0",
+					KubernetesVersion: "v1.32.0",
 					Networking: api.NetworkingSpec{
 						Topology: &api.TopologySpec{
 							DNS: api.DNSTypeNone,
@@ -452,7 +429,7 @@ func TestSetupTopology(t *testing.T) {
 					Name: "test",
 				},
 				Spec: api.ClusterSpec{
-					KubernetesVersion: "v1.31.0",
+					KubernetesVersion: "v1.32.0",
 					Networking: api.NetworkingSpec{
 						Topology: &api.TopologySpec{
 							DNS: api.DNSTypePublic,
@@ -465,7 +442,7 @@ func TestSetupTopology(t *testing.T) {
 					Name: "test",
 				},
 				Spec: api.ClusterSpec{
-					KubernetesVersion: "v1.31.0",
+					KubernetesVersion: "v1.32.0",
 					Networking: api.NetworkingSpec{
 						Topology: &api.TopologySpec{
 							DNS: api.DNSTypePublic,
@@ -496,6 +473,67 @@ func TestSetupTopology(t *testing.T) {
 			diffString := diff.FormatDiff(string(expectedYaml), string(actualYaml))
 			t.Errorf("unexpected cluster topology setup:\n%s", diffString)
 		}
+	}
+}
+
+func TestNewClusterValidatesKubernetesFeatureGates(t *testing.T) {
+	vfsContext := vfs.NewTestingVFSContext()
+	basePath, err := vfsContext.BuildVfsPath("memfs://tests")
+	if err != nil {
+		t.Fatalf("error building test state store: %v", err)
+	}
+	clientset := vfsclientset.NewVFSClientset(vfsContext, basePath)
+
+	tests := []struct {
+		name    string
+		gates   []string
+		wantErr string
+	}{
+		{
+			name:    "should reject empty feature gate if entry is blank",
+			gates:   []string{""},
+			wantErr: "must not be empty",
+		},
+		{
+			name:    "should reject feature gate if entry is sign only plus",
+			gates:   []string{"+"},
+			wantErr: "must include a feature name",
+		},
+		{
+			name:    "should reject feature gate if entry is sign only minus",
+			gates:   []string{"-"},
+			wantErr: "must include a feature name",
+		},
+		{
+			name:    "should continue past feature gate validation if entry is valid",
+			gates:   []string{"+ReadWriteOncePod"},
+			wantErr: "must specify at least one zone",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			opt := &NewClusterOptions{
+				ClusterName:            "test.example.com",
+				Channel:                "file://tests/channels/channel.yaml",
+				KubernetesVersion:      "v1.32.0",
+				KubernetesFeatureGates: test.gates,
+			}
+
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("NewCluster panicked: %v", r)
+				}
+			}()
+
+			_, err := NewCluster(opt, clientset)
+			if err == nil {
+				t.Fatalf("expected error containing %q", test.wantErr)
+			}
+			if !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("unexpected error %q, expected to contain %q", err, test.wantErr)
+			}
+		})
 	}
 }
 

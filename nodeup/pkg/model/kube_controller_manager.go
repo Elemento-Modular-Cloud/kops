@@ -44,9 +44,16 @@ type KubeControllerManagerBuilder struct {
 
 var _ fi.NodeupModelBuilder = &KubeControllerManagerBuilder{}
 
+func (b *KubeControllerManagerBuilder) runsKCM() bool {
+	if b.IsMaster || b.BootConfig.InstanceGroupRole.HasKubeControllerManager() {
+		return true
+	}
+	return false
+}
+
 // Build is responsible for configuring the kube-controller-manager
 func (b *KubeControllerManagerBuilder) Build(c *fi.NodeupModelBuilderContext) error {
-	if !b.IsMaster {
+	if !b.runsKCM() {
 		return nil
 	}
 
@@ -135,7 +142,7 @@ func (b *KubeControllerManagerBuilder) writeServerCertificate(c *fi.NodeupModelB
 			return err
 		}
 
-		kcm.TLSCertFile = fi.PtrTo(filepath.Join(pathSrvKCM, "server.crt"))
+		kcm.TLSCertFile = new(filepath.Join(pathSrvKCM, "server.crt"))
 		kcm.TLSPrivateKeyFile = filepath.Join(pathSrvKCM, "server.key")
 	}
 

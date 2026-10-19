@@ -45,6 +45,12 @@ func (b *KubeProxyBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 		return nil
 	}
 
+	role := b.BootConfig.InstanceGroupRole
+	if role.HasEtcd() || role.HasKubeControllerManager() || role.HasScheduler() {
+		klog.V(2).Infof("Kube-proxy is disabled, role %s does not need kube-proxy.", role)
+		return nil
+	}
+
 	{
 		pod, err := b.buildPod()
 		if err != nil {
@@ -118,10 +124,9 @@ func (b *KubeProxyBuilder) buildPod() (*v1.Pod, error) {
 	}
 
 	if c.Master == "" {
-		if b.IsMaster {
-			// As a special case, if this is the master, we point kube-proxy to the local IP
-			// This prevents a circular dependency where kube-proxy can't come up until DNS comes up,
-			// which would mean that DNS can't rely on API to come up
+		if b.HasAPIServer {
+			// Use the local API server to avoid a kube-proxy/DNS bootstrap cycle. Dedicated
+			// apiserver nodes also lack an /etc/hosts entry for the API internal name.
 			c.Master = "https://127.0.0.1"
 		} else {
 			c.Master = "https://" + b.APIInternalName()
@@ -170,7 +175,7 @@ func (b *KubeProxyBuilder) buildPod() (*v1.Pod, error) {
 			Limits:   resourceLimits,
 		},
 		SecurityContext: &v1.SecurityContext{
-			Privileged: fi.PtrTo(true),
+			Privileged: new(true),
 		},
 	}
 
@@ -209,11 +214,6 @@ func (b *KubeProxyBuilder) buildPod() (*v1.Pod, error) {
 
 		// Map SSL certs from host: /usr/share/ca-certificates -> /etc/ssl/certs
 		kubemanifest.AddHostPathMapping(pod, container, "ssl-certs-hosts", "/usr/share/ca-certificates", kubemanifest.WithMountPath("/etc/ssl/certs"))
-	}
-
-	if b.UsesLegacyGossip() {
-		// Map /etc/hosts from host, so that we see the updates that are made by protokube
-		kubemanifest.AddHostPathMapping(pod, container, "etchosts", "/etc/hosts")
 	}
 
 	// Mount the iptables lock file

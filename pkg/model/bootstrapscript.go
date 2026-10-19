@@ -148,6 +148,10 @@ func (b *BootstrapScript) kubeEnv(cluster *kops.Cluster, ig *kops.InstanceGroup,
 
 		nodeupScript.CloudProvider = string(cluster.GetCloudProvider())
 
+		if err := nodeupScript.ResolveS3Region(c.Context(), vfs.Context); err != nil {
+			return nil, err
+		}
+
 		scriptResource, err := nodeupScript.Build()
 		if err != nil {
 			return nil, err
@@ -166,7 +170,7 @@ func KeypairNamesForInstanceGroup(cluster *kops.Cluster, ig *kops.InstanceGroup)
 	keypairs := []string{"kubernetes-ca"}
 
 	// Add keypairs for default etcd clusters (main, events, and leases, not cilium)
-	if ig.IsControlPlane() {
+	if ig.RunsEtcd() {
 		for _, etcdCluster := range cluster.Spec.EtcdClusters {
 			k := etcdCluster.Name
 			if k != "events" && k != "main" && k != "leases" {
@@ -188,8 +192,10 @@ func KeypairNamesForInstanceGroup(cluster *kops.Cluster, ig *kops.InstanceGroup)
 		}
 	}
 
-	if ig.HasAPIServer() {
+	if ig.RunsAPIServer() {
 		keypairs = append(keypairs, "apiserver-aggregator-ca", "service-account", "etcd-clients-ca")
+	} else if ig.RunsKubeControllerManager() {
+		keypairs = append(keypairs, "service-account")
 	}
 
 	// Add keypairs for cilium etcd clusters (not the default etcd clusters)
@@ -245,16 +251,16 @@ func (b *BootstrapScriptBuilder) ResourceNodeUp(c *fi.CloudupModelBuilderContext
 	c.AddTask(task)
 
 	c.AddTask(&fitasks.ManagedFile{
-		Name:      fi.PtrTo("nodeupconfig-" + ig.Name),
+		Name:      new("nodeupconfig-" + ig.Name),
 		Lifecycle: b.Lifecycle,
-		Location:  fi.PtrTo("igconfig/" + ig.Spec.Role.ToLowerString() + "/" + ig.Name + "/nodeupconfig.yaml"),
+		Location:  new("igconfig/" + ig.Spec.Role.ToLowerString() + "/" + ig.Name + "/nodeupconfig.yaml"),
 		Contents:  &task.nodeupConfig,
 	})
 	if ig.Spec.Manager == kops.InstanceManagerKarpenter {
 		c.AddTask(&fitasks.ManagedFile{
-			Name:      fi.PtrTo("nodeupscript-" + ig.Name),
+			Name:      new("nodeupscript-" + ig.Name),
 			Lifecycle: b.Lifecycle,
-			Location:  fi.PtrTo("igconfig/" + ig.Spec.Role.ToLowerString() + "/" + ig.Name + "/nodeupscript.sh"),
+			Location:  new("igconfig/" + ig.Spec.Role.ToLowerString() + "/" + ig.Name + "/nodeupscript.sh"),
 			Contents:  &task.nodeupScript,
 		})
 	}
@@ -303,6 +309,10 @@ func (b *BootstrapScript) Run(c *fi.CloudupContext) error {
 	nodeupScript.CompressUserData = fi.ValueOf(b.ig.Spec.CompressUserData)
 
 	nodeupScript.CloudProvider = string(c.T.Cluster.GetCloudProvider())
+
+	if err := nodeupScript.ResolveS3Region(c.Context(), vfs.Context); err != nil {
+		return err
+	}
 
 	nodeupScriptResource, err := nodeupScript.Build()
 	if err != nil {

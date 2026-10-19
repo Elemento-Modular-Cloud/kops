@@ -30,9 +30,16 @@ type EtcdManagerTLSBuilder struct {
 
 var _ fi.NodeupModelBuilder = &EtcdManagerTLSBuilder{}
 
+func (b *EtcdManagerTLSBuilder) runsEtcd() bool {
+	if b.IsMaster || b.BootConfig.InstanceGroupRole.HasEtcd() {
+		return true
+	}
+	return false
+}
+
 // Build is responsible for TLS configuration for etcd-manager
 func (b *EtcdManagerTLSBuilder) Build(ctx *fi.NodeupModelBuilderContext) error {
-	if !b.IsMaster {
+	if !b.runsEtcd() {
 		return nil
 	}
 
@@ -58,7 +65,7 @@ func (b *EtcdManagerTLSBuilder) Build(ctx *fi.NodeupModelBuilderContext) error {
 				Path:     filepath.Join(d, fileName+".crt"),
 				Contents: fi.NewStringResource(b.NodeupConfig.CAs[keystoreName]),
 				Type:     nodetasks.FileType_File,
-				Mode:     fi.PtrTo("0644"),
+				Mode:     new("0644"),
 			})
 
 		}

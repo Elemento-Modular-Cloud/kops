@@ -15,6 +15,7 @@ Contents: |
       - --v=4
       - --yes
       - --interval=1m0s
+      - --node-labels=node-role.kubernetes.io/control-plane
       - --node-name=$(NODE_NAME)
       - memfs://clusters.example.com/minimal.example.com/addons/bootstrap-channel.yaml
       env:
@@ -28,7 +29,7 @@ Contents: |
         value: /tmp
       - name: AWS_REGION
         value: us-test-1
-      image: registry.k8s.io/kops/channels:1.36.0-beta.1
+      image: registry.k8s.io/kops/channels:1.37.0-beta.1
       name: kops-channels
       readinessProbe:
         failureThreshold: 2

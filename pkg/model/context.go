@@ -35,6 +35,7 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner"
+	"k8s.io/kops/upup/pkg/fi/cloudup/linode"
 	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
 
 	"github.com/blang/semver/v4"
@@ -121,10 +122,11 @@ func (b *KopsModelContext) FindZonesForInstanceGroup(ig *kops.InstanceGroup) ([]
 	return model.FindZonesForInstanceGroup(b.Cluster, ig)
 }
 
-// MasterInstanceGroups returns InstanceGroups with the master role
+// MasterInstanceGroups returns the instance groups with the control-plane role,
+// including those not being updated
 func (b *KopsModelContext) MasterInstanceGroups() []*kops.InstanceGroup {
 	var groups []*kops.InstanceGroup
-	for _, ig := range b.InstanceGroups {
+	for _, ig := range b.AllInstanceGroups {
 		if !ig.IsControlPlane() {
 			continue
 		}
@@ -183,6 +185,13 @@ func (b *KopsModelContext) CloudTagsForInstanceGroup(ig *kops.InstanceGroup) (ma
 			labels[hetzner.TagKubernetesNodeLabelPrefix+k] = v
 		case kops.CloudProviderGCE:
 			// TODO: Do nothing for now while we figure out how to address GCE label length limit of 63
+		case kops.CloudProviderLinode:
+			// Akamai (Linode) Cloud tags have a 50 character limit
+			// Only store the critical kops.k8s.io/instancegroup label
+			// Role labels will be derived from the instance role tag by the identifier
+			if k == linode.TagKubernetesInstanceGroup {
+				labels[k] = v
+			}
 		default:
 			labels[nodeidentityaws.ClusterAutoscalerNodeTemplateLabel+k] = v
 		}
@@ -214,6 +223,10 @@ func (b *KopsModelContext) CloudTagsForInstanceGroup(ig *kops.InstanceGroup) (ma
 		if ig.Spec.Role.HasControlPlane() {
 			labels[gce.GceLabelNameRolePrefix+"master"] = "master"
 		}
+	case kops.CloudProviderLinode:
+		labels[linode.TagKubernetesClusterName] = b.ClusterName()
+		labels[linode.TagKubernetesInstanceGroup] = ig.Name
+		labels[linode.TagKubernetesInstanceRole] = string(ig.Spec.Role)
 	default:
 		// The system tags take priority because the cluster likely breaks without them...
 
@@ -305,7 +318,7 @@ func (b *KopsModelContext) UsesBastionDns() bool {
 
 // UsesSSHBastion checks if we have a Bastion in the cluster
 func (b *KopsModelContext) UsesSSHBastion() bool {
-	for _, ig := range b.InstanceGroups {
+	for _, ig := range b.AllInstanceGroups {
 		if ig.Spec.Role.HasBastion() {
 			return true
 		}
@@ -327,22 +340,9 @@ func (b *KopsModelContext) UseLoadBalancerForInternalAPI() bool {
 		b.Cluster.Spec.API.LoadBalancer.UseForInternalAPI
 }
 
-// APILoadBalancerClass returns which type of load balancer to use for the api
-func (b *KopsModelContext) APILoadBalancerClass() kops.LoadBalancerClass {
-	if b.Cluster.Spec.API.LoadBalancer != nil {
-		return b.Cluster.Spec.API.LoadBalancer.Class
-	}
-	return kops.LoadBalancerClassClassic
-}
-
-// UseClassicLoadBalancer checks if we are using Classic LoadBalancer
-func (b *KopsModelContext) UseClassicLoadBalancer() bool {
-	return b.Cluster.Spec.API.LoadBalancer.Class == kops.LoadBalancerClassClassic
-}
-
 // UseNetworkLoadBalancer checks if we are using Network LoadBalancer
 func (b *KopsModelContext) UseNetworkLoadBalancer() bool {
-	return b.Cluster.Spec.API.LoadBalancer.Class == kops.LoadBalancerClassNetwork
+	return b.Cluster.Spec.API.LoadBalancer != nil && b.Cluster.Spec.API.LoadBalancer.Class == kops.LoadBalancerClassNetwork
 }
 
 // UseSSHKey returns true if SSHKeyName from the cluster spec is set to a nonempty string

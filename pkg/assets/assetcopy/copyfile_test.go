@@ -52,6 +52,16 @@ func Test_BuildVFSPath(t *testing.T) {
 			true,
 		},
 		{
+			"s3://k8s-for-greeks-kops/kubernetes-release/release/v1.7.2/bin/linux/amd64/kubectl",
+			"s3://k8s-for-greeks-kops/kubernetes-release/release/v1.7.2/bin/linux/amd64/kubectl",
+			true,
+		},
+		{
+			"azureblob://exampleaccount/assets/kubernetes-release/release/v1.7.2/bin/linux/amd64/kubectl",
+			"azureblob://exampleaccount/assets/kubernetes-release/release/v1.7.2/bin/linux/amd64/kubectl",
+			true,
+		},
+		{
 			"https://foo/k8s-for-greeks-kops/kubernetes-release/release/v1.7.2/bin/linux/amd64/kubectl",
 			"",
 			false,
@@ -64,6 +74,11 @@ func Test_BuildVFSPath(t *testing.T) {
 
 		{
 			"https://storage.googleapis.com/k8s-for-greeks-kops/kubernetes-release/release/v1.7.2/bin/linux/amd64/kubectl",
+			"gs://k8s-for-greeks-kops/kubernetes-release/release/v1.7.2/bin/linux/amd64/kubectl",
+			true,
+		},
+		{
+			"gs://k8s-for-greeks-kops/kubernetes-release/release/v1.7.2/bin/linux/amd64/kubectl",
 			"gs://k8s-for-greeks-kops/kubernetes-release/release/v1.7.2/bin/linux/amd64/kubectl",
 			true,
 		},

@@ -1594,6 +1594,7 @@ func autoConvert_v1alpha3_AWSSpec_To_kops_AWSSpec(in *AWSSpec, out *kops.AWSSpec
 		out.WarmPool = nil
 	}
 	out.NodeIPFamilies = in.NodeIPFamilies
+	out.UseIPBasedNodeNames = in.UseIPBasedNodeNames
 	out.DisableSecurityGroupIngress = in.DisableSecurityGroupIngress
 	out.ElbSecurityGroup = in.ElbSecurityGroup
 	out.NLBSecurityGroupMode = in.NLBSecurityGroupMode
@@ -1655,6 +1656,7 @@ func autoConvert_kops_AWSSpec_To_v1alpha3_AWSSpec(in *kops.AWSSpec, out *AWSSpec
 		out.WarmPool = nil
 	}
 	out.NodeIPFamilies = in.NodeIPFamilies
+	out.UseIPBasedNodeNames = in.UseIPBasedNodeNames
 	out.DisableSecurityGroupIngress = in.DisableSecurityGroupIngress
 	out.ElbSecurityGroup = in.ElbSecurityGroup
 	out.NLBSecurityGroupMode = in.NLBSecurityGroupMode
@@ -1692,7 +1694,6 @@ func Convert_kops_AcceleratorConfig_To_v1alpha3_AcceleratorConfig(in *kops.Accel
 }
 
 func autoConvert_v1alpha3_AccessLogSpec_To_kops_AccessLogSpec(in *AccessLogSpec, out *kops.AccessLogSpec, s conversion.Scope) error {
-	out.Interval = in.Interval
 	out.Bucket = in.Bucket
 	out.BucketPrefix = in.BucketPrefix
 	return nil
@@ -1704,7 +1705,6 @@ func Convert_v1alpha3_AccessLogSpec_To_kops_AccessLogSpec(in *AccessLogSpec, out
 }
 
 func autoConvert_kops_AccessLogSpec_To_v1alpha3_AccessLogSpec(in *kops.AccessLogSpec, out *AccessLogSpec, s conversion.Scope) error {
-	out.Interval = in.Interval
 	out.Bucket = in.Bucket
 	out.BucketPrefix = in.BucketPrefix
 	return nil
@@ -2187,6 +2187,8 @@ func autoConvert_v1alpha3_CertManagerConfig_To_kops_CertManagerConfig(in *CertMa
 	out.Nameservers = in.Nameservers
 	out.HostedZoneIDs = in.HostedZoneIDs
 	out.FeatureGates = in.FeatureGates
+	out.WebhookFeatureGates = in.WebhookFeatureGates
+	out.CAInjectorFeatureGates = in.CAInjectorFeatureGates
 	return nil
 }
 
@@ -2203,6 +2205,8 @@ func autoConvert_kops_CertManagerConfig_To_v1alpha3_CertManagerConfig(in *kops.C
 	out.Nameservers = in.Nameservers
 	out.HostedZoneIDs = in.HostedZoneIDs
 	out.FeatureGates = in.FeatureGates
+	out.WebhookFeatureGates = in.WebhookFeatureGates
+	out.CAInjectorFeatureGates = in.CAInjectorFeatureGates
 	return nil
 }
 
@@ -5759,6 +5763,7 @@ func autoConvert_v1alpha3_KubeAPIServerConfig_To_kops_KubeAPIServerConfig(in *Ku
 	out.HTTP2MaxStreamsPerConnection = in.HTTP2MaxStreamsPerConnection
 	out.EtcdQuorumRead = in.EtcdQuorumRead
 	out.RequestTimeout = in.RequestTimeout
+	out.StorageInitializationTimeout = in.StorageInitializationTimeout
 	out.MinRequestTimeout = in.MinRequestTimeout
 	out.WatchCache = in.WatchCache
 	out.WatchCacheSizes = in.WatchCacheSizes
@@ -5777,6 +5782,7 @@ func autoConvert_v1alpha3_KubeAPIServerConfig_To_kops_KubeAPIServerConfig(in *Ku
 	out.EnableProfiling = in.EnableProfiling
 	out.EnableContentionProfiling = in.EnableContentionProfiling
 	out.CorsAllowedOrigins = in.CorsAllowedOrigins
+	out.StrictTransportSecurityDirectives = in.StrictTransportSecurityDirectives
 	out.DefaultNotReadyTolerationSeconds = in.DefaultNotReadyTolerationSeconds
 	out.DefaultUnreachableTolerationSeconds = in.DefaultUnreachableTolerationSeconds
 	out.DeleteCollectionWorkers = in.DeleteCollectionWorkers
@@ -5879,6 +5885,7 @@ func autoConvert_kops_KubeAPIServerConfig_To_v1alpha3_KubeAPIServerConfig(in *ko
 	out.HTTP2MaxStreamsPerConnection = in.HTTP2MaxStreamsPerConnection
 	out.EtcdQuorumRead = in.EtcdQuorumRead
 	out.RequestTimeout = in.RequestTimeout
+	out.StorageInitializationTimeout = in.StorageInitializationTimeout
 	out.MinRequestTimeout = in.MinRequestTimeout
 	out.WatchCache = in.WatchCache
 	out.WatchCacheSizes = in.WatchCacheSizes
@@ -5897,6 +5904,7 @@ func autoConvert_kops_KubeAPIServerConfig_To_v1alpha3_KubeAPIServerConfig(in *ko
 	out.EnableProfiling = in.EnableProfiling
 	out.EnableContentionProfiling = in.EnableContentionProfiling
 	out.CorsAllowedOrigins = in.CorsAllowedOrigins
+	out.StrictTransportSecurityDirectives = in.StrictTransportSecurityDirectives
 	out.DefaultNotReadyTolerationSeconds = in.DefaultNotReadyTolerationSeconds
 	out.DefaultUnreachableTolerationSeconds = in.DefaultUnreachableTolerationSeconds
 	out.DeleteCollectionWorkers = in.DeleteCollectionWorkers
@@ -6512,6 +6520,9 @@ func Convert_kops_KubenetNetworkingSpec_To_v1alpha3_KubenetNetworkingSpec(in *ko
 }
 
 func autoConvert_v1alpha3_KuberouterNetworkingSpec_To_kops_KuberouterNetworkingSpec(in *KuberouterNetworkingSpec, out *kops.KuberouterNetworkingSpec, s conversion.Scope) error {
+	out.UseNFTablesForNetpol = in.UseNFTablesForNetpol
+	out.ExternalIPRanges = in.ExternalIPRanges
+	out.LoadBalancerIPRanges = in.LoadBalancerIPRanges
 	return nil
 }
 
@@ -6521,6 +6532,9 @@ func Convert_v1alpha3_KuberouterNetworkingSpec_To_kops_KuberouterNetworkingSpec(
 }
 
 func autoConvert_kops_KuberouterNetworkingSpec_To_v1alpha3_KuberouterNetworkingSpec(in *kops.KuberouterNetworkingSpec, out *KuberouterNetworkingSpec, s conversion.Scope) error {
+	out.UseNFTablesForNetpol = in.UseNFTablesForNetpol
+	out.ExternalIPRanges = in.ExternalIPRanges
+	out.LoadBalancerIPRanges = in.LoadBalancerIPRanges
 	return nil
 }
 
@@ -6582,7 +6596,6 @@ func Convert_kops_LinodeSpec_To_v1alpha3_LinodeSpec(in *kops.LinodeSpec, out *Li
 func autoConvert_v1alpha3_LoadBalancerAccessSpec_To_kops_LoadBalancerAccessSpec(in *LoadBalancerAccessSpec, out *kops.LoadBalancerAccessSpec, s conversion.Scope) error {
 	out.Class = kops.LoadBalancerClass(in.Class)
 	out.Type = kops.LoadBalancerType(in.Type)
-	out.IdleTimeoutSeconds = in.IdleTimeoutSeconds
 	out.SecurityGroupOverride = in.SecurityGroupOverride
 	out.AdditionalSecurityGroups = in.AdditionalSecurityGroups
 	out.UseForInternalAPI = in.UseForInternalAPI
@@ -6620,7 +6633,6 @@ func Convert_v1alpha3_LoadBalancerAccessSpec_To_kops_LoadBalancerAccessSpec(in *
 func autoConvert_kops_LoadBalancerAccessSpec_To_v1alpha3_LoadBalancerAccessSpec(in *kops.LoadBalancerAccessSpec, out *LoadBalancerAccessSpec, s conversion.Scope) error {
 	out.Class = LoadBalancerClass(in.Class)
 	out.Type = LoadBalancerType(in.Type)
-	out.IdleTimeoutSeconds = in.IdleTimeoutSeconds
 	out.SecurityGroupOverride = in.SecurityGroupOverride
 	out.AdditionalSecurityGroups = in.AdditionalSecurityGroups
 	out.UseForInternalAPI = in.UseForInternalAPI

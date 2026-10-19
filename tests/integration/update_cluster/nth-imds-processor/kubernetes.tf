@@ -280,12 +280,6 @@ resource "aws_iam_role_policy" "masters-nthimdsprocessor-longclustername-example
   role   = aws_iam_role.masters-nthimdsprocessor-longclustername-example-com.name
 }
 
-resource "aws_iam_role_policy" "nodes-nthimdsprocessor-longclustername-example-com" {
-  name   = "nodes.nthimdsprocessor.longclustername.example.com"
-  policy = file("${path.module}/data/aws_iam_role_policy_nodes.nthimdsprocessor.longclustername.example.com_policy")
-  role   = aws_iam_role.nodes-nthimdsprocessor-longclustername-example-com.name
-}
-
 resource "aws_internet_gateway" "nthimdsprocessor-longclustername-example-com" {
   tags = {
     "KubernetesCluster"                                                  = "nthimdsprocessor.longclustername.example.com"
@@ -867,7 +861,7 @@ terraform {
     aws = {
       "configuration_aliases" = [aws.files]
       "source"                = "hashicorp/aws"
-      "version"               = ">= 5.0.0"
+      "version"               = ">= 6.57.1"
     }
   }
 }

@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/linode/linodego"
+	"github.com/linode/linodego/v2"
 	"k8s.io/klog/v2"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/linode"
@@ -51,7 +51,7 @@ func (s *SSHKey) Find(c *fi.CloudupContext) (*SSHKey, error) {
 
 	keys, err := cloud.Client().ListSSHKeys(c.Context(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("error listing Linode (Akamai) SSH keys: %w", err)
+		return nil, fmt.Errorf("error listing Akamai (Linode) SSH keys: %w", err)
 	}
 
 	var matched *linodego.SSHKey
@@ -72,8 +72,8 @@ func (s *SSHKey) Find(c *fi.CloudupContext) (*SSHKey, error) {
 	}
 
 	actual := &SSHKey{
-		ID:        fi.PtrTo(matched.ID),
-		Name:      fi.PtrTo(matched.Label),
+		ID:        new(matched.ID),
+		Name:      new(matched.Label),
 		Lifecycle: s.Lifecycle,
 	}
 
@@ -84,7 +84,7 @@ func (s *SSHKey) Find(c *fi.CloudupContext) (*SSHKey, error) {
 		}
 
 		if strings.TrimSpace(expectedPublicKey) != strings.TrimSpace(matched.SSHKey) {
-			return nil, fmt.Errorf("found SSH key %q in Linode (Akamai), but public key data did not match", name)
+			return nil, fmt.Errorf("found SSH key %q in Akamai (Linode), but public key data did not match", name)
 		}
 
 		// Avoid spurious changes.
@@ -108,6 +108,13 @@ func (_ *SSHKey) CheckChanges(actual, expected, changes *SSHKey) error {
 		}
 		if changes.PublicKey != nil {
 			return fi.CannotChangeField("PublicKey")
+		}
+	} else {
+		if expected.Name == nil {
+			return fi.RequiredField("Name")
+		}
+		if expected.PublicKey == nil {
+			return fi.RequiredField("PublicKey")
 		}
 	}
 
@@ -138,11 +145,11 @@ func (*SSHKey) RenderLinode(t *linode.APITarget, actual, expected, changes *SSHK
 		SSHKey: strings.TrimSpace(publicKey),
 	})
 	if err != nil {
-		return fmt.Errorf("error creating Linode (Akamai) SSH key %q: %w", name, err)
+		return fmt.Errorf("error creating Akamai (Linode) SSH key %q: %w", name, err)
 	}
 
-	expected.ID = fi.PtrTo(created.ID)
-	klog.V(2).Infof("Created Linode (Akamai) SSH key %q (id=%d)", created.Label, created.ID)
+	expected.ID = new(created.ID)
+	klog.V(2).Infof("Created Akamai (Linode) SSH key %q (id=%d)", created.Label, created.ID)
 
 	return nil
 }

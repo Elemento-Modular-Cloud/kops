@@ -21,13 +21,15 @@ import (
 	"path"
 	"path/filepath"
 	"testing"
+	"time"
 
-	"github.com/pelletier/go-toml"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/apis/nodeup"
 	"k8s.io/kops/pkg/diff"
 	"k8s.io/kops/pkg/flagbuilder"
 	"k8s.io/kops/pkg/testutils"
+	"k8s.io/kops/pkg/tomlwriter"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/util/pkg/distributions"
 )
@@ -52,6 +54,10 @@ func TestContainerdBuilder_V3(t *testing.T) {
 	runContainerdBuilderTest(t, "v3", distributions.DistributionUbuntu2604)
 }
 
+func TestContainerdBuilder_Cgroupfs(t *testing.T) {
+	runContainerdBuilderTest(t, "cgroupfs", distributions.DistributionUbuntu2604)
+}
+
 func TestContainerdBuilder_BuildFlags(t *testing.T) {
 	grid := []struct {
 		config   kops.ContainerdConfig
@@ -64,56 +70,56 @@ func TestContainerdBuilder_BuildFlags(t *testing.T) {
 		{
 			kops.ContainerdConfig{
 				SkipInstall:    false,
-				ConfigOverride: fi.PtrTo("test"),
-				Version:        fi.PtrTo("test"),
+				ConfigOverride: new("test"),
+				Version:        new("test"),
 			},
 			"",
 		},
 		{
 			kops.ContainerdConfig{
-				Address: fi.PtrTo("/run/containerd/containerd.sock"),
+				Address: new("/run/containerd/containerd.sock"),
 			},
 			"--address=/run/containerd/containerd.sock",
 		},
 		{
 			kops.ContainerdConfig{
-				LogLevel: fi.PtrTo("info"),
+				LogLevel: new("info"),
 			},
 			"--log-level=info",
 		},
 		{
 			kops.ContainerdConfig{
-				Root: fi.PtrTo("/var/lib/containerd"),
+				Root: new("/var/lib/containerd"),
 			},
 			"--root=/var/lib/containerd",
 		},
 		{
 			kops.ContainerdConfig{
-				State: fi.PtrTo("/run/containerd"),
+				State: new("/run/containerd"),
 			},
 			"--state=/run/containerd",
 		},
 		{
 			kops.ContainerdConfig{
 				SkipInstall:    false,
-				Address:        fi.PtrTo("/run/containerd/containerd.sock"),
-				ConfigOverride: fi.PtrTo("test"),
-				LogLevel:       fi.PtrTo("info"),
-				Root:           fi.PtrTo("/var/lib/containerd"),
-				State:          fi.PtrTo("/run/containerd"),
-				Version:        fi.PtrTo("test"),
+				Address:        new("/run/containerd/containerd.sock"),
+				ConfigOverride: new("test"),
+				LogLevel:       new("info"),
+				Root:           new("/var/lib/containerd"),
+				State:          new("/run/containerd"),
+				Version:        new("test"),
 			},
 			"--address=/run/containerd/containerd.sock --log-level=info --root=/var/lib/containerd --state=/run/containerd",
 		},
 		{
 			kops.ContainerdConfig{
 				SkipInstall:    true,
-				Address:        fi.PtrTo("/run/containerd/containerd.sock"),
-				ConfigOverride: fi.PtrTo("test"),
-				LogLevel:       fi.PtrTo("info"),
-				Root:           fi.PtrTo("/var/lib/containerd"),
-				State:          fi.PtrTo("/run/containerd"),
-				Version:        fi.PtrTo("test"),
+				Address:        new("/run/containerd/containerd.sock"),
+				ConfigOverride: new("test"),
+				LogLevel:       new("info"),
+				Root:           new("/var/lib/containerd"),
+				State:          new("/run/containerd"),
+				Version:        new("test"),
 			},
 			"--address=/run/containerd/containerd.sock --log-level=info --root=/var/lib/containerd --state=/run/containerd",
 		},
@@ -181,41 +187,6 @@ func runContainerdBuilderTest(t *testing.T, key string, distro distributions.Dis
 	testutils.ValidateTasks(t, filepath.Join(basedir, "tasks.yaml"), context)
 }
 
-func TestUseContainerdConfigV3(t *testing.T) {
-	tests := []struct {
-		name    string
-		version string
-		want    bool
-		wantErr bool
-	}{
-		{name: "empty defaults to v2", version: "", want: false},
-		{name: "1.7.0 is v2", version: "1.7.0", want: false},
-		{name: "1.999.999 is v2", version: "1.999.999", want: false},
-		{name: "2.0.0 boundary is v3", version: "2.0.0", want: true},
-		{name: "2.0.0 with v prefix is v3", version: "v2.0.0", want: true},
-		{name: "2.1.6 is v3", version: "2.1.6", want: true},
-		{name: "3.0.0 is v3", version: "3.0.0", want: true},
-		{name: "unparseable returns error", version: "not-a-semver", wantErr: true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := useContainerdConfigV3(tc.version)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("useContainerdConfigV3(%q) error = nil, want non-nil", tc.version)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("useContainerdConfigV3(%q) error = %v, want nil", tc.version, err)
-			}
-			if got != tc.want {
-				t.Errorf("useContainerdConfigV3(%q) = %v, want %v", tc.version, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestContainerdConfig(t *testing.T) {
 	b := &ContainerdBuilder{
 		NodeupModelContext: &NodeupModelContext{
@@ -235,19 +206,89 @@ func TestContainerdConfig(t *testing.T) {
 	}
 }
 
-func TestAppendGPURuntimeContainerdConfig(t *testing.T) {
-	originalConfig := `version = 2
-[plugins]
-  [plugins."io.containerd.grpc.v1.cri"]
-    [plugins."io.containerd.grpc.v1.cri".containerd]
-      default_runtime_name = "runc"
-      [plugins."io.containerd.grpc.v1.cri".containerd.runtimes]
-        [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
-          runtime_type = "io.containerd.runc.v2"
-          [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
-            SystemdCgroup = true
-`
+func TestContainerdConfigVersion(t *testing.T) {
+	grid := []struct {
+		version      *string
+		distribution distributions.Distribution
+		expected     int64
+	}{
+		{version: new("2.1.6"), distribution: distributions.DistributionUbuntu2604, expected: 3},
+		{version: new("2.2.4"), distribution: distributions.DistributionUbuntu2604, expected: 3},
+		{version: new("2.3.4"), distribution: distributions.DistributionUbuntu2604, expected: 4},
+		{version: new("2.3.4"), distribution: distributions.DistributionFlatcar, expected: 3},
+		{version: new("2.3.4"), distribution: distributions.DistributionContainerOS, expected: 3},
+		{version: nil, distribution: distributions.DistributionUbuntu2604, expected: 3},
+	}
 
+	for _, g := range grid {
+		b := &ContainerdBuilder{
+			NodeupModelContext: &NodeupModelContext{
+				NodeupConfig: &nodeup.Config{
+					ContainerdConfig: &kops.ContainerdConfig{
+						Version: g.version,
+					},
+				},
+			},
+		}
+		b.Distribution = g.distribution
+
+		if actual := b.containerdConfigVersion(); actual != g.expected {
+			t.Errorf("containerdConfigVersion for version %q on %v: got %d, expected %d", fi.ValueOf(g.version), g.distribution, actual, g.expected)
+		}
+	}
+}
+
+func TestContainerdConfigNRITimeouts(t *testing.T) {
+	b := &ContainerdBuilder{
+		NodeupModelContext: &NodeupModelContext{
+			NodeupConfig: &nodeup.Config{
+				KubeletConfig: kops.KubeletConfigSpec{
+					CgroupDriver: "systemd",
+				},
+				ContainerdConfig: &kops.ContainerdConfig{
+					NRI: &kops.NRIConfig{
+						Enabled:                   new(true),
+						PluginRequestTimeout:      &metav1.Duration{Duration: 2 * time.Second},
+						PluginRegistrationTimeout: &metav1.Duration{Duration: 5 * time.Second},
+					},
+				},
+			},
+		},
+	}
+
+	config, err := b.buildContainerdConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `version = 3
+
+[plugins]
+
+  [plugins."io.containerd.cri.v1.runtime"]
+
+    [plugins."io.containerd.cri.v1.runtime".containerd]
+      default_runtime_name = "runc"
+
+      [plugins."io.containerd.cri.v1.runtime".containerd.runtimes]
+
+        [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.runc]
+          runtime_type = "io.containerd.runc.v2"
+
+          [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.runc.options]
+            SystemdCgroup = true
+
+  [plugins."io.containerd.nri.v1.nri"]
+    disable = false
+    plugin_registration_timeout = "5s"
+    plugin_request_timeout = "2s"
+`
+	if config != expected {
+		t.Error(diff.FormatDiff(expected, config))
+	}
+}
+
+func TestAppendGPURuntimeContainerdConfig(t *testing.T) {
 	expectedNewConfig := `version = 2
 
 [plugins]
@@ -275,23 +316,49 @@ func TestAppendGPURuntimeContainerdConfig(t *testing.T) {
           [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
             SystemdCgroup = true
 `
-	config, err := toml.Load(originalConfig)
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
+	config := tomlwriter.NewTree()
+	config.SetPath([]string{"version"}, int64(2))
+	config.SetPath([]string{"plugins", "io.containerd.grpc.v1.cri", "containerd", "default_runtime_name"}, "runc")
+	config.SetPath([]string{"plugins", "io.containerd.grpc.v1.cri", "containerd", "runtimes", "runc", "runtime_type"}, "io.containerd.runc.v2")
+	config.SetPath([]string{"plugins", "io.containerd.grpc.v1.cri", "containerd", "runtimes", "runc", "options", "SystemdCgroup"}, true)
 
-	runtimesPath := []string{"plugins", "io.containerd.grpc.v1.cri", "containerd", "runtimes"}
-	if err := appendNvidiaGPURuntimeConfig(config, runtimesPath); err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
+	appendNvidiaGPURuntimeConfig(config.Table("plugins", "io.containerd.grpc.v1.cri", "containerd", "runtimes"), true)
 
-	newConfig, err := config.ToTomlString()
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
+	newConfig := config.String()
 
 	if newConfig != expectedNewConfig {
 		fmt.Println(diff.FormatDiff(expectedNewConfig, newConfig))
 		t.Error("new config did not match expected new config")
+	}
+}
+
+func TestEndpointHasPath(t *testing.T) {
+	grid := []struct {
+		endpoint string
+		expected bool
+	}{
+		{endpoint: "https://mirror.example.com", expected: false},
+		{endpoint: "https://mirror.example.com/", expected: false},
+		{endpoint: "https://mirror.example.com//", expected: false},
+		{endpoint: "http://10.0.0.5:5000", expected: false},
+		{endpoint: "mirror.example.com", expected: false},
+		{endpoint: "mirror.example.com:5000", expected: false},
+		{endpoint: "10.0.0.5", expected: false},
+		{endpoint: "https://mirror.example.com/v2", expected: true},
+		{endpoint: "https://123456789012.dkr.ecr.us-east-1.amazonaws.com/v2/docker-hub", expected: true},
+		{endpoint: "mirror.example.com:5000/v2/docker-hub", expected: true},
+		{endpoint: "10.0.0.5:5000/v2/docker-hub", expected: true},
+		{endpoint: "https://mirror.example.com/./", expected: false},
+		{endpoint: "https://mirror.example.com/v2/..", expected: false},
+		{endpoint: "https://mirror.example.com/prefix/./v2", expected: true},
+		{endpoint: "https://mirror.example.com/v2/docker-hub/", expected: true},
+		{endpoint: "[::1]:5000/v2/x", expected: true},
+		{endpoint: "https://[fd00::1]:5000", expected: false},
+	}
+
+	for _, g := range grid {
+		if actual := endpointHasPath(g.endpoint); actual != g.expected {
+			t.Errorf("endpointHasPath(%q): got %v, expected %v", g.endpoint, actual, g.expected)
+		}
 	}
 }

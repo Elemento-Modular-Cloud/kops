@@ -5,14 +5,14 @@ spec:
   addons:
   - id: k8s-1.16
     manifest: kops-controller.addons.k8s.io/k8s-1.16.yaml
-    manifestHash: b2d0af953f7c53295604ec39ce83b24e6d670fa996596e75b0a31fb635b8965f
+    manifestHash: 8e1c145798a87281f3e202537e0d41af13e50f37992e7e3ad4638aab9489125c
     name: kops-controller.addons.k8s.io
     needsRollingUpdate: control-plane
     selector:
       k8s-addon: kops-controller.addons.k8s.io
   - id: k8s-1.12
     manifest: coredns.addons.k8s.io/k8s-1.12.yaml
-    manifestHash: 92848868892af32ba17302d157d1aa5cbbd20801eb8cc5f82eb2bf81819361d7
+    manifestHash: 90b0f0803a1c311ee336e86c0ee8b6c62e13fcdc4cc4317607fe5131d40865a5
     name: coredns.addons.k8s.io
     selector:
       k8s-addon: coredns.addons.k8s.io
@@ -29,7 +29,7 @@ spec:
       k8s-addon: limit-range.addons.k8s.io
   - id: k8s-1.12
     manifest: dns-controller.addons.k8s.io/k8s-1.12.yaml
-    manifestHash: 6091fb9864f64cb9d0dd4c79df6116806caebdd0364ecd6aa45e1e5e750bccfa
+    manifestHash: faf32da7f14f49d160068bc2c9f18d09a2907c63b86f096aa1faeff60dadf051
     name: dns-controller.addons.k8s.io
     selector:
       k8s-addon: dns-controller.addons.k8s.io
@@ -41,19 +41,19 @@ spec:
       k8s-addon: storage-aws.addons.k8s.io
   - id: k8s-1.18
     manifest: aws-cloud-controller.addons.k8s.io/k8s-1.18.yaml
-    manifestHash: 69492a91fde143770836032baba838f346787af29d7299053a336720752ab287
+    manifestHash: c265d7f97c7376db25a222b8b48dc090d10d724d96ad82b805a7ff3b87b4a257
     name: aws-cloud-controller.addons.k8s.io
     selector:
       k8s-addon: aws-cloud-controller.addons.k8s.io
   - id: k8s-1.17
     manifest: aws-ebs-csi-driver.addons.k8s.io/k8s-1.17.yaml
-    manifestHash: 6fd4a33abd86c7a2f982ad5c9542b8a8ac67d3a534e352021343c4e49d0b2c71
+    manifestHash: f05c4cbc145dfe881126a357acdfcec335657ad39dfef0f57a0ecc6af7089f4b
     name: aws-ebs-csi-driver.addons.k8s.io
     selector:
       k8s-addon: aws-ebs-csi-driver.addons.k8s.io
   - id: k8s-1.19
     manifest: karpenter.sh/k8s-1.19.yaml
-    manifestHash: 34bfc2069ea36de0e099580b8ab51e2932386f0951db29df658db3db1008e36e
+    manifestHash: 220a6633c8107aef485db1345a13e6684b146593d18ac4a0bb721535a15e995d
     name: karpenter.sh
     prune:
       kinds:

@@ -42,22 +42,24 @@ func (b *LoadBalancerModelBuilder) Build(c *fi.CloudupModelBuilderContext) error
 		fmt.Sprintf("%s=%s", hetzner.TagKubernetesClusterName, b.ClusterName()),
 		fmt.Sprintf("%s=%s", hetzner.TagKubernetesInstanceRole, string(kops.InstanceGroupRoleControlPlane)),
 	}
+	// The location must not depend on the instance groups being updated.
+	location := b.AllInstanceGroups[0].Spec.Subnets[0]
 	loadbalancer := hetznertasks.LoadBalancer{
-		Name:      fi.PtrTo("api." + b.ClusterName()),
+		Name:      new("api." + b.ClusterName()),
 		Lifecycle: b.Lifecycle,
 		Network:   b.LinkToNetwork(),
-		Location:  b.InstanceGroups[0].Spec.Subnets[0],
+		Location:  location,
 		Type:      "lb11",
 		Services: []*hetznertasks.LoadBalancerService{
 			{
 				Protocol:        string(hcloud.LoadBalancerServiceProtocolTCP),
-				ListenerPort:    fi.PtrTo(wellknownports.KubeAPIServer),
-				DestinationPort: fi.PtrTo(wellknownports.KubeAPIServer),
+				ListenerPort:    new(wellknownports.KubeAPIServer),
+				DestinationPort: new(wellknownports.KubeAPIServer),
 			},
 			{
 				Protocol:        string(hcloud.LoadBalancerServiceProtocolTCP),
-				ListenerPort:    fi.PtrTo(wellknownports.KopsControllerPort),
-				DestinationPort: fi.PtrTo(wellknownports.KopsControllerPort),
+				ListenerPort:    new(wellknownports.KopsControllerPort),
+				DestinationPort: new(wellknownports.KopsControllerPort),
 			},
 		},
 		Target: strings.Join(controlPlaneLabelSelector, ","),

@@ -17,18 +17,19 @@ limitations under the License.
 package validation
 
 import (
+	"strings"
 	"testing"
 
 	"k8s.io/kops/pkg/nodeidentity/aws"
 
+	"k8s.io/apimachinery/pkg/api/resource"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/kops/pkg/apis/kops"
-	"k8s.io/kops/upup/pkg/fi"
 )
 
 func s(v string) *string {
-	return fi.PtrTo(v)
+	return new(v)
 }
 
 func TestValidateInstanceProfile(t *testing.T) {
@@ -111,15 +112,15 @@ func TestValidMasterInstanceGroup(t *testing.T) {
 							Members: []kops.EtcdMemberSpec{
 								{
 									Name:          "a",
-									InstanceGroup: fi.PtrTo("eu-central-1a"),
+									InstanceGroup: new("eu-central-1a"),
 								},
 								{
 									Name:          "b",
-									InstanceGroup: fi.PtrTo("eu-central-1b"),
+									InstanceGroup: new("eu-central-1b"),
 								},
 								{
 									Name:          "c",
-									InstanceGroup: fi.PtrTo("eu-central-1c"),
+									InstanceGroup: new("eu-central-1c"),
 								},
 							},
 						},
@@ -146,15 +147,15 @@ func TestValidMasterInstanceGroup(t *testing.T) {
 							Members: []kops.EtcdMemberSpec{
 								{
 									Name:          "a",
-									InstanceGroup: fi.PtrTo("eu-central-1a"),
+									InstanceGroup: new("eu-central-1a"),
 								},
 								{
 									Name:          "b",
-									InstanceGroup: fi.PtrTo("eu-central-1b"),
+									InstanceGroup: new("eu-central-1b"),
 								},
 								{
 									Name:          "c",
-									InstanceGroup: fi.PtrTo("eu-central-1c"),
+									InstanceGroup: new("eu-central-1c"),
 								},
 							},
 						},
@@ -222,10 +223,36 @@ func TestValidBootDevice(t *testing.T) {
 	for _, g := range grid {
 		ig := createMinimalInstanceGroup()
 		ig.Spec.RootVolume = &kops.InstanceRootVolumeSpec{
-			Type: fi.PtrTo(g.volumeType),
+			Type: new(g.volumeType),
 		}
 		errs := CrossValidateInstanceGroup(ig, cluster, nil, true)
 		testErrors(t, g.volumeType, errs, g.expected)
+	}
+}
+
+func TestCrossValidateInstanceGroupContainerdRegistryMirrors(t *testing.T) {
+	cluster := &kops.Cluster{
+		Spec: kops.ClusterSpec{
+			CloudProvider: kops.CloudProviderSpec{
+				AWS: &kops.AWSSpec{},
+			},
+		},
+	}
+	ig := createMinimalInstanceGroup()
+	ig.Spec.Containerd = &kops.ContainerdConfig{
+		RegistryMirrors: map[string][]string{
+			"*":         {"https://mirror.example.com", "HTTPS://mirror.example.com"},
+			"docker.io": {"localhost:5000", "http://localhost:5000"},
+		},
+	}
+	expected := []string{
+		"Invalid value::spec.containerd.registryMirrors[*][1]",
+		"Invalid value::spec.containerd.registryMirrors[docker.io][0]",
+	}
+	errs := CrossValidateInstanceGroup(ig, cluster, nil, true)
+	testErrors(t, ig.Spec.Containerd.RegistryMirrors, errs, expected)
+	if len(errs) != len(expected) {
+		t.Errorf("expected %d errors, got %v", len(expected), errs)
 	}
 }
 
@@ -265,6 +292,7 @@ func TestCrossValidateKarpenterInstanceGroup(t *testing.T) {
 			CloudProvider: kops.CloudProviderSpec{
 				AWS: &kops.AWSSpec{},
 			},
+			Karpenter: &kops.KarpenterConfig{Enabled: true},
 		},
 	}
 	gceCluster := &kops.Cluster{
@@ -272,6 +300,7 @@ func TestCrossValidateKarpenterInstanceGroup(t *testing.T) {
 			CloudProvider: kops.CloudProviderSpec{
 				GCE: &kops.GCESpec{},
 			},
+			Karpenter: &kops.KarpenterConfig{Enabled: true},
 		},
 	}
 
@@ -319,6 +348,17 @@ func TestCrossValidateKarpenterInstanceGroup(t *testing.T) {
 			role:     kops.InstanceGroupRoleAPIServer,
 			image:    "ami-0123456789abcdef0",
 			expected: []string{"Forbidden::spec.role"},
+		},
+		{
+			desc: "addon disabled",
+			cluster: &kops.Cluster{
+				Spec: kops.ClusterSpec{
+					CloudProvider: kops.CloudProviderSpec{AWS: &kops.AWSSpec{}},
+				},
+			},
+			role:     kops.InstanceGroupRoleNode,
+			image:    "ami-0123456789abcdef0",
+			expected: []string{"Forbidden::spec.manager"},
 		},
 		{
 			desc:     "url image",
@@ -377,69 +417,69 @@ func TestValidateKarpenterStaticCapacity(t *testing.T) {
 		},
 		{
 			desc:    "static with default feature gates",
-			minSize: fi.PtrTo(int32(4)),
+			minSize: new(int32(4)),
 		},
 		{
 			desc:         "static with custom feature gates",
-			minSize:      fi.PtrTo(int32(4)),
+			minSize:      new(int32(4)),
 			featureGates: "NodeRepair=false,StaticCapacity=true",
 		},
 		{
 			desc:         "static with final feature gate enabled",
-			minSize:      fi.PtrTo(int32(4)),
+			minSize:      new(int32(4)),
 			featureGates: "StaticCapacity=false,StaticCapacity=true",
 		},
 		{
 			desc:     "zero minSize",
-			minSize:  fi.PtrTo(int32(0)),
+			minSize:  new(int32(0)),
 			expected: []string{"Invalid value::spec.minSize"},
 		},
 		{
 			desc:     "negative minSize",
-			minSize:  fi.PtrTo(int32(-1)),
+			minSize:  new(int32(-1)),
 			expected: []string{"Invalid value::spec.minSize"},
 		},
 		{
 			desc:         "custom feature gates omit static capacity",
-			minSize:      fi.PtrTo(int32(4)),
+			minSize:      new(int32(4)),
 			featureGates: "NodeRepair=true",
 			expected:     []string{"Forbidden::spec.minSize"},
 		},
 		{
 			desc:         "whitespace feature gates",
-			minSize:      fi.PtrTo(int32(4)),
+			minSize:      new(int32(4)),
 			featureGates: " ",
 			expected:     []string{"Forbidden::spec.minSize"},
 		},
 		{
 			desc:         "static capacity disabled",
-			minSize:      fi.PtrTo(int32(4)),
+			minSize:      new(int32(4)),
 			featureGates: "StaticCapacity=false",
 			expected:     []string{"Forbidden::spec.minSize"},
 		},
 		{
 			desc:         "final feature gate disabled",
-			minSize:      fi.PtrTo(int32(4)),
+			minSize:      new(int32(4)),
 			featureGates: "StaticCapacity=true,StaticCapacity=false",
 			expected:     []string{"Forbidden::spec.minSize"},
 		},
 		{
 			desc:    "maxSize for dynamic",
-			maxSize: fi.PtrTo(int32(4)),
+			maxSize: new(int32(4)),
 		},
 		{
 			desc:    "maxSize for static",
-			minSize: fi.PtrTo(int32(4)),
-			maxSize: fi.PtrTo(int32(4)),
+			minSize: new(int32(4)),
+			maxSize: new(int32(4)),
 		},
 		{
 			desc:     "zero maxSize",
-			maxSize:  fi.PtrTo(int32(0)),
+			maxSize:  new(int32(0)),
 			expected: []string{"Invalid value::spec.maxSize"},
 		},
 		{
 			desc:     "negative maxSize",
-			maxSize:  fi.PtrTo(int32(-1)),
+			maxSize:  new(int32(-1)),
 			expected: []string{"Invalid value::spec.maxSize"},
 		},
 	}
@@ -467,6 +507,138 @@ func TestValidateKarpenterStaticCapacity(t *testing.T) {
 					Image:   "my-image",
 					MinSize: g.minSize,
 					MaxSize: g.maxSize,
+				},
+			}
+
+			errs := CrossValidateInstanceGroup(ig, cluster, nil, true)
+			testErrors(t, g.desc, errs, g.expected)
+		})
+	}
+}
+
+func TestValidateKarpenterInstanceRequirements(t *testing.T) {
+	quantity := func(s string) *resource.Quantity {
+		q := resource.MustParse(s)
+		return &q
+	}
+
+	grid := []struct {
+		desc                  string
+		cpu                   *kops.MinMaxSpec
+		memory                *kops.MinMaxSpec
+		excludedInstanceTypes []string
+		expected              []string
+	}{
+		{
+			desc:                  "valid requirements",
+			cpu:                   &kops.MinMaxSpec{Min: quantity("2"), Max: quantity("16")},
+			memory:                &kops.MinMaxSpec{Min: quantity("1"), Max: quantity("64Gi")},
+			excludedInstanceTypes: []string{"m3.*", "t2.nano"},
+		},
+		{
+			desc:     "fractional cpu",
+			cpu:      &kops.MinMaxSpec{Min: quantity("500m")},
+			expected: []string{"Invalid value::spec.mixedInstancesPolicy.instanceRequirements.cpu.min"},
+		},
+		{
+			desc:     "negative cpu",
+			cpu:      &kops.MinMaxSpec{Max: quantity("-1")},
+			expected: []string{"Invalid value::spec.mixedInstancesPolicy.instanceRequirements.cpu.max"},
+		},
+		{
+			desc:     "cpu exceeds Karpenter range",
+			cpu:      &kops.MinMaxSpec{Max: quantity("5000000000")},
+			expected: []string{"Invalid value::spec.mixedInstancesPolicy.instanceRequirements.cpu.max"},
+		},
+		{
+			desc:     "cpu maximum is zero",
+			cpu:      &kops.MinMaxSpec{Max: quantity("0")},
+			expected: []string{"Invalid value::spec.mixedInstancesPolicy.instanceRequirements.cpu.max"},
+		},
+		{
+			desc:     "cpu minimum exceeds maximum",
+			cpu:      &kops.MinMaxSpec{Min: quantity("4"), Max: quantity("2")},
+			expected: []string{"Invalid value::spec.mixedInstancesPolicy.instanceRequirements.cpu.max"},
+		},
+		{
+			desc:     "negative minimum",
+			memory:   &kops.MinMaxSpec{Min: quantity("-1")},
+			expected: []string{"Invalid value::spec.mixedInstancesPolicy.instanceRequirements.memory.min"},
+		},
+		{
+			desc:     "negative maximum",
+			memory:   &kops.MinMaxSpec{Max: quantity("-1")},
+			expected: []string{"Invalid value::spec.mixedInstancesPolicy.instanceRequirements.memory.max"},
+		},
+		{
+			desc:     "memory minimum exceeds Karpenter range",
+			memory:   &kops.MinMaxSpec{Min: quantity("2147483648Mi")},
+			expected: []string{"Invalid value::spec.mixedInstancesPolicy.instanceRequirements.memory.min"},
+		},
+		{
+			desc:     "memory maximum exceeds Karpenter range",
+			memory:   &kops.MinMaxSpec{Max: quantity("2147483648Mi")},
+			expected: []string{"Invalid value::spec.mixedInstancesPolicy.instanceRequirements.memory.max"},
+		},
+		{
+			desc:     "memory overflow",
+			memory:   &kops.MinMaxSpec{Max: quantity("1e30")},
+			expected: []string{"Invalid value::spec.mixedInstancesPolicy.instanceRequirements.memory.max"},
+		},
+		{
+			desc:     "memory maximum rounds to zero",
+			memory:   &kops.MinMaxSpec{Max: quantity("1")},
+			expected: []string{"Invalid value::spec.mixedInstancesPolicy.instanceRequirements.memory.max"},
+		},
+		{
+			desc:     "memory range inverted by rounding",
+			memory:   &kops.MinMaxSpec{Min: quantity("2G"), Max: quantity("2G")},
+			expected: []string{"Invalid value::spec.mixedInstancesPolicy.instanceRequirements.memory.max"},
+		},
+		{
+			desc:                  "unsupported excluded instance wildcard",
+			excludedInstanceTypes: []string{"m5.*large"},
+			expected:              []string{"Invalid value::spec.mixedInstancesPolicy.instanceRequirements.excludedInstanceTypes[0]"},
+		},
+		{
+			desc:                  "comma-separated excluded instance types",
+			excludedInstanceTypes: []string{"m5.large,c5.large"},
+			expected:              []string{"Invalid value::spec.mixedInstancesPolicy.instanceRequirements.excludedInstanceTypes[0]"},
+		},
+		{
+			desc:                  "excluded instance type with slash",
+			excludedInstanceTypes: []string{"not/an-instance-type"},
+			expected:              []string{"Invalid value::spec.mixedInstancesPolicy.instanceRequirements.excludedInstanceTypes[0]"},
+		},
+		{
+			desc:                  "overlong excluded instance family",
+			excludedInstanceTypes: []string{strings.Repeat("a", 64) + ".*"},
+			expected:              []string{"Invalid value::spec.mixedInstancesPolicy.instanceRequirements.excludedInstanceTypes[0]"},
+		},
+		{
+			desc:                  "empty excluded instance type",
+			excludedInstanceTypes: []string{" "},
+			expected:              []string{"Invalid value::spec.mixedInstancesPolicy.instanceRequirements.excludedInstanceTypes[0]"},
+		},
+	}
+
+	cluster := &kops.Cluster{
+		Spec: kops.ClusterSpec{
+			CloudProvider: kops.CloudProviderSpec{
+				AWS: &kops.AWSSpec{},
+			},
+			Karpenter: &kops.KarpenterConfig{Enabled: true},
+		},
+	}
+	for _, g := range grid {
+		t.Run(g.desc, func(t *testing.T) {
+			ig := createMinimalInstanceGroup()
+			ig.Spec.Manager = kops.InstanceManagerKarpenter
+			ig.Spec.MixedInstancesPolicy = &kops.MixedInstancesPolicySpec{
+				InstanceRequirements: &kops.InstanceRequirementsSpec{
+					CPU:                   g.cpu,
+					Memory:                g.memory,
+					ExcludedInstanceTypes: g.excludedInstanceTypes,
 				},
 			}
 
@@ -574,20 +746,20 @@ func TestIGUpdatePolicy(t *testing.T) {
 		},
 		{
 			label:  "automatic",
-			policy: fi.PtrTo(kops.UpdatePolicyAutomatic),
+			policy: new(kops.UpdatePolicyAutomatic),
 		},
 		{
 			label:  "external",
-			policy: fi.PtrTo(kops.UpdatePolicyExternal),
+			policy: new(kops.UpdatePolicyExternal),
 		},
 		{
 			label:    "empty",
-			policy:   fi.PtrTo(""),
+			policy:   new(""),
 			expected: []string{unsupportedValueError},
 		},
 		{
 			label:    "unknown",
-			policy:   fi.PtrTo("something-else"),
+			policy:   new("something-else"),
 			expected: []string{unsupportedValueError},
 		},
 	} {
@@ -611,30 +783,30 @@ func TestValidateInstanceGroupGVisorWorkerOnly(t *testing.T) {
 		{
 			name:    "enabled on worker",
 			role:    kops.InstanceGroupRoleNode,
-			enabled: fi.PtrTo(true),
+			enabled: new(true),
 		},
 		{
 			name:     "enabled on control plane",
 			role:     kops.InstanceGroupRoleControlPlane,
-			enabled:  fi.PtrTo(true),
+			enabled:  new(true),
 			expected: []string{"Forbidden::spec.containerd.gvisor"},
 		},
 		{
 			name:     "enabled on apiserver",
 			role:     kops.InstanceGroupRoleAPIServer,
-			enabled:  fi.PtrTo(true),
+			enabled:  new(true),
 			expected: []string{"Forbidden::spec.containerd.gvisor"},
 		},
 		{
 			name:     "enabled on bastion",
 			role:     kops.InstanceGroupRoleBastion,
-			enabled:  fi.PtrTo(true),
+			enabled:  new(true),
 			expected: []string{"Forbidden::spec.containerd.gvisor"},
 		},
 		{
 			name:    "disabled on apiserver",
 			role:    kops.InstanceGroupRoleAPIServer,
-			enabled: fi.PtrTo(false),
+			enabled: new(false),
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -667,8 +839,8 @@ func TestValidInstanceGroup(t *testing.T) {
 				Spec: kops.InstanceGroupSpec{
 					Role:    kops.InstanceGroupRoleControlPlane,
 					Subnets: []string{"eu-central-1a"},
-					MaxSize: fi.PtrTo(int32(1)),
-					MinSize: fi.PtrTo(int32(1)),
+					MaxSize: new(int32(1)),
+					MinSize: new(int32(1)),
 					Image:   "my-image",
 				},
 			},
@@ -683,8 +855,8 @@ func TestValidInstanceGroup(t *testing.T) {
 				Spec: kops.InstanceGroupSpec{
 					Role:    kops.InstanceGroupRoleAPIServer,
 					Subnets: []string{"eu-central-1a"},
-					MaxSize: fi.PtrTo(int32(1)),
-					MinSize: fi.PtrTo(int32(1)),
+					MaxSize: new(int32(1)),
+					MinSize: new(int32(1)),
 					Image:   "my-image",
 				},
 			},
@@ -699,8 +871,8 @@ func TestValidInstanceGroup(t *testing.T) {
 				Spec: kops.InstanceGroupSpec{
 					Role:    kops.InstanceGroupRoleNode,
 					Subnets: []string{"eu-central-1a"},
-					MaxSize: fi.PtrTo(int32(1)),
-					MinSize: fi.PtrTo(int32(1)),
+					MaxSize: new(int32(1)),
+					MinSize: new(int32(1)),
 					Image:   "my-image",
 				},
 			},
@@ -715,8 +887,8 @@ func TestValidInstanceGroup(t *testing.T) {
 				Spec: kops.InstanceGroupSpec{
 					Role:    kops.InstanceGroupRoleBastion,
 					Subnets: []string{"eu-central-1a"},
-					MaxSize: fi.PtrTo(int32(1)),
-					MinSize: fi.PtrTo(int32(1)),
+					MaxSize: new(int32(1)),
+					MinSize: new(int32(1)),
 					Image:   "my-image",
 				},
 			},
@@ -731,8 +903,8 @@ func TestValidInstanceGroup(t *testing.T) {
 				Spec: kops.InstanceGroupSpec{
 					Role:    kops.InstanceGroupRoleBastion,
 					Subnets: []string{"eu-central-1a"},
-					MaxSize: fi.PtrTo(int32(1)),
-					MinSize: fi.PtrTo(int32(1)),
+					MaxSize: new(int32(1)),
+					MinSize: new(int32(1)),
 				},
 			},
 			ExpectedErrors: []string{"Forbidden::spec.image"},
@@ -746,8 +918,8 @@ func TestValidInstanceGroup(t *testing.T) {
 				Spec: kops.InstanceGroupSpec{
 					Role:    kops.InstanceGroupRoleControlPlane,
 					Subnets: []string{"eu-central-1a"},
-					MaxSize: fi.PtrTo(int32(2)),
-					MinSize: fi.PtrTo(int32(2)),
+					MaxSize: new(int32(2)),
+					MinSize: new(int32(2)),
 					Image:   "my-image",
 				},
 			},
@@ -772,8 +944,8 @@ func createMinimalInstanceGroup() *kops.InstanceGroup {
 		Spec: kops.InstanceGroupSpec{
 			CloudLabels: make(map[string]string),
 			Role:        "Node",
-			MaxSize:     fi.PtrTo(int32(1)),
-			MinSize:     fi.PtrTo(int32(1)),
+			MaxSize:     new(int32(1)),
+			MinSize:     new(int32(1)),
 			Image:       "my-image",
 		},
 	}
@@ -855,8 +1027,8 @@ func TestCrossValidateAPIServerRole(t *testing.T) {
 				Spec: kops.InstanceGroupSpec{
 					Role:    kops.InstanceGroupRoleAPIServer,
 					Subnets: []string{"eu-central-1a"},
-					MaxSize: fi.PtrTo(int32(1)),
-					MinSize: fi.PtrTo(int32(1)),
+					MaxSize: new(int32(1)),
+					MinSize: new(int32(1)),
 					Image:   "my-image",
 				},
 			}
@@ -916,5 +1088,33 @@ func TestValidateInstanceGroupName(t *testing.T) {
 				t.Fatalf("unexpected errors for input %q: %v", tc.input, errs.ToAggregate())
 			}
 		})
+	}
+}
+
+func TestValidateInstanceGroupKubeletCgroupDriver(t *testing.T) {
+	grid := []struct {
+		CgroupDriver   string
+		ExpectedErrors []string
+	}{
+		{CgroupDriver: "", ExpectedErrors: []string{}},
+		{CgroupDriver: "systemd", ExpectedErrors: []string{}},
+		{CgroupDriver: "cgroupfs", ExpectedErrors: []string{}},
+		{CgroupDriver: "cgroup-fs", ExpectedErrors: []string{"Unsupported value::spec.kubelet.cgroupDriver"}},
+	}
+
+	for _, g := range grid {
+		ig := &kops.InstanceGroup{
+			ObjectMeta: v1.ObjectMeta{
+				Name: "nodes",
+			},
+			Spec: kops.InstanceGroupSpec{
+				Role: kops.InstanceGroupRoleNode,
+				Kubelet: &kops.KubeletConfigSpec{
+					CgroupDriver: g.CgroupDriver,
+				},
+			},
+		}
+		errs := ValidateInstanceGroup(ig, nil, false)
+		testErrors(t, g.CgroupDriver, errs, g.ExpectedErrors)
 	}
 }

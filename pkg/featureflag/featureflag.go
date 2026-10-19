@@ -69,8 +69,6 @@ var (
 	SpotinstController = new("SpotinstController", Bool(true))
 	// VPCSkipEnableDNSSupport if set will make that a VPC does not need DNSSupport enabled.
 	VPCSkipEnableDNSSupport = new("VPCSkipEnableDNSSupport", Bool(false))
-	// SkipEtcdVersionCheck will bypass the check that etcd-manager is using a supported etcd version
-	SkipEtcdVersionCheck = new("SkipEtcdVersionCheck", Bool(false))
 	// EtcdEventsHTTP enables HTTP (non-TLS) for the events etcd cluster.
 	// This matches the pattern used by GCE scale tests and can help with
 	// TLS handshake overhead for the ephemeral events data.
@@ -95,13 +93,14 @@ var (
 	ImageDigest = new("ImageDigest", Bool(true))
 	// Scaleway toggles the Scaleway Cloud support.
 	Scaleway = new("Scaleway", Bool(false))
-	// SELinuxMount configures AWS EBS and GCE PD CSI drivers for SELinuxMount support.
-	// It expects than Kubernetes feature gate SELinuxMountReadWriteOncePod is
-	// enabled or GA in the API server, KCM and kubelet.
-	// OS with SELinux support on all nodes is recommended, but not required
-	// - the feature won't do anything when the node OS does not support SELinux.
-	// TODO(jsafrane): add to all CSI drivers installed by kops.
-	SELinuxMount = new("SELinuxMount", Bool(false))
+	// SELinuxMount is an escape-hatch flag for CSI driver SELinux mount support
+	// (CSIDriver.spec.seLinuxMount and the host mounts it requires) in the AWS EBS
+	// and GCP PD CSI drivers. The feature is enabled per-cluster via
+	// spec.containerd.selinuxEnabled; this flag is a plain kill switch on top of
+	// that (set -SELinuxMount to disable the feature unconditionally, e.g. if it
+	// causes trouble in the field). See
+	// upup/pkg/fi/cloudup.TemplateFunctions.UseSELinuxMount.
+	SELinuxMount = new("SELinuxMount", Bool(true))
 	// DO Terraform toggles the DO terraform support.
 	DOTerraform = new("DOTerraform", Bool(false))
 	// Metal enables the experimental bare-metal support.
@@ -112,7 +111,7 @@ var (
 	ClusterAPI = new("ClusterAPI", Bool(false))
 	// DiscoveryService enables support for OIDC discovery via a hosted service.
 	DiscoveryService = new("DiscoveryService", Bool(false))
-	// Linode toggles the Linode (Akamai) Cloud support.
+	// Linode feature flag toggles Akamai (Linode) Cloud support.
 	Linode = new("Linode", Bool(false))
 )
 

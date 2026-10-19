@@ -193,6 +193,7 @@ func NewCmdCreateCluster(f *util.Factory, out io.Writer) *cobra.Command {
 	sshPublicKey := ""
 	associatePublicIP := false
 	encryptEtcdStorage := false
+	var controlPlaneCount int32
 
 	cmd := &cobra.Command{
 		Use:               "cluster [CLUSTER]",
@@ -210,6 +211,14 @@ func NewCmdCreateCluster(f *util.Factory, out io.Writer) *cobra.Command {
 
 			if cmd.Flag("encrypt-etcd-storage").Changed {
 				options.EncryptEtcdStorage = &encryptEtcdStorage
+			}
+
+			if cmd.Flag("control-plane-count").Changed || cmd.Flag("master-count").Changed {
+				options.ControlPlaneCount = &controlPlaneCount
+			}
+
+			if err := checkProjectFlag(cmd.Flag("project").Changed, options.Project); err != nil {
+				return err
 			}
 
 			if sshPublicKey != "" {
@@ -278,7 +287,7 @@ func NewCmdCreateCluster(f *util.Factory, out io.Writer) *cobra.Command {
 	cmd.RegisterFlagCompletionFunc("kubernetes-version", completeKubernetesVersion)
 
 	cmd.Flags().StringSliceVar(&options.KubernetesFeatureGates, "kubernetes-feature-gates", options.KubernetesFeatureGates, "List of Kubernetes feature gates to enable/disable")
-	cmd.RegisterFlagCompletionFunc("kubernetes-version", completeKubernetesFeatureGates)
+	cmd.RegisterFlagCompletionFunc("kubernetes-feature-gates", completeKubernetesFeatureGates)
 
 	cmd.Flags().StringVar(&options.ContainerRuntime, "container-runtime", options.ContainerRuntime, "Container runtime to use: containerd")
 	cmd.Flags().MarkDeprecated("container-runtime", "containerd is the only supported value")
@@ -291,9 +300,9 @@ func NewCmdCreateCluster(f *util.Factory, out io.Writer) *cobra.Command {
 		return []string{"pub"}, cobra.ShellCompDirectiveFilterFileExt
 	})
 
-	cmd.Flags().Int32Var(&options.ControlPlaneCount, "master-count", options.ControlPlaneCount, "Number of control-plane nodes. Defaults to one control-plane node per control-plane-zone")
+	cmd.Flags().Int32Var(&controlPlaneCount, "master-count", controlPlaneCount, "Number of control-plane nodes. Defaults to one control-plane node per control-plane-zone")
 	cmd.Flags().MarkDeprecated("master-count", "use --control-plane-count instead")
-	cmd.Flags().Int32Var(&options.ControlPlaneCount, "control-plane-count", options.ControlPlaneCount, "Number of control-plane nodes. Defaults to one control-plane node per control-plane-zone")
+	cmd.Flags().Int32Var(&controlPlaneCount, "control-plane-count", controlPlaneCount, "Number of control-plane nodes. Defaults to one control-plane node per control-plane-zone")
 	cmd.Flags().Int32Var(&options.NodeCount, "node-count", options.NodeCount, "Total number of worker nodes. Defaults to one node per zone")
 	if featureflag.APIServerNodes.Enabled() {
 		cmd.Flags().Int32Var(&options.APIServerCount, "api-server-count", options.APIServerCount, "Number of API server nodes. Defaults to 0.")
@@ -301,7 +310,6 @@ func NewCmdCreateCluster(f *util.Factory, out io.Writer) *cobra.Command {
 	if featureflag.ExperimentalRoles.Enabled() {
 		cmd.Flags().Int32Var(&options.EtcdCount, "etcd-count", options.EtcdCount, "Number of etcd nodes. Defaults to 0.")
 		cmd.Flags().Int32Var(&options.SchedulerCount, "scheduler-count", options.SchedulerCount, "Number of scheduler nodes. Defaults to 0.")
-		cmd.Flags().Int32Var(&options.CloudControllerManagerCount, "ccm-count", options.CloudControllerManagerCount, "Number of cloud-controller-manager nodes. Defaults to 0.")
 		cmd.Flags().Int32Var(&options.KubeControllerManagerCount, "kcm-count", options.KubeControllerManagerCount, "Number of kube-controller-manager nodes. Defaults to 0.")
 	}
 
@@ -331,8 +339,6 @@ func NewCmdCreateCluster(f *util.Factory, out io.Writer) *cobra.Command {
 		cmd.RegisterFlagCompletionFunc("etcd-size", completeMachineType)
 		cmd.Flags().StringSliceVar(&options.SchedulerSizes, "scheduler-size", options.SchedulerSizes, "Machine type(s) for scheduler nodes")
 		cmd.RegisterFlagCompletionFunc("scheduler-size", completeMachineType)
-		cmd.Flags().StringSliceVar(&options.CloudControllerManagerSizes, "ccm-size", options.CloudControllerManagerSizes, "Machine type(s) for cloud-controller-manager nodes")
-		cmd.RegisterFlagCompletionFunc("ccm-size", completeMachineType)
 		cmd.Flags().StringSliceVar(&options.KubeControllerManagerSizes, "kcm-size", options.KubeControllerManagerSizes, "Machine type(s) for kube-controller-manager nodes")
 		cmd.RegisterFlagCompletionFunc("kcm-size", completeMachineType)
 	}
@@ -436,11 +442,6 @@ func NewCmdCreateCluster(f *util.Factory, out io.Writer) *cobra.Command {
 	cmd.Flags().StringVar(&options.NodeTenancy, "node-tenancy", options.NodeTenancy, "Tenancy of the node group (AWS only): default or dedicated")
 	cmd.RegisterFlagCompletionFunc("node-tenancy", completeTenancy)
 
-	cmd.Flags().StringVar(&options.APILoadBalancerClass, "api-loadbalancer-class", options.APILoadBalancerClass, "Class of load balancer for the Kubernetes API (AWS only): classic or network")
-	cmd.Flags().MarkDeprecated("api-loadbalancer-class", "network load balancer should be used for all newly created clusters")
-	cmd.RegisterFlagCompletionFunc("api-loadbalancer-class", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-		return []string{"classic", "network"}, cobra.ShellCompDirectiveNoFileComp
-	})
 	cmd.Flags().StringVar(&options.APILoadBalancerType, "api-loadbalancer-type", options.APILoadBalancerType, "Type of load balancer for the Kubernetes API: public or internal")
 	cmd.RegisterFlagCompletionFunc("api-loadbalancer-type", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		return []string{"public", "internal"}, cobra.ShellCompDirectiveNoFileComp
@@ -652,7 +653,7 @@ func RunCreateCluster(ctx context.Context, f *util.Factory, out io.Writer, c *Cr
 			if group.Spec.RootVolume == nil {
 				group.Spec.RootVolume = &api.InstanceRootVolumeSpec{}
 			}
-			group.Spec.RootVolume.Size = fi.PtrTo(c.ControlPlaneVolumeSize)
+			group.Spec.RootVolume.Size = new(c.ControlPlaneVolumeSize)
 		}
 	}
 
@@ -661,7 +662,7 @@ func RunCreateCluster(ctx context.Context, f *util.Factory, out io.Writer, c *Cr
 			if group.Spec.RootVolume == nil {
 				group.Spec.RootVolume = &api.InstanceRootVolumeSpec{}
 			}
-			group.Spec.RootVolume.Type = fi.PtrTo(c.ControlPlaneVolumeType)
+			group.Spec.RootVolume.Type = new(c.ControlPlaneVolumeType)
 		}
 	}
 
@@ -670,7 +671,7 @@ func RunCreateCluster(ctx context.Context, f *util.Factory, out io.Writer, c *Cr
 			if group.Spec.RootVolume == nil {
 				group.Spec.RootVolume = &api.InstanceRootVolumeSpec{}
 			}
-			group.Spec.RootVolume.Size = fi.PtrTo(c.NodeVolumeSize)
+			group.Spec.RootVolume.Size = new(c.NodeVolumeSize)
 		}
 	}
 
@@ -679,7 +680,7 @@ func RunCreateCluster(ctx context.Context, f *util.Factory, out io.Writer, c *Cr
 			if group.Spec.RootVolume == nil {
 				group.Spec.RootVolume = &api.InstanceRootVolumeSpec{}
 			}
-			group.Spec.RootVolume.Type = fi.PtrTo(c.NodeVolumeType)
+			group.Spec.RootVolume.Type = new(c.NodeVolumeType)
 		}
 	}
 
@@ -696,7 +697,7 @@ func RunCreateCluster(ctx context.Context, f *util.Factory, out io.Writer, c *Cr
 	}
 
 	if c.DisableSubnetTags {
-		cluster.Spec.Networking.TagSubnets = fi.PtrTo(false)
+		cluster.Spec.Networking.TagSubnets = new(false)
 	}
 
 	if c.APIPublicName != "" {
@@ -719,7 +720,7 @@ func RunCreateCluster(ctx context.Context, f *util.Factory, out io.Writer, c *Cr
 			cluster.Spec.KubeProxy = &api.KubeProxyConfig{}
 		}
 		if cluster.Spec.KubeProxy.Enabled == nil {
-			cluster.Spec.KubeProxy.Enabled = fi.PtrTo(false)
+			cluster.Spec.KubeProxy.Enabled = new(false)
 		}
 	}
 
@@ -931,6 +932,16 @@ func RunCreateCluster(ctx context.Context, f *util.Factory, out io.Writer, c *Cr
 	return nil
 }
 
+// checkProjectFlag rejects an explicitly empty --project flag. An empty value usually comes from
+// an unset environment variable (e.g. --project=$PROJECT); silently accepting it would fall back
+// to the gcloud default project, which may not be the intended one.
+func checkProjectFlag(flagSet bool, project string) error {
+	if flagSet && project == "" {
+		return fmt.Errorf("--project cannot be empty; specify a project or omit the flag to use the gcloud default project")
+	}
+	return nil
+}
+
 // parseCloudLabels takes a CSV list of key=value records and parses them into a map. Nested '='s are supported via
 // quoted strings (eg `foo="bar=baz"` parses to map[string]string{"foo":"bar=baz"}. Nested commas are not supported.
 func parseCloudLabels(s string) (map[string]string, error) {
@@ -1077,7 +1088,6 @@ func completeNetworking(options *CreateClusterOptions) func(cmd *cobra.Command, 
 		if !options.IPv6 {
 			completions = append(completions,
 				"kubenet",
-				"kopeio",
 				"flannel",
 				"kube-router",
 			)

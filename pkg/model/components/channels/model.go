@@ -26,10 +26,12 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	kopsroot "k8s.io/kops"
+	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/assets"
 	"k8s.io/kops/pkg/k8scodecs"
 	"k8s.io/kops/pkg/kubemanifest"
 	"k8s.io/kops/pkg/model"
+	"k8s.io/kops/pkg/nodelabels"
 	"k8s.io/kops/pkg/wellknownports"
 	"k8s.io/kops/pkg/wellknownusers"
 	"k8s.io/kops/upup/pkg/fi"
@@ -76,8 +78,8 @@ func (b *ChannelsBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	c.AddTask(&fitasks.ManagedFile{
 		Contents:  fi.NewBytesResource(manifest),
 		Lifecycle: b.Lifecycle,
-		Location:  fi.PtrTo(channelsManifestPath),
-		Name:      fi.PtrTo("manifests-channels-kops-channels"),
+		Location:  new(channelsManifestPath),
+		Name:      new("manifests-channels-kops-channels"),
 	})
 	return nil
 }
@@ -121,11 +123,30 @@ func (b *ChannelsBuilder) buildPod(channels []string) (*v1.Pod, error) {
 		},
 	}
 
+	// Kops Clusters with ControlPlane nodes will run kops-channel/kops-controller there
+	// For those clusters we should label the cluster with the control plane label
+	// For Split Control Plane clusters we run kops-channel/kops-controller on the APIServer node.
+	// For those clusters we should label the cluster with the appropriate specific KOPS labels.
+	nodeLabel := nodelabels.RoleLabelKopsCCM + "," +
+		nodelabels.RoleLabelKopsChannel + "," +
+		nodelabels.RoleLabelKopsController + "," +
+		nodelabels.RoleLabelCertManager
+	if b.Cluster.GetCloudProvider() == kops.CloudProviderGCE {
+		nodeLabel += "," + nodelabels.RoleLabelCAPIManager
+	}
+	for _, ig := range b.AllInstanceGroups {
+		if ig.IsControlPlane() {
+			nodeLabel = nodelabels.RoleLabelControlPlane20
+			break
+		}
+	}
+
 	args := []string{
 		"apply", "channel",
 		"--v=4",
 		"--yes",
 		"--interval=" + channelsInterval.String(),
+		"--node-labels=" + nodeLabel,
 		"--node-name=$(NODE_NAME)",
 	}
 	args = append(args, channels...)
@@ -177,8 +198,8 @@ func (b *ChannelsBuilder) buildPod(channels []string) (*v1.Pod, error) {
 		},
 		// ko-distroless's default nonroot uid can't read /var/lib/kops/kubeconfig.
 		SecurityContext: &v1.SecurityContext{
-			RunAsUser:    fi.PtrTo(int64(wellknownusers.KopsChannelsID)),
-			RunAsNonRoot: fi.PtrTo(true),
+			RunAsUser:    new(int64(wellknownusers.KopsChannelsID)),
+			RunAsNonRoot: new(true),
 		},
 	}
 	kubemanifest.AddHostPathMapping(pod, &container, "kubeconfig", channelsKubeconfigPath,

@@ -230,7 +230,7 @@ type KubeletConfigSpec struct {
 	// DEPRECATED: This parameter should be set via the config file specified by the Kubelet's --config flag.
 	ProtectKernelDefaults *bool `json:"protectKernelDefaults,omitempty" flag:"-"`
 	// CgroupDriver allows the explicit setting of the kubelet cgroup driver.
-	// DEPRECATED: The cgroup driver is automatically detected.
+	// Valid values are "systemd" (the default) and "cgroupfs". containerd is configured to use the same driver.
 	CgroupDriver string `json:"cgroupDriver,omitempty" flag:"-"`
 	// HousekeepingInterval allows to specify interval between container housekeepings.
 	HousekeepingInterval *metav1.Duration `json:"housekeepingInterval,omitempty" flag:"housekeeping-interval"`
@@ -515,6 +515,11 @@ type KubeAPIServerConfig struct {
 	// RequestTimeout configures the duration a handler must keep a request open before timing it out. (default 1m0s)
 	RequestTimeout *metav1.Duration `json:"requestTimeout,omitempty" flag:"request-timeout"`
 
+	// StorageInitializationTimeout is the maximum amount of time to wait for the storage layer to initialize before declaring kube-apiserver ready.
+	// Increasing this value allows etcd more time to become ready on new control-plane nodes before kube-apiserver gives up and crashes.
+	// Default is 1m0s.
+	StorageInitializationTimeout *metav1.Duration `json:"storageInitializationTimeout,omitempty" flag:"storage-initialization-timeout"`
+
 	// MinRequestTimeout configures the minimum number of seconds a handler must keep a request open before timing it out.
 	// Currently only honored by the watch request handler
 	MinRequestTimeout *int32 `json:"minRequestTimeout,omitempty" flag:"min-request-timeout"`
@@ -575,6 +580,9 @@ type KubeAPIServerConfig struct {
 	// CorsAllowedOrigins is a list of origins for CORS. An allowed origin can be a regular
 	// expression to support subdomain matching. If this list is empty CORS will not be enabled.
 	CorsAllowedOrigins []string `json:"corsAllowedOrigins,omitempty" flag:"cors-allowed-origins"`
+
+	// StrictTransportSecurityDirectives is a list of directives for HSTS, comma separated. If this list is empty, then HSTS directives will not be added. Example: 'max-age=31536000,includeSubDomains,preload'
+	StrictTransportSecurityDirectives []string `json:"strictTransportSecurityDirectives,omitempty" flag:"strict-transport-security-directives"`
 
 	// DefaultNotReadyTolerationSeconds indicates the tolerationSeconds of the toleration for notReady:NoExecute that is added by default to every pod that does not already have such a toleration.
 	DefaultNotReadyTolerationSeconds *int64 `json:"defaultNotReadyTolerationSeconds,omitempty" flag:"default-not-ready-toleration-seconds"`
@@ -786,7 +794,7 @@ type CloudControllerManagerConfig struct {
 	CPURequest *resource.Quantity `json:"cpuRequest,omitempty"`
 	// NodeStatusUpdateFrequency is the duration between node status updates. (default: 5m)
 	NodeStatusUpdateFrequency *metav1.Duration `json:"nodeStatusUpdateFrequency,omitempty" flag:"node-status-update-frequency"`
-	// ConcurrentNodeSyncs is the number of workers concurrently synchronizing nodes. (default: 1)
+	// ConcurrentNodeSyncs is the number of workers concurrently synchronizing nodes. (default: 5)
 	ConcurrentNodeSyncs *int32 `json:"concurrentNodeSyncs,omitempty" flag:"concurrent-node-syncs"`
 	// AzureNodeManagerImage is the OCI image of the Azure cloud node manager.
 	AzureNodeManagerImage string `json:"azureNodeManagerImage,omitempty"`
@@ -1242,6 +1250,12 @@ type CertManagerConfig struct {
 
 	// FeatureGates is a list of experimental features that can be enabled or disabled.
 	FeatureGates map[string]bool `json:"featureGates,omitempty"`
+
+	// WebhookFeatureGates is a list of experimental features that can be enabled or disabled for the webhook.
+	WebhookFeatureGates map[string]bool `json:"webhookFeatureGates,omitempty"`
+
+	// CAInjectorFeatureGates is a list of experimental features that can be enabled or disabled for the cainjector.
+	CAInjectorFeatureGates map[string]bool `json:"cainjectorFeatureGates,omitempty"`
 }
 
 // LoadBalancerControllerSpec determines the AWS LB controller configuration.

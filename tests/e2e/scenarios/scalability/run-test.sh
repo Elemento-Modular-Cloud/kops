@@ -17,11 +17,13 @@
 set -e
 set -x
 
-make test-e2e-install
+if [[ "${JOB_TYPE}" == "presubmit" && "${REPO_OWNER}/${REPO_NAME}" == "kubernetes/kops" ]]; then
+  make test-e2e-install
+fi
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
 if [[ -z "${K8S_VERSION:-}" ]]; then
-  K8S_VERSION=https://storage.googleapis.com/k8s-release-dev/ci/latest.txt
+  K8S_VERSION=https://dl.k8s.io/ci/latest.txt
 fi
 
 # Default Scale Scenario to performance
@@ -40,12 +42,13 @@ if [[ -z "${ADMIN_ACCESS:-}" ]]; then
 fi
 echo "ADMIN_ACCESS=${ADMIN_ACCESS}"
 
-KOPS_SCHEDULER_QPS="${KOPS_SCHEDULER_QPS:-500}"
-KOPS_SCHEDULER_BURST="${KOPS_SCHEDULER_BURST:-500}"
+KOPS_SCHEDULER_QPS="${KOPS_SCHEDULER_QPS:-100}"
+KOPS_SCHEDULER_BURST="${KOPS_SCHEDULER_BURST:-100}"
 KOPS_CONTROLLER_MANAGER_QPS="${KOPS_CONTROLLER_MANAGER_QPS:-500}"
 KOPS_CONTROLLER_MANAGER_BURST="${KOPS_CONTROLLER_MANAGER_BURST:-500}"
 KOPS_APISERVER_MAX_REQUESTS_INFLIGHT="${KOPS_APISERVER_MAX_REQUESTS_INFLIGHT:-640}"
 ETCD_QUOTA_BACKEND_BYTES="${ETCD_QUOTA_BACKEND_BYTES:-8589934592}"
+ETCD_WATCH_PROGRESS_NOTIFY_INTERVAL="${ETCD_WATCH_PROGRESS_NOTIFY_INTERVAL:-5s}"
 echo "KOPS_SCHEDULER_QPS=${KOPS_SCHEDULER_QPS} KOPS_SCHEDULER_BURST=${KOPS_SCHEDULER_BURST}"
 echo "KOPS_CONTROLLER_MANAGER_QPS=${KOPS_CONTROLLER_MANAGER_QPS} KOPS_CONTROLLER_MANAGER_BURST=${KOPS_CONTROLLER_MANAGER_BURST}"
 echo "KOPS_APISERVER_MAX_REQUESTS_INFLIGHT=${KOPS_APISERVER_MAX_REQUESTS_INFLIGHT}"
@@ -53,6 +56,12 @@ echo "KOPS_APISERVER_MAX_REQUESTS_INFLIGHT=${KOPS_APISERVER_MAX_REQUESTS_INFLIGH
 # cilium does not yet pass conformance tests (shared hostport test)
 #create_args="--networking cilium"
 create_args=()
+# Correctness Scale tests require nfs packages
+if [[ "${INSTANCE_NAME:-}" == *ami-amazon-linux* ]]; then
+  create_args+=("--set spec.packages=nfs-utils")
+else
+  create_args+=("--set spec.packages=nfs-common")
+fi
 if [[ "${CLOUD_PROVIDER}" == "aws" ]]; then
   create_args+=("--network-cidr=10.0.0.0/16,10.1.0.0/16,10.2.0.0/16,10.3.0.0/16,10.4.0.0/16,10.5.0.0/16,10.6.0.0/16,10.7.0.0/16,10.8.0.0/16,10.9.0.0/16,10.10.0.0/16,10.11.0.0/16,10.12.0.0/16")
   create_args+=("--node-size=${NODE_SIZE:-t3a.medium,t3.medium,t3a.large,c5a.large,t3.large,c5.large,m5a.large,m6a.large,m5.large,c7a.large,r5a.large,r6a.large,m7a.large}")
@@ -64,7 +73,18 @@ if [[ "${CLOUD_PROVIDER}" == "aws" ]]; then
   create_args+=("--dns=none")
 fi
 if [[ "${CLOUD_PROVIDER}" == "gce" ]]; then
+  if [[ -z "${GCE_VOLUME_TYPE:-}" ]]; then
+    case "${CONTROL_PLANE_SIZE:-}" in
+      n1-*|n2-*|n2d-*|e2-*)
+        GCE_VOLUME_TYPE="pd-ssd"
+        ;;
+      *)
+        GCE_VOLUME_TYPE="hyperdisk-balanced"
+        ;;
+    esac
+  fi
   create_args+=("--zones=us-east1-b,us-east1-c,us-east1-d")
+  create_args+=("--control-plane-zones=${CONTROL_PLANE_ZONES:-us-east1-b}")
   create_args+=("--node-size=${NODE_SIZE:-e2-medium}")
   create_args+=("--node-volume-size=30")
   create_args+=("--control-plane-volume-size=1000")
@@ -75,10 +95,12 @@ if [[ "${CLOUD_PROVIDER}" == "gce" ]]; then
   create_args+=("--set spec.networking.subnets[0].cidr=10.128.0.0/15")
   create_args+=("--set spec.networking.serviceClusterIPRange=10.130.0.0/15")
   create_args+=("--set spec.networking.nonMasqueradeCIDR=10.64.0.0/10")
-  create_args+=("--set spec.etcdClusters[*].etcdMembers[*].volumeIOPS=10000")
-  create_args+=("--set spec.etcdClusters[*].etcdMembers[*].volumeThroughput=1000")
+  if [[ "${GCE_VOLUME_TYPE}" == hyperdisk-* ]]; then
+    create_args+=("--set spec.etcdClusters[*].etcdMembers[*].volumeIOPS=10000")
+    create_args+=("--set spec.etcdClusters[*].etcdMembers[*].volumeThroughput=1000")
+  fi
   create_args+=("--set spec.etcdClusters[*].etcdMembers[*].volumeSize=120")
-  create_args+=("--set spec.etcdClusters[*].etcdMembers[*].volumeType=hyperdisk-balanced")
+  create_args+=("--set spec.etcdClusters[*].etcdMembers[*].volumeType=${GCE_VOLUME_TYPE}")
 fi
 create_args+=("--networking=${CNI_PLUGIN:-calico}")
 if [[ "${CNI_PLUGIN}" == "amazonvpc" ]]; then
@@ -86,14 +108,18 @@ if [[ "${CNI_PLUGIN}" == "amazonvpc" ]]; then
 fi
 # bind metrics to all interfaces so Prometheus can scrape etcd metrics
 create_args+=("--set spec.etcdClusters[0].manager.listenMetricsURLs=http://0.0.0.0:2382")
+create_args+=("--set spec.etcdClusters[1].manager.listenMetricsURLs=http://0.0.0.0:2384")
 create_args+=("--set spec.etcdClusters[*].manager.env=ETCD_QUOTA_BACKEND_BYTES=${ETCD_QUOTA_BACKEND_BYTES}")
 create_args+=("--set spec.etcdClusters[*].manager.env=ETCD_ENABLE_PPROF=true")
+if [[ -n "${ETCD_WATCH_PROGRESS_NOTIFY_INTERVAL}" ]]; then
+  create_args+=("--set spec.etcdClusters[*].manager.env=ETCD_WATCH_PROGRESS_NOTIFY_INTERVAL=${ETCD_WATCH_PROGRESS_NOTIFY_INTERVAL}")
+fi
 create_args+=("--set spec.etcdClusters[0].manager.listenClientHTTPURLs=http://localhost:2385")
 create_args+=("--set spec.etcdClusters[1].manager.listenClientHTTPURLs=http://localhost:2386")
 if [[ -n "${ETCD_VERSION:-}" ]]; then
   create_args+=("--set spec.etcdClusters[*].version=${ETCD_VERSION}")
 fi
-create_args+=("--set spec.cloudControllerManager.concurrentNodeSyncs=10")
+create_args+=("--set spec.cloudControllerManager.concurrentNodeSyncs=5")
 create_args+=("--set spec.kubelet.maxPods=96")
 create_args+=("--set spec.kubelet.kubeAPIQPS=100")
 create_args+=("--set spec.kubeScheduler.authorizationAlwaysAllowPaths=/healthz")
@@ -121,8 +147,7 @@ create_args+=("--set spec.kubeAPIServer.compactionInterval=150s")
 
 # this is required for Prometheus server to scrape metrics endpoint on APIServer
 create_args+=("--set spec.kubeAPIServer.anonymousAuth=true")
-# this is required for kindnet to use nftables
-create_args+=("--set spec.kubeProxy.proxyMode=${KUBE_PROXY_MODE:-iptables}")
+create_args+=("--set spec.kubeProxy.proxyMode=${KUBE_PROXY_MODE:-nftables}")
 # this is required for prometheus to scrape kube-proxy metrics endpoint
 create_args+=("--set spec.kubeProxy.metricsBindAddress=0.0.0.0:10249")
 # bump coredns memory on large clusters
@@ -132,7 +157,11 @@ if [[ "${KUBE_NODE_COUNT:-100}" -ge 5000 ]]; then
 fi
 create_args+=("--node-count=${KUBE_NODE_COUNT:-100}")
 create_args+=("--control-plane-count=${CONTROL_PLANE_COUNT:-1}")
-create_args+=("--control-plane-size=${CONTROL_PLANE_SIZE:-c5.2xlarge}")
+if [[ "${CLOUD_PROVIDER}" == "gce" ]]; then
+  create_args+=("--control-plane-size=${CONTROL_PLANE_SIZE:-c3-standard-8}")
+else
+  create_args+=("--control-plane-size=${CONTROL_PLANE_SIZE:-c5.2xlarge}")
+fi
 
 # Enable HTTP for events etcd to reduce TLS overhead in scale tests
 KOPS_FEATURE_FLAGS="EtcdEventsHTTP,${KOPS_FEATURE_FLAGS:-}"
@@ -155,11 +184,16 @@ KUBETEST2_ARGS=()
 KUBETEST2_ARGS+=("-v=2")
 KUBETEST2_ARGS+=("--max-nodes-to-dump=${MAX_NODES_TO_DUMP:-5}")
 KUBETEST2_ARGS+=("--node-dump-timeout=${NODE_DUMP_TIMEOUT:-5m}")
+# Tolerate up to 2 nodes failing to join on 5k clusters.
+if [[ "${KUBE_NODE_COUNT:-100}" -ge 5000 ]]; then
+  KUBETEST2_ARGS+=("--max-unready-nodes=${MAX_UNREADY_NODES:-2}")
+fi
 KUBETEST2_ARGS+=("--cloud-provider=${CLOUD_PROVIDER}")
 KUBETEST2_ARGS+=("--cluster-name=${CLUSTER_NAME:-}")
 KUBETEST2_ARGS+=("--admin-access=${ADMIN_ACCESS:-}")
 KUBETEST2_ARGS+=("--env=KOPS_FEATURE_FLAGS=${KOPS_FEATURE_FLAGS}")
 KUBETEST2_ARGS+=("--pre-test-cmd=${REPO_ROOT}/tests/e2e/scenarios/scalability/pre-test.sh")
+KUBETEST2_ARGS+=("--post-test-cmd=${REPO_ROOT}/tests/e2e/scenarios/scalability/post-test.sh")
 if [[ -n "${KUBE_FEATURE_GATES:-}" ]]; then
   KUBETEST2_ARGS+=("--kubernetes-feature-gates=${KUBE_FEATURE_GATES}")
 fi
@@ -184,9 +218,11 @@ if [[ "${CLOUD_PROVIDER}" == "gce" ]]; then
   else
     KUBETEST2_ARGS+=("--boskos-resource-type=${BOSKOS_RESOURCE_TYPE:-scalability-project}")
   fi
-  KUBETEST2_ARGS+=("--control-plane-instance-group-overrides=spec.rootVolume.type=hyperdisk-balanced")
-  KUBETEST2_ARGS+=("--control-plane-instance-group-overrides=spec.rootVolume.iops=10000")
-  KUBETEST2_ARGS+=("--control-plane-instance-group-overrides=spec.rootVolume.throughput=1000")
+  KUBETEST2_ARGS+=("--control-plane-instance-group-overrides=spec.rootVolume.type=${GCE_VOLUME_TYPE}")
+  if [[ "${GCE_VOLUME_TYPE}" == hyperdisk-* ]]; then
+    KUBETEST2_ARGS+=("--control-plane-instance-group-overrides=spec.rootVolume.iops=10000")
+    KUBETEST2_ARGS+=("--control-plane-instance-group-overrides=spec.rootVolume.throughput=1000")
+  fi
   KUBETEST2_ARGS+=("--control-plane-instance-group-overrides=spec.associatePublicIP=true")
 elif [[ "${CLOUD_PROVIDER}" == "aws" ]]; then
   KUBETEST2_ARGS+=("--control-plane-instance-group-overrides=spec.rootVolume.type=io2")
@@ -247,19 +283,20 @@ fi
 if [[ "${SCALE_SCENARIO:performance}" == "correctness" ]]; then
   kubetest2 kops "${KUBETEST2_ARGS[@]}" \
     --up \
+    --metadata=variant="${EXPERIMENT_VARIANT:-base}" \
     --kubernetes-version="${K8S_VERSION}" \
     --create-args="${create_args[*]}" \
     --test=kops \
     -- \
-    --test-package-url=https://storage.googleapis.com/k8s-release-dev \
+    --test-package-url=https://dl.k8s.io \
     --test-package-dir=ci \
     --test-package-marker=latest.txt \
-    --skip-regex="\[Driver:.gcepd\]|\[Serial\]|\[Disruptive\]|\[Flaky\]|\[Feature:([^L].*|L[^o].*|Lo[^a].*|Loa[^d].*)\]\[KubeUp\]" \
-    --parallel=25
+    --skip-regex="${SKIP_REGEX-\[Serial\]|\[Disruptive\]|\[Flaky\]|\[Feature:.+\]}" \
+    --parallel=40
 else
-  rc=0
   kubetest2 kops "${KUBETEST2_ARGS[@]}" \
     --up \
+    --metadata=variant="${EXPERIMENT_VARIANT:-base}" \
     --kubernetes-version="${K8S_VERSION}" \
     --create-args="${create_args[*]}" \
     --test=clusterloader2 \
@@ -267,13 +304,5 @@ else
     --provider="${CLOUD_PROVIDER}" \
     --repo-root="${GOPATH}"/src/k8s.io/perf-tests \
     --kube-config="${HOME}/.kube/config" \
-    "${CLUSTERLOADER2_ARGS[@]}" || rc=$?
-
-  # Add the variant after kubetest2, which would otherwise overwrite metadata.json.
-  if [[ -n "${ARTIFACTS:-}" ]]; then
-    if jq --arg v "${EXPERIMENT_VARIANT:-base}" '. + {variant:$v}' "${ARTIFACTS}/metadata.json" >"${ARTIFACTS}/metadata.json.tmp"; then
-      mv "${ARTIFACTS}/metadata.json.tmp" "${ARTIFACTS}/metadata.json" || true
-    fi
-  fi
-  exit $rc
+    "${CLUSTERLOADER2_ARGS[@]}"
 fi

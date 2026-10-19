@@ -590,12 +590,6 @@ resource "aws_iam_role_policy" "masters-ha-example-com" {
   role   = aws_iam_role.masters-ha-example-com.name
 }
 
-resource "aws_iam_role_policy" "nodes-ha-example-com" {
-  name   = "nodes.ha.example.com"
-  policy = file("${path.module}/data/aws_iam_role_policy_nodes.ha.example.com_policy")
-  role   = aws_iam_role.nodes-ha-example-com.name
-}
-
 resource "aws_internet_gateway" "ha-example-com" {
   tags = {
     "KubernetesCluster"                    = "ha.example.com"
@@ -1488,7 +1482,7 @@ terraform {
     aws = {
       "configuration_aliases" = [aws.files]
       "source"                = "hashicorp/aws"
-      "version"               = ">= 5.0.0"
+      "version"               = ">= 6.57.1"
     }
   }
 }

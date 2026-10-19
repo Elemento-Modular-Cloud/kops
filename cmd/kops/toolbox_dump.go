@@ -26,6 +26,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
@@ -35,11 +37,14 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
+	"k8s.io/kops/pkg/client/simple"
 	"k8s.io/kops/pkg/commands/commandutils"
 	"k8s.io/kops/pkg/dump"
 	"k8s.io/kops/pkg/resources"
 	resourceops "k8s.io/kops/pkg/resources/ops"
+	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup"
+	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kubectl/pkg/util/i18n"
 	"k8s.io/kubectl/pkg/util/templates"
 )
@@ -152,25 +157,6 @@ func RunToolboxDump(ctx context.Context, f commandutils.Factory, out io.Writer, 
 	}
 
 	if options.Dir != "" {
-		privateKeyPath := options.PrivateKey
-		if strings.HasPrefix(privateKeyPath, "~/") {
-			privateKeyPath = filepath.Join(os.Getenv("HOME"), privateKeyPath[2:])
-		}
-		key, err := os.ReadFile(privateKeyPath)
-		if err != nil {
-			return fmt.Errorf("reading private key %q: %v", privateKeyPath, err)
-		}
-
-		parsedKey, err := ssh.ParseRawPrivateKey(key)
-		if err != nil {
-			return fmt.Errorf("parsing private key %q: %v", privateKeyPath, err)
-		}
-
-		signer, err := ssh.NewSignerFromKey(parsedKey)
-		if err != nil {
-			return fmt.Errorf("creating signer for private key %q: %v", privateKeyPath, err)
-		}
-
 		contextName := cluster.ObjectMeta.Name
 		clientGetter := genericclioptions.NewConfigFlags(true)
 		clientGetter.Context = &contextName
@@ -194,6 +180,30 @@ func RunToolboxDump(ctx context.Context, f commandutils.Factory, out io.Writer, 
 					nodes = *nodeList
 				}
 			}
+		}
+
+		// Before the SSH key and the node log dump, both of which can fail or
+		// stall: this is the one file that explains a cluster where nothing
+		// launched, and it needs only cloud API access to write.
+		dumpCloudInstanceGroups(ctx, clientset, cloud, cluster, nodes.Items, options.Dir)
+
+		privateKeyPath := options.PrivateKey
+		if strings.HasPrefix(privateKeyPath, "~/") {
+			privateKeyPath = filepath.Join(os.Getenv("HOME"), privateKeyPath[2:])
+		}
+		key, err := os.ReadFile(privateKeyPath)
+		if err != nil {
+			return fmt.Errorf("reading private key %q: %v", privateKeyPath, err)
+		}
+
+		parsedKey, err := ssh.ParseRawPrivateKey(key)
+		if err != nil {
+			return fmt.Errorf("parsing private key %q: %v", privateKeyPath, err)
+		}
+
+		signer, err := ssh.NewSignerFromKey(parsedKey)
+		if err != nil {
+			return fmt.Errorf("creating signer for private key %q: %v", privateKeyPath, err)
 		}
 
 		sshConfig := &ssh.ClientConfig{
@@ -247,6 +257,26 @@ func RunToolboxDump(ctx context.Context, f commandutils.Factory, out io.Writer, 
 
 		dumper := dump.NewLogDumper(bastionAddress, sshConfig, keyRing, options.Dir, options.NodeDumpTimeout)
 
+		dumper.SetDumpBGP(cluster.Spec.Networking.Calico != nil)
+
+		// Karpenter nodes never get the cluster SSH key pair (their EC2NodeClass has no key-name
+		// field). When Karpenter is enabled, grant short-lived access via EC2 Instance Connect
+		// before connecting, using the public key matching --private-key. A no-op without the agent.
+		karpenterEnabled := cluster.Spec.Karpenter != nil && cluster.Spec.Karpenter.Enabled
+		if awsCloud, ok := cloud.(awsup.AWSCloud); ok && karpenterEnabled {
+			publicKey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
+			eicClient := ec2instanceconnect.NewFromConfig(awsCloud.Config())
+			sshUser := options.SSHUser
+			dumper.SetSSHAccessGranter(func(ctx context.Context, instanceID string) error {
+				_, err := eicClient.SendSSHPublicKey(ctx, &ec2instanceconnect.SendSSHPublicKeyInput{
+					InstanceId:     aws.String(instanceID),
+					InstanceOSUser: aws.String(sshUser),
+					SSHPublicKey:   aws.String(publicKey),
+				})
+				return err
+			})
+		}
+
 		if err := dumper.DumpAllNodes(ctx, nodes, options.MaxNodes, cloudResources); err != nil {
 			klog.Warningf("error dumping nodes: %v", err)
 		}
@@ -299,4 +329,22 @@ func RunToolboxDump(ctx context.Context, f commandutils.Factory, out io.Writer, 
 		}
 	}
 	return nil
+}
+
+// dumpCloudInstanceGroups records the cloud provider's view of the instance
+// groups. Failures are logged rather than returned: the dump is diagnostic, and
+// a missing section must not abort the rest of it.
+func dumpCloudInstanceGroups(ctx context.Context, clientset simple.Clientset, cloud fi.Cloud, cluster *kops.Cluster, nodes []corev1.Node, dir string) {
+	igList, err := clientset.InstanceGroupsFor(cluster).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		klog.Warningf("error listing instance groups: %v", err)
+		return
+	}
+	instanceGroups := make([]*kops.InstanceGroup, 0, len(igList.Items))
+	for i := range igList.Items {
+		instanceGroups = append(instanceGroups, &igList.Items[i])
+	}
+	if err := dump.DumpCloudInstanceGroups(ctx, cloud, cluster, instanceGroups, nodes, dir); err != nil {
+		klog.Warningf("error dumping cloud instance groups: %v", err)
+	}
 }

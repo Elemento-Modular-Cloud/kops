@@ -94,7 +94,10 @@ func BuildCloud(cluster *kops.Cluster) (fi.Cloud, error) {
 
 			var zoneNames []string
 			for _, subnet := range cluster.Spec.Networking.Subnets {
-				zoneNames = append(zoneNames, subnet.Zone)
+				// The zone of a subnet specified by ID is looked up from the cloud later.
+				if subnet.Zone != "" {
+					zoneNames = append(zoneNames, subnet.Zone)
+				}
 			}
 			err = awsup.ValidateZones(zoneNames, awsCloud)
 			if err != nil {
@@ -228,12 +231,12 @@ func BuildCloud(cluster *kops.Cluster) (fi.Cloud, error) {
 			}
 		}
 		if region == "" {
-			return nil, fmt.Errorf("on Linode (Akamai), subnets must include Regions")
+			return nil, fmt.Errorf("on Akamai (Linode), subnets must include Regions")
 		}
 
 		linodeCloud, err := linode.NewCloud(region)
 		if err != nil {
-			return nil, fmt.Errorf("error initializing Linode (Akamai) cloud: %w", err)
+			return nil, fmt.Errorf("error initializing Akamai (Linode) cloud: %w", err)
 		}
 
 		cloud = linodeCloud

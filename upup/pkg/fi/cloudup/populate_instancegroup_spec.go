@@ -59,10 +59,6 @@ const (
 	defaultMasterMachineTypeElemento = "argon2"
 	defaultMasterMachineTypeElemento = "neon"
 
-	defaultDOImageJammy       = "ubuntu-22-04-x64"
-	defaultHetznerImageJammy  = "ubuntu-22.04"
-	defaultScalewayImageJammy = "ubuntu_jammy"
-	defaultLinodeImageJammy   = "linode/ubuntu22.04"
 	defaultDOImageNoble       = "ubuntu-24-04-x64"
 	defaultHetznerImageNoble  = "ubuntu-24.04"
 	defaultScalewayImageNoble = "ubuntu_noble"
@@ -109,10 +105,10 @@ func PopulateInstanceGroupSpec(cluster *kops.Cluster, input *kops.InstanceGroup,
 
 		}
 		if ig.Spec.MinSize == nil {
-			ig.Spec.MinSize = fi.PtrTo(int32(1))
+			ig.Spec.MinSize = new(int32(1))
 		}
 		if ig.Spec.MaxSize == nil {
-			ig.Spec.MaxSize = fi.PtrTo(int32(1))
+			ig.Spec.MaxSize = new(int32(1))
 		}
 	} else if ig.Spec.Role.HasBastion() {
 		if ig.Spec.MachineType == "" {
@@ -122,10 +118,10 @@ func PopulateInstanceGroupSpec(cluster *kops.Cluster, input *kops.InstanceGroup,
 			}
 		}
 		if ig.Spec.MinSize == nil {
-			ig.Spec.MinSize = fi.PtrTo(int32(1))
+			ig.Spec.MinSize = new(int32(1))
 		}
 		if ig.Spec.MaxSize == nil {
-			ig.Spec.MaxSize = fi.PtrTo(int32(1))
+			ig.Spec.MaxSize = new(int32(1))
 		}
 	} else {
 		if ig.IsAPIServerOnly() && !featureflag.APIServerNodes.Enabled() {
@@ -137,9 +133,7 @@ func PopulateInstanceGroupSpec(cluster *kops.Cluster, input *kops.InstanceGroup,
 				return nil, fmt.Errorf("etcd nodes requires the ExperimentalNodes feature flag to be enabled")
 			case ig.Spec.Role.HasScheduler():
 				return nil, fmt.Errorf("scheduler nodes requires the ExperimentalNodes feature flag to be enabled")
-			case ig.Spec.Role.HasCloudControllerManager():
-				return nil, fmt.Errorf("cloud-controller-manager nodes requires the ExperimentalNodes feature flag to be enabled")
-			case ig.Spec.Role.HasKubControllerManager():
+			case ig.Spec.Role.HasKubeControllerManager():
 				return nil, fmt.Errorf("kube-controller-manager nodes requires the ExperimentalNodes feature flag to be enabled")
 			}
 		}
@@ -151,10 +145,10 @@ func PopulateInstanceGroupSpec(cluster *kops.Cluster, input *kops.InstanceGroup,
 		}
 		if ig.Spec.Manager != kops.InstanceManagerKarpenter {
 			if ig.Spec.MinSize == nil {
-				ig.Spec.MinSize = fi.PtrTo(int32(2))
+				ig.Spec.MinSize = new(int32(2))
 			}
 			if ig.Spec.MaxSize == nil {
-				ig.Spec.MaxSize = fi.PtrTo(int32(2))
+				ig.Spec.MaxSize = new(int32(2))
 			}
 		}
 	}
@@ -276,7 +270,7 @@ func PopulateInstanceGroupSpec(cluster *kops.Cluster, input *kops.InstanceGroup,
 		}
 		// A few settings in Kubelet override those in ControlPlaneKubelet. I'm not sure why.
 		if cluster.Spec.Kubelet != nil && cluster.Spec.Kubelet.AnonymousAuth != nil && !*cluster.Spec.Kubelet.AnonymousAuth {
-			igKubeletConfig.AnonymousAuth = fi.PtrTo(false)
+			igKubeletConfig.AnonymousAuth = new(false)
 		}
 	} else {
 		if cluster.Spec.Kubelet != nil {
@@ -318,6 +312,18 @@ func PopulateInstanceGroupSpec(cluster *kops.Cluster, input *kops.InstanceGroup,
 			// (Even though the value is empty, we still expect <Key>=<Value>:<Effect>)
 			taints.Insert(nodelabels.RoleLabelAPIServer16 + "=:" + string(v1.TaintEffectNoSchedule))
 		}
+		if ig.IsEtcdOnly() {
+			// (Even though the value is empty, we still expect <Key>=<Value>:<Effect>)
+			taints.Insert(nodelabels.RoleLabelEtcd + "=:" + string(v1.TaintEffectNoSchedule))
+		}
+		if ig.IsKubeControllerManagerOnly() {
+			// (Even though the value is empty, we still expect <Key>=<Value>:<Effect>)
+			taints.Insert(nodelabels.RoleLabelKubeControllerManager + "=:" + string(v1.TaintEffectNoSchedule))
+		}
+		if ig.IsSchedulerOnly() {
+			// (Even though the value is empty, we still expect <Key>=<Value>:<Effect>)
+			taints.Insert(nodelabels.RoleLabelScheduler + "=:" + string(v1.TaintEffectNoSchedule))
+		}
 		if ig.Spec.Manager == kops.InstanceManagerKarpenter {
 			// Karpenter v1 expects its nodes to register with this taint as a race guard; it removes the taint once
 			// the NodeClaim is synced. The empty value still requires the <Key>=<Value>:<Effect> form.
@@ -328,7 +334,7 @@ func PopulateInstanceGroupSpec(cluster *kops.Cluster, input *kops.InstanceGroup,
 	igKubeletConfig.Taints = taints.List()
 
 	if useSecureKubelet {
-		igKubeletConfig.AnonymousAuth = fi.PtrTo(false)
+		igKubeletConfig.AnonymousAuth = new(false)
 	}
 
 	ig.Spec.Kubelet = igKubeletConfig
@@ -352,7 +358,7 @@ func defaultMachineType(cloud fi.Cloud, cluster *kops.Cluster, ig *kops.Instance
 
 	case kops.CloudProviderGCE:
 		switch {
-		case ig.Spec.Role.HasControlPlane():
+		case ig.Spec.Role.IsControlPlaneType():
 			return defaultMasterMachineTypeGCE, nil
 
 		case ig.Spec.Role.HasNode():
@@ -364,7 +370,7 @@ func defaultMachineType(cloud fi.Cloud, cluster *kops.Cluster, ig *kops.Instance
 
 	case kops.CloudProviderDO:
 		switch {
-		case ig.Spec.Role.HasControlPlane():
+		case ig.Spec.Role.IsControlPlaneType():
 			return defaultMasterMachineTypeDO, nil
 
 		case ig.Spec.Role.HasNode():
@@ -374,7 +380,7 @@ func defaultMachineType(cloud fi.Cloud, cluster *kops.Cluster, ig *kops.Instance
 
 	case kops.CloudProviderHetzner:
 		switch {
-		case ig.Spec.Role.HasControlPlane():
+		case ig.Spec.Role.IsControlPlaneType():
 			return defaultMasterMachineTypeHetzner, nil
 
 		case ig.Spec.Role.HasNode():
@@ -393,7 +399,7 @@ func defaultMachineType(cloud fi.Cloud, cluster *kops.Cluster, ig *kops.Instance
 
 	case kops.CloudProviderAzure:
 		switch {
-		case ig.Spec.Role.HasControlPlane():
+		case ig.Spec.Role.IsControlPlaneType():
 			return defaultMasterMachineTypeAzure, nil
 
 		case ig.Spec.Role.HasNode():
@@ -405,7 +411,7 @@ func defaultMachineType(cloud fi.Cloud, cluster *kops.Cluster, ig *kops.Instance
 
 	case kops.CloudProviderScaleway:
 		switch {
-		case ig.Spec.Role.HasControlPlane():
+		case ig.Spec.Role.IsControlPlaneType():
 			return defaultMasterMachineTypeScaleway, nil
 
 		case ig.Spec.Role.HasNode():
@@ -414,7 +420,7 @@ func defaultMachineType(cloud fi.Cloud, cluster *kops.Cluster, ig *kops.Instance
 
 	case kops.CloudProviderLinode:
 		switch {
-		case ig.Spec.Role.HasControlPlane():
+		case ig.Spec.Role.IsControlPlaneType():
 			return defaultMasterMachineTypeLinode, nil
 
 		case ig.Spec.Role.HasNode():

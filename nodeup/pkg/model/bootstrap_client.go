@@ -24,18 +24,18 @@ import (
 
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/bootstrap"
+	"k8s.io/kops/pkg/bootstrap/awsbootstrap"
 	"k8s.io/kops/pkg/bootstrap/pkibootstrap"
 	"k8s.io/kops/pkg/kopscontrollerclient"
 	"k8s.io/kops/pkg/wellknownports"
 	"k8s.io/kops/upup/pkg/fi"
-	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
-	"k8s.io/kops/upup/pkg/fi/cloudup/azure"
-	"k8s.io/kops/upup/pkg/fi/cloudup/do"
+	"k8s.io/kops/upup/pkg/fi/cloudup/azure/azuremetadata"
+	"k8s.io/kops/upup/pkg/fi/cloudup/do/dometadata"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce/tpm/gcetpmsigner"
-	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner"
-	"k8s.io/kops/upup/pkg/fi/cloudup/linode"
-	"k8s.io/kops/upup/pkg/fi/cloudup/openstack"
-	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
+	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner/hetznermetadata"
+	"k8s.io/kops/upup/pkg/fi/cloudup/linode/linodemetadata"
+	"k8s.io/kops/upup/pkg/fi/cloudup/openstack/openstackmetadata"
+	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway/scalewaymetadata"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
 )
 
@@ -45,7 +45,7 @@ type BootstrapClientBuilder struct {
 }
 
 func (b BootstrapClientBuilder) Build(c *fi.NodeupModelBuilderContext) error {
-	if b.IsMaster {
+	if b.canSignCertificates() {
 		return nil
 	}
 
@@ -53,7 +53,7 @@ func (b BootstrapClientBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 
 	switch b.CloudProvider() {
 	case kops.CloudProviderAWS:
-		a, err := awsup.NewAWSAuthenticator(c.Context(), b.Cloud.Region())
+		a, err := awsbootstrap.NewAWSAuthenticator(c.Context(), b.Cloud.Region())
 		if err != nil {
 			return err
 		}
@@ -65,41 +65,44 @@ func (b BootstrapClientBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 		}
 		authenticator = a
 	case kops.CloudProviderHetzner:
-		a, err := hetzner.NewHetznerAuthenticator()
+		a, err := hetznermetadata.NewHetznerAuthenticator()
 		if err != nil {
 			return err
 		}
 		authenticator = a
 	case kops.CloudProviderOpenstack:
-		a, err := openstack.NewOpenstackAuthenticator()
+		a, err := openstackmetadata.NewOpenstackAuthenticator()
 		if err != nil {
 			return err
 		}
 		authenticator = a
 	case kops.CloudProviderDO:
-		a, err := do.NewAuthenticator()
+		a, err := dometadata.NewAuthenticator()
 		if err != nil {
 			return err
 		}
 		authenticator = a
 	case kops.CloudProviderScaleway:
-		a, err := scaleway.NewScalewayAuthenticator()
+		a, err := scalewaymetadata.NewScalewayAuthenticator()
 		if err != nil {
 			return err
 		}
 		authenticator = a
 	case kops.CloudProviderAzure:
-		a, err := azure.NewAzureAuthenticator()
+		a, err := azuremetadata.NewAzureAuthenticator()
+		if err != nil {
+			return err
+		}
+		authenticator = a
+	case kops.CloudProviderElemento:
+		// Use PKI file-based authentication like Metal provider to avoid kops-controller dependency
+		a, err := pkibootstrap.NewAuthenticatorFromFile("/etc/kubernetes/kops/pki/machine/private.pem")
 		if err != nil {
 			return err
 		}
 		authenticator = a
 	case kops.CloudProviderLinode:
-		a, err := linode.NewLinodeAuthenticator()
-	case kops.CloudProviderElemento:
-		a, err := elemento.NewElementoAuthenticator()
-		// Use PKI file-based authentication like Metal provider to avoid kops-controller dependency
-		a, err := pkibootstrap.NewAuthenticatorFromFile("/etc/kubernetes/kops/pki/machine/private.pem")
+		a, err := linodemetadata.NewLinodeAuthenticator()
 		if err != nil {
 			return err
 		}

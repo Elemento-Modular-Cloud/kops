@@ -99,6 +99,12 @@ spec:
   minSize: 2
   maxSize: 10
   role: Node
+  rootVolumeSize: 200
+  rootVolumeType: gp3
+  rootVolumeIops: 4000
+  rootVolumeThroughput: 200
+  rootVolumeEncryption: true
+  rootVolumeEncryptionKey: arn:aws-test:kms:us-test-1:000000000000:key/1234abcd-12ab-34cd-56ef-1234567890ab
   subnets:
   - us-test-1a
 
@@ -125,6 +131,20 @@ spec:
   image: ubuntu/images/hvm-ssd-gp3/ubuntu-resolute-26.04-amd64-server-20220404
   role: Node
   maxSize: 20
+  # machineType is set so the generated NodePool demonstrates that instanceRequirements
+  # is combined with the instance type requirement.
+  machineType: t2.medium
+  mixedInstancesPolicy:
+    instanceRequirements:
+      cpu:
+        min: "2"
+        max: "16"
+      memory:
+        min: "2Gi"
+        max: "64Gi"
+      excludedInstanceTypes:
+      - c3.*
+      - m3.*
+      - t2.nano
   subnets:
   - us-test-1a
-

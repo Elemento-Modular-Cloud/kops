@@ -17,7 +17,7 @@ kOps needs a state store, to hold the configuration for your clusters.  The simp
 for Google Cloud is to store it in a Google Cloud Storage bucket in the same account, so that's how we'll
 start.
 
-So, just create an empty bucket - you can use any (available) name - e.g. `gsutil mb gs://kubernetes-clusters/`
+So, just create an empty bucket - you can use any (available) name - e.g. `gcloud storage buckets create gs://kubernetes-clusters/`
 
 Further, rather than typing the `--state` argument every time, it's much easier to export the `KOPS_STATE_STORE`
 environment variable:
@@ -87,7 +87,7 @@ spec:
     legacy: false
   kubernetesApiAccess:
   - 0.0.0.0/0
-  kubernetesVersion: 1.7.2
+  kubernetesVersion: 1.36.4
   masterPublicName: api.simple.k8s.local
   networking:
     kubenet: {}
@@ -214,9 +214,9 @@ Example of creating a high availability multi-zonal cluster, with both the contr
 
 ```
 kops create cluster \
---master-zones=us-central1-a,us-central1-b,us-central1-c \
+--control-plane-zones=us-central1-a,us-central1-b,us-central1-c \
 --zones=us-central1-a,us-central1-b,us-central1-c \
---node-count=2
+--node-count=2 \
 ${CLUSTER_NAME}
 ```
 

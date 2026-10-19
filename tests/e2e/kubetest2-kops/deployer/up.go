@@ -23,14 +23,15 @@ import (
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/shlex"
-	"golang.org/x/exp/slices"
 
 	"k8s.io/klog/v2"
+	api "k8s.io/kops/pkg/apis/kops/v1alpha2"
 	"k8s.io/kops/tests/e2e/kubetest2-kops/aws"
 	"k8s.io/kops/tests/e2e/kubetest2-kops/azure"
 	"k8s.io/kops/tests/e2e/kubetest2-kops/do"
@@ -49,6 +50,19 @@ const (
 	awsDefaultArmControlPlaneSize = "c6g.large"
 	awsDefaultArmNodeSize         = "c6g.large"
 )
+
+// awsBastionMachineTypeFallbacks maps each machine type kops picks by default for a
+// bastion to the on-demand types the bastion ASG tries in priority order: that type,
+// then larger sizes of the same family. Most E2E clusters are single-AZ, so an
+// InsufficientInstanceCapacity error for the bastion's one instance type leaves the
+// ASG empty and validation never passes; the micro sizes are among the most
+// capacity-contended on-demand pools in EC2. This lives in the test harness rather
+// than kops so that kops users keep a single-type bastion.
+var awsBastionMachineTypeFallbacks = map[string][]string{
+	"t2.micro":  {"t2.micro", "t2.small", "t2.medium"},
+	"t3.micro":  {"t3.micro", "t3.small", "t3.medium"},
+	"t4g.micro": {"t4g.micro", "t4g.small", "t4g.medium"},
+}
 
 func (d *deployer) Up() error {
 	ctx := context.TODO()
@@ -70,7 +84,7 @@ func (d *deployer) Up() error {
 
 	// PreTestCmd inherits the process environment rather than d.env().
 	if d.KopsBaseURL != "" {
-		os.Setenv("KOPS_BASE_URL", d.KopsBaseURL)
+		os.Setenv("KOPS_BASE_URL", d.maybeGSURL(d.KopsBaseURL))
 	}
 
 	if d.terraform == nil {
@@ -146,6 +160,14 @@ func (d *deployer) Up() error {
 
 	time.Sleep(10 * time.Second)
 
+	// The instances exist by this point, so kops can tell us which user it registered the SSH key
+	// for. Done before the validation below so that a cluster which fails to validate is still
+	// reachable for log collection. Re-export afterwards because the tester's environment was
+	// built during init(), before any of this was knowable.
+	d.resolveSSHUserFromCluster()
+	klog.V(1).Infof("Using SSH user: [%s]", d.SSHUser)
+	d.exportEnvForTester()
+
 	isUp, err := d.IsUp()
 	if err != nil {
 		return err
@@ -176,7 +198,7 @@ func (d *deployer) writeEnvFile(ctx context.Context) error {
 	}
 
 	data := strings.Join(env, "\n") + "\n"
-	if err := os.WriteFile(d.EnvFile, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(d.EnvFile, []byte(data), 0o600); err != nil {
 		return fmt.Errorf("error writing env file %q: %v", d.EnvFile, err)
 	}
 	return nil
@@ -342,8 +364,35 @@ func (d *deployer) setInstanceGroupOverrides() error {
 				return err
 			}
 		}
+		if d.CloudProvider == "aws" {
+			if overrides := awsBastionFallbackOverrides(ig); len(overrides) > 0 {
+				if err := d.setIGOverrides(ig.ObjectMeta.Name, overrides); err != nil {
+					return err
+				}
+			}
+		}
 	}
 	return nil
+}
+
+// awsBastionFallbackOverrides returns the `kops edit instancegroup --set` values that
+// give a bastion IG instance-type fallbacks, or nil if ig is not a bastion, already has
+// a MixedInstancesPolicy, or uses a machine type without known fallbacks.
+func awsBastionFallbackOverrides(ig *api.InstanceGroup) []string {
+	if string(ig.Spec.Role) != "Bastion" || ig.Spec.MixedInstancesPolicy != nil {
+		return nil
+	}
+	fallbacks := awsBastionMachineTypeFallbacks[ig.Spec.MachineType]
+	if fallbacks == nil {
+		return nil
+	}
+	// --set is parsed as CSV, so a comma-separated list would be split into separate
+	// --set values. Slice fields append on each --set instead, so pass one per type.
+	overrides := make([]string, 0, len(fallbacks)+1)
+	for _, t := range fallbacks {
+		overrides = append(overrides, "spec.mixedInstancesPolicy.instances="+t)
+	}
+	return append(overrides, "spec.mixedInstancesPolicy.onDemandAllocationStrategy=prioritized")
 }
 
 func (d *deployer) updateCluster(yes bool) error {
@@ -383,6 +432,9 @@ func (d *deployer) IsUp() (bool, error) {
 	}
 	if d.ValidationInterval > 10*time.Second {
 		args = append(args, "--interval", d.ValidationInterval.String())
+	}
+	if d.MaxUnreadyNodes > 0 {
+		args = append(args, "--max-unready-nodes", strconv.Itoa(d.MaxUnreadyNodes))
 	}
 	klog.Info(strings.Join(args, " "))
 

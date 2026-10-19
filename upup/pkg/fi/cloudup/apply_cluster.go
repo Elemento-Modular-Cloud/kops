@@ -78,9 +78,9 @@ const (
 	starline = "*********************************************************************************"
 
 	// OldestSupportedKubernetesVersion is the oldest kubernetes version that is supported in kOps.
-	OldestSupportedKubernetesVersion = "1.31.0"
+	OldestSupportedKubernetesVersion = "1.32.0"
 	// OldestRecommendedKubernetesVersion is the oldest kubernetes version that is not deprecated in kOps.
-	OldestRecommendedKubernetesVersion = "1.33.0"
+	OldestRecommendedKubernetesVersion = "1.34.0"
 )
 
 // TerraformCloudProviders is the list of cloud providers with terraform target support
@@ -136,7 +136,7 @@ type ApplyClusterCmd struct {
 	// TaskMap is the map of tasks that we built (output)
 	TaskMap map[string]fi.CloudupTask
 
-	// AdditionalObjects holds cluster-asssociated configuration objects, other than the Cluster and InstanceGroups.
+	// AdditionalObjects holds cluster-associated configuration objects, other than the Cluster and InstanceGroups.
 	AdditionalObjects kubemanifest.ObjectList
 
 	// DeletionProcessing controls whether we process deletions.
@@ -515,7 +515,7 @@ func (c *ApplyClusterCmd) Run(ctx context.Context) (*ApplyResults, error) {
 	case kops.CloudProviderLinode:
 		{
 			if !featureflag.Linode.Enabled() {
-				return nil, fmt.Errorf("Linode (Akamai) support is currently alpha, and is feature-gated. Please export KOPS_FEATURE_FLAGS=Linode")
+				return nil, fmt.Errorf("Akamai (Linode) support is currently alpha, and is feature-gated. Please export KOPS_FEATURE_FLAGS=Linode")
 			}
 		}
 
@@ -746,8 +746,8 @@ func (c *ApplyClusterCmd) Run(ctx context.Context) (*ApplyResults, error) {
 				KopsModelContext: modelContext,
 			}
 			l.Builders = append(l.Builders,
-				&linodemodel.VPCModelBuilder{LinodeModelContext: linodeModelContext, Lifecycle: networkLifecycle},
-				&linodemodel.SSHKeyModelBuilder{LinodeModelContext: linodeModelContext, Lifecycle: securityLifecycle},
+				&linodemodel.NetworkModelBuilder{LinodeModelContext: linodeModelContext, Lifecycle: networkLifecycle},
+				&linodemodel.InstanceModelBuilder{LinodeModelContext: linodeModelContext, BootstrapScriptBuilder: bootstrapScriptBuilder, Lifecycle: clusterLifecycle, SSHKeyLifecycle: securityLifecycle},
 			)
 
 		case kops.CloudProviderMetal:
@@ -810,6 +810,7 @@ func (c *ApplyClusterCmd) Run(ctx context.Context) (*ApplyResults, error) {
 					args["subscription_id"] = storageAccountID.SubscriptionID
 				}
 			}
+			tf.AzureStorageAccountID = azureSpec.StorageAccountID
 			tf.EnsureTerraformProvider("azurerm", args)
 		}
 

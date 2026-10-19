@@ -177,7 +177,6 @@ resource "aws_autoscaling_group" "master-us-test-1a-masters-privateciliumadvance
     id      = aws_launch_template.master-us-test-1a-masters-privateciliumadvanced-example-com.id
     version = aws_launch_template.master-us-test-1a-masters-privateciliumadvanced-example-com.latest_version
   }
-  load_balancers        = [aws_elb.api-privateciliumadvanced-example-com.id]
   max_instance_lifetime = 0
   max_size              = 1
   metrics_granularity   = "1Minute"
@@ -234,6 +233,7 @@ resource "aws_autoscaling_group" "master-us-test-1a-masters-privateciliumadvance
     propagate_at_launch = true
     value               = "owned"
   }
+  target_group_arns   = [aws_lb_target_group.tcp-privateciliumadvanced-3gbv6v.id]
   vpc_zone_identifier = [aws_subnet.us-test-1a-privateciliumadvanced-example-com.id]
 }
 
@@ -431,34 +431,6 @@ resource "aws_eip" "us-test-1a-privateciliumadvanced-example-com" {
   }
 }
 
-resource "aws_elb" "api-privateciliumadvanced-example-com" {
-  connection_draining         = true
-  connection_draining_timeout = 300
-  cross_zone_load_balancing   = false
-  health_check {
-    healthy_threshold   = 2
-    interval            = 10
-    target              = "SSL:443"
-    timeout             = 5
-    unhealthy_threshold = 2
-  }
-  idle_timeout = 300
-  listener {
-    instance_port     = 443
-    instance_protocol = "TCP"
-    lb_port           = 443
-    lb_protocol       = "TCP"
-  }
-  name            = "api-privateciliumadvanced-0cffmm"
-  security_groups = [aws_security_group.api-elb-privateciliumadvanced-example-com.id]
-  subnets         = [aws_subnet.utility-us-test-1a-privateciliumadvanced-example-com.id]
-  tags = {
-    "KubernetesCluster"                                       = "privateciliumadvanced.example.com"
-    "Name"                                                    = "api.privateciliumadvanced.example.com"
-    "kubernetes.io/cluster/privateciliumadvanced.example.com" = "owned"
-  }
-}
-
 resource "aws_iam_instance_profile" "bastions-privateciliumadvanced-example-com" {
   name = "bastions.privateciliumadvanced.example.com"
   role = aws_iam_role.bastions-privateciliumadvanced-example-com.name
@@ -517,12 +489,6 @@ resource "aws_iam_role" "nodes-privateciliumadvanced-example-com" {
     "Name"                                                    = "nodes.privateciliumadvanced.example.com"
     "kubernetes.io/cluster/privateciliumadvanced.example.com" = "owned"
   }
-}
-
-resource "aws_iam_role_policy" "bastions-privateciliumadvanced-example-com" {
-  name   = "bastions.privateciliumadvanced.example.com"
-  policy = file("${path.module}/data/aws_iam_role_policy_bastions.privateciliumadvanced.example.com_policy")
-  role   = aws_iam_role.bastions-privateciliumadvanced-example-com.name
 }
 
 resource "aws_iam_role_policy" "masters-privateciliumadvanced-example-com" {
@@ -822,6 +788,22 @@ resource "aws_launch_template" "nodes-privateciliumadvanced-example-com" {
   user_data = filebase64("${path.module}/data/aws_launch_template_nodes.privateciliumadvanced.example.com_user_data")
 }
 
+resource "aws_lb" "api-privateciliumadvanced-example-com" {
+  enable_cross_zone_load_balancing = false
+  internal                         = false
+  load_balancer_type               = "network"
+  name                             = "api-privateciliumadvanced-0cffmm"
+  security_groups                  = [aws_security_group.api-elb-privateciliumadvanced-example-com.id]
+  subnet_mapping {
+    subnet_id = aws_subnet.utility-us-test-1a-privateciliumadvanced-example-com.id
+  }
+  tags = {
+    "KubernetesCluster"                                       = "privateciliumadvanced.example.com"
+    "Name"                                                    = "api.privateciliumadvanced.example.com"
+    "kubernetes.io/cluster/privateciliumadvanced.example.com" = "owned"
+  }
+}
+
 resource "aws_lb" "bastion-privateciliumadvanced-example-com" {
   enable_cross_zone_load_balancing = false
   internal                         = false
@@ -836,6 +818,16 @@ resource "aws_lb" "bastion-privateciliumadvanced-example-com" {
     "Name"                                                    = "bastion.privateciliumadvanced.example.com"
     "kubernetes.io/cluster/privateciliumadvanced.example.com" = "owned"
   }
+}
+
+resource "aws_lb_listener" "api-privateciliumadvanced-example-com-443" {
+  default_action {
+    target_group_arn = aws_lb_target_group.tcp-privateciliumadvanced-3gbv6v.id
+    type             = "forward"
+  }
+  load_balancer_arn = aws_lb.api-privateciliumadvanced-example-com.id
+  port              = 443
+  protocol          = "TCP"
 }
 
 resource "aws_lb_listener" "bastion-privateciliumadvanced-example-com-22" {
@@ -863,6 +855,26 @@ resource "aws_lb_target_group" "bastion-privateciliumadva-0jni40" {
   tags = {
     "KubernetesCluster"                                       = "privateciliumadvanced.example.com"
     "Name"                                                    = "bastion-privateciliumadva-0jni40"
+    "kubernetes.io/cluster/privateciliumadvanced.example.com" = "owned"
+  }
+  vpc_id = aws_vpc.privateciliumadvanced-example-com.id
+}
+
+resource "aws_lb_target_group" "tcp-privateciliumadvanced-3gbv6v" {
+  connection_termination = "true"
+  deregistration_delay   = "30"
+  health_check {
+    healthy_threshold   = 2
+    interval            = 10
+    protocol            = "TCP"
+    unhealthy_threshold = 2
+  }
+  name     = "tcp-privateciliumadvanced-3gbv6v"
+  port     = 443
+  protocol = "TCP"
+  tags = {
+    "KubernetesCluster"                                       = "privateciliumadvanced.example.com"
+    "Name"                                                    = "tcp-privateciliumadvanced-3gbv6v"
     "kubernetes.io/cluster/privateciliumadvanced.example.com" = "owned"
   }
   vpc_id = aws_vpc.privateciliumadvanced-example-com.id
@@ -899,8 +911,8 @@ resource "aws_route" "route-private-us-test-1a-0-0-0-0--0" {
 resource "aws_route53_record" "api-privateciliumadvanced-example-com" {
   alias {
     evaluate_target_health = false
-    name                   = aws_elb.api-privateciliumadvanced-example-com.dns_name
-    zone_id                = aws_elb.api-privateciliumadvanced-example-com.zone_id
+    name                   = aws_lb.api-privateciliumadvanced-example-com.dns_name
+    zone_id                = aws_lb.api-privateciliumadvanced-example-com.zone_id
   }
   name    = "api.privateciliumadvanced.example.com"
   type    = "A"
@@ -910,8 +922,8 @@ resource "aws_route53_record" "api-privateciliumadvanced-example-com" {
 resource "aws_route53_record" "api-privateciliumadvanced-example-com-AAAA" {
   alias {
     evaluate_target_health = false
-    name                   = aws_elb.api-privateciliumadvanced-example-com.dns_name
-    zone_id                = aws_elb.api-privateciliumadvanced-example-com.zone_id
+    name                   = aws_lb.api-privateciliumadvanced-example-com.dns_name
+    zone_id                = aws_lb.api-privateciliumadvanced-example-com.zone_id
   }
   name    = "api.privateciliumadvanced.example.com"
   type    = "AAAA"
@@ -1540,7 +1552,7 @@ terraform {
     aws = {
       "configuration_aliases" = [aws.files]
       "source"                = "hashicorp/aws"
-      "version"               = ">= 5.0.0"
+      "version"               = ">= 6.57.1"
     }
   }
 }

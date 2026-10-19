@@ -301,7 +301,7 @@ resource "google_compute_firewall" "lb-health-checks-minimal-gce-ilb-cilium-etcd
   name          = "lb-health-checks-minimal-gce-ilb-cilium-etcd-example-com"
   network       = google_compute_network.minimal-gce-ilb-cilium-etcd-example-com.name
   source_ranges = ["35.191.0.0/16", "130.211.0.0/22", "209.85.204.0/22", "209.85.152.0/22"]
-  target_tags   = ["minimal-gce-ilb-cilium-etcd-ex-eqdptu-k8s-io-role-control-plane"]
+  target_tags   = ["minimal-gce-ilb-cilium-etcd-ex-eqdptu-k8s-io-role-control-plane", "minimal-gce-ilb-cilium-etcd-example-com-k8s-io-role-etcd"]
 }
 
 resource "google_compute_firewall" "master-to-master-minimal-gce-ilb-cilium-etcd-example-com" {
@@ -326,8 +326,8 @@ resource "google_compute_firewall" "master-to-master-minimal-gce-ilb-cilium-etcd
   disabled    = false
   name        = "master-to-master-minimal-gce-ilb-cilium-etcd-example-com"
   network     = google_compute_network.minimal-gce-ilb-cilium-etcd-example-com.name
-  source_tags = ["minimal-gce-ilb-cilium-etcd-ex-eqdptu-k8s-io-role-control-plane", "minimal-gce-ilb-cilium-etcd-example-com-k8s-io-role-master"]
-  target_tags = ["minimal-gce-ilb-cilium-etcd-ex-eqdptu-k8s-io-role-control-plane", "minimal-gce-ilb-cilium-etcd-example-com-k8s-io-role-master"]
+  source_tags = ["minimal-gce-ilb-cilium-etcd-ex-eqdptu-k8s-io-role-control-plane", "minimal-gce-ilb-cilium-etcd-example-com-k8s-io-role-etcd", "minimal-gce-ilb-cilium-etcd-example-com-k8s-io-role-scheduler", "minimal-gce-ilb-cilium-eqdptu-k8s-io-role-kubecontrollermanager", "minimal-gce-ilb-cilium-etcd-example-com-k8s-io-role-master"]
+  target_tags = ["minimal-gce-ilb-cilium-etcd-ex-eqdptu-k8s-io-role-control-plane", "minimal-gce-ilb-cilium-etcd-example-com-k8s-io-role-etcd", "minimal-gce-ilb-cilium-etcd-example-com-k8s-io-role-scheduler", "minimal-gce-ilb-cilium-eqdptu-k8s-io-role-kubecontrollermanager", "minimal-gce-ilb-cilium-etcd-example-com-k8s-io-role-master"]
 }
 
 resource "google_compute_firewall" "master-to-node-minimal-gce-ilb-cilium-etcd-example-com" {
@@ -367,6 +367,30 @@ resource "google_compute_firewall" "node-to-master-minimal-gce-ilb-cilium-etcd-e
   }
   allow {
     ports    = ["3988"]
+    protocol = "tcp"
+  }
+  allow {
+    ports    = ["10257"]
+    protocol = "tcp"
+  }
+  allow {
+    ports    = ["10259"]
+    protocol = "tcp"
+  }
+  allow {
+    ports    = ["10249"]
+    protocol = "tcp"
+  }
+  allow {
+    ports    = ["2382"]
+    protocol = "tcp"
+  }
+  allow {
+    ports    = ["2384"]
+    protocol = "tcp"
+  }
+  allow {
+    ports    = ["9100"]
     protocol = "tcp"
   }
   allow {
@@ -451,7 +475,7 @@ resource "google_compute_firewall" "ssh-external-to-master-ipv6-minimal-gce-ilb-
   name          = "ssh-external-to-master-ipv6-minimal-gce-ilb-cilium-etcd--eqdptu"
   network       = google_compute_network.minimal-gce-ilb-cilium-etcd-example-com.name
   source_ranges = ["::/0"]
-  target_tags   = ["minimal-gce-ilb-cilium-etcd-ex-eqdptu-k8s-io-role-control-plane", "minimal-gce-ilb-cilium-etcd-example-com-k8s-io-role-master"]
+  target_tags   = ["minimal-gce-ilb-cilium-etcd-ex-eqdptu-k8s-io-role-control-plane", "minimal-gce-ilb-cilium-etcd-example-com-k8s-io-role-etcd", "minimal-gce-ilb-cilium-etcd-example-com-k8s-io-role-scheduler", "minimal-gce-ilb-cilium-eqdptu-k8s-io-role-kubecontrollermanager", "minimal-gce-ilb-cilium-etcd-example-com-k8s-io-role-master"]
 }
 
 resource "google_compute_firewall" "ssh-external-to-master-minimal-gce-ilb-cilium-etcd-example-com" {
@@ -463,7 +487,7 @@ resource "google_compute_firewall" "ssh-external-to-master-minimal-gce-ilb-ciliu
   name          = "ssh-external-to-master-minimal-gce-ilb-cilium-etcd-example-com"
   network       = google_compute_network.minimal-gce-ilb-cilium-etcd-example-com.name
   source_ranges = ["0.0.0.0/0"]
-  target_tags   = ["minimal-gce-ilb-cilium-etcd-ex-eqdptu-k8s-io-role-control-plane", "minimal-gce-ilb-cilium-etcd-example-com-k8s-io-role-master"]
+  target_tags   = ["minimal-gce-ilb-cilium-etcd-ex-eqdptu-k8s-io-role-control-plane", "minimal-gce-ilb-cilium-etcd-example-com-k8s-io-role-etcd", "minimal-gce-ilb-cilium-etcd-example-com-k8s-io-role-scheduler", "minimal-gce-ilb-cilium-eqdptu-k8s-io-role-kubecontrollermanager", "minimal-gce-ilb-cilium-etcd-example-com-k8s-io-role-master"]
 }
 
 resource "google_compute_firewall" "ssh-external-to-node-ipv6-minimal-gce-ilb-cilium-etcd-ex-eqdptu" {
@@ -604,7 +628,7 @@ resource "google_compute_instance_template" "master-us-test1-a-minimal-gce-ilb-c
   metadata = {
     "cluster-name"                    = "minimal-gce-ilb-cilium-etcd.example.com"
     "kops-k8s-io-instance-group-name" = "master-us-test1-a"
-    "ssh-keys"                        = "admin: ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQCtWu40XQo8dczLsCq0OWV+hxm9uV3WxeH9Kgh4sMzQxNtoU1pvW0XdjpkBesRKGoolfWeCLXWxpyQb1IaiMkKoz7MdhQ/6UKjMjP66aFWWp3pwD0uj0HuJ7tq4gKHKRYGTaZIRWpzUiANBrjugVgA+Sd7E/mYwc/DMXkIyRZbvhQ=="
+    "ssh-keys"                        = "ubuntu: ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQCtWu40XQo8dczLsCq0OWV+hxm9uV3WxeH9Kgh4sMzQxNtoU1pvW0XdjpkBesRKGoolfWeCLXWxpyQb1IaiMkKoz7MdhQ/6UKjMjP66aFWWp3pwD0uj0HuJ7tq4gKHKRYGTaZIRWpzUiANBrjugVgA+Sd7E/mYwc/DMXkIyRZbvhQ=="
     "user-data"                       = file("${path.module}/data/google_compute_instance_template_master-us-test1-a-minimal-gce-ilb-cilium-etcd-example-com_metadata_user-data")
   }
   name_prefix = "master-us-test1-a-minimal-ukspr5-"
@@ -656,7 +680,7 @@ resource "google_compute_instance_template" "nodes-minimal-gce-ilb-cilium-etcd-e
     "cluster-name"                    = "minimal-gce-ilb-cilium-etcd.example.com"
     "kops-k8s-io-instance-group-name" = "nodes"
     "kube-env"                        = "AUTOSCALER_ENV_VARS: os_distribution=ubuntu;arch=amd64;os=linux"
-    "ssh-keys"                        = "admin: ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQCtWu40XQo8dczLsCq0OWV+hxm9uV3WxeH9Kgh4sMzQxNtoU1pvW0XdjpkBesRKGoolfWeCLXWxpyQb1IaiMkKoz7MdhQ/6UKjMjP66aFWWp3pwD0uj0HuJ7tq4gKHKRYGTaZIRWpzUiANBrjugVgA+Sd7E/mYwc/DMXkIyRZbvhQ=="
+    "ssh-keys"                        = "ubuntu: ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQCtWu40XQo8dczLsCq0OWV+hxm9uV3WxeH9Kgh4sMzQxNtoU1pvW0XdjpkBesRKGoolfWeCLXWxpyQb1IaiMkKoz7MdhQ/6UKjMjP66aFWWp3pwD0uj0HuJ7tq4gKHKRYGTaZIRWpzUiANBrjugVgA+Sd7E/mYwc/DMXkIyRZbvhQ=="
     "user-data"                       = file("${path.module}/data/google_compute_instance_template_nodes-minimal-gce-ilb-cilium-etcd-example-com_metadata_user-data")
   }
   name_prefix = "nodes-minimal-gce-ilb-cil-vfh7jq-"
@@ -732,11 +756,11 @@ terraform {
     aws = {
       "configuration_aliases" = [aws.files]
       "source"                = "hashicorp/aws"
-      "version"               = ">= 5.0.0"
+      "version"               = ">= 6.57.1"
     }
     google = {
       "source"  = "hashicorp/google"
-      "version" = ">= 5.11.0"
+      "version" = ">= 6.8.0"
     }
   }
 }

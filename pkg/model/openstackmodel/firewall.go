@@ -78,7 +78,7 @@ func (b *FirewallModelBuilder) addDirectionalGroupRule(c *fi.CloudupModelBuilder
 		RemoteGroup:    dest,
 		RemoteIPPrefix: sgr.RemoteIPPrefix,
 		SecGroup:       source,
-		Delete:         fi.PtrTo(false),
+		Delete:         new(false),
 	}
 
 	klog.V(8).Infof("Adding rule %v", fi.ValueOf(t.GetName()))
@@ -282,7 +282,7 @@ func (b *FirewallModelBuilder) addHTTPSRules(c *fi.CloudupModelBuilderContext, s
 		PortRangeMax: i(443),
 	}
 
-	// Allow all local communication for kubernetes.svc and to the api.internal lb/gossip for kubelet's
+	// Allow all local communication for kubernetes.svc and to the api.internal lb for kubelet's
 	b.addDirectionalGroupRule(c, masterSG, nodeSG, httpsIngress)
 	b.addDirectionalGroupRule(c, masterSG, masterSG, httpsIngress)
 
@@ -502,12 +502,6 @@ func (b *FirewallModelBuilder) addCNIRules(c *fi.CloudupModelBuilderContext, sgM
 	tcpPorts := []int{}
 	protocols := []string{}
 
-	if b.Cluster.Spec.Networking.Kopeio != nil {
-		// VXLAN over UDP
-		// https://tools.ietf.org/html/rfc7348
-		udpPorts = append(udpPorts, 4789)
-	}
-
 	if b.Cluster.Spec.Networking.Cilium != nil {
 		udpPorts = append(udpPorts, 8472)
 		tcpPorts = append(tcpPorts, 4240)
@@ -602,31 +596,6 @@ func (b *FirewallModelBuilder) addKopsControllerRules(c *fi.CloudupModelBuilderC
 	return nil
 }
 
-// addProtokubeRules - Add rules for protokube if gossip DNS is enabled
-func (b *FirewallModelBuilder) addProtokubeRules(c *fi.CloudupModelBuilderContext, sgMap map[string]*openstacktasks.SecurityGroup) error {
-	if b.Cluster.UsesLegacyGossip() {
-		masterName := b.SecurityGroupName(kops.InstanceGroupRoleControlPlane)
-		nodeName := b.SecurityGroupName(kops.InstanceGroupRoleNode)
-		masterSG := sgMap[masterName]
-		nodeSG := sgMap[nodeName]
-		for _, portRange := range wellknownports.DNSGossipPortRanges() {
-			protokubeRule := &openstacktasks.SecurityGroupRule{
-				Lifecycle:    b.Lifecycle,
-				Direction:    s(string(rules.DirIngress)),
-				Protocol:     s(string(rules.ProtocolTCP)),
-				EtherType:    s(string(rules.EtherType4)),
-				PortRangeMin: i(portRange.Min),
-				PortRangeMax: i(portRange.Max),
-			}
-			b.addDirectionalGroupRule(c, masterSG, nodeSG, protokubeRule)
-			b.addDirectionalGroupRule(c, nodeSG, masterSG, protokubeRule)
-			b.addDirectionalGroupRule(c, masterSG, masterSG, protokubeRule)
-			b.addDirectionalGroupRule(c, nodeSG, nodeSG, protokubeRule)
-		}
-	}
-	return nil
-}
-
 func (b *FirewallModelBuilder) getExistingRules(sgMap map[string]*openstacktasks.SecurityGroup) error {
 	osCloud, err := b.createCloud()
 	if err != nil {
@@ -648,7 +617,7 @@ func (b *FirewallModelBuilder) getExistingRules(sgMap map[string]*openstacktasks
 			return fmt.Errorf("Found multiple security groups with the same name: %v", sgName)
 		}
 		sg := sgs[0]
-		sgt.Name = fi.PtrTo(sg.Name)
+		sgt.Name = new(sg.Name)
 		sgIdMap[sg.ID] = sgt
 	}
 
@@ -663,17 +632,17 @@ func (b *FirewallModelBuilder) getExistingRules(sgMap map[string]*openstacktasks
 		for _, rule := range sgRules {
 
 			t := &openstacktasks.SecurityGroupRule{
-				ID:             fi.PtrTo(rule.ID),
-				Direction:      fi.PtrTo(rule.Direction),
-				EtherType:      fi.PtrTo(rule.EtherType),
-				PortRangeMax:   fi.PtrTo(rule.PortRangeMax),
-				PortRangeMin:   fi.PtrTo(rule.PortRangeMin),
-				Protocol:       fi.PtrTo(rule.Protocol),
-				RemoteIPPrefix: fi.PtrTo(rule.RemoteIPPrefix),
+				ID:             new(rule.ID),
+				Direction:      new(rule.Direction),
+				EtherType:      new(rule.EtherType),
+				PortRangeMax:   new(rule.PortRangeMax),
+				PortRangeMin:   new(rule.PortRangeMin),
+				Protocol:       new(rule.Protocol),
+				RemoteIPPrefix: new(rule.RemoteIPPrefix),
 				RemoteGroup:    sgIdMap[rule.RemoteGroupID],
 				Lifecycle:      b.Lifecycle,
 				SecGroup:       sgIdMap[rule.SecGroupID],
-				Delete:         fi.PtrTo(true),
+				Delete:         new(true),
 			}
 			klog.V(8).Infof("Adding existing rule %v", t)
 			b.Rules[fi.ValueOf(t.GetName())] = t
@@ -773,8 +742,6 @@ func (b *FirewallModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	b.addKubeControllerManagerMetricsRules(c, sgMap)
 	// Add kube scheduler metrics Rules
 	b.addKubeSchedulerMetricsRules(c, sgMap)
-	// Protokube Rules
-	b.addProtokubeRules(c, sgMap)
 	// Kops-controller Rules
 	b.addKopsControllerRules(c, sgMap)
 	// Allow necessary local traffic

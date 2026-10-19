@@ -33,13 +33,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
-	"text/template"
 
 	"github.com/Masterminds/sprig/v3"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
@@ -51,31 +52,34 @@ import (
 	"k8s.io/kops/pkg/apis/kops"
 	apiModel "k8s.io/kops/pkg/apis/kops/model"
 	"k8s.io/kops/pkg/apis/kops/util"
+	"k8s.io/kops/pkg/bootstrap/awsbootstrap"
 	"k8s.io/kops/pkg/bootstrap/pkibootstrap"
 	"k8s.io/kops/pkg/featureflag"
 	"k8s.io/kops/pkg/flagbuilder"
 	"k8s.io/kops/pkg/kubemanifest"
 	"k8s.io/kops/pkg/model"
-	"k8s.io/kops/pkg/model/components/kopscontroller"
 	"k8s.io/kops/pkg/model/gcemodel"
 	"k8s.io/kops/pkg/model/iam"
 	"k8s.io/kops/pkg/nodelabels"
 	"k8s.io/kops/pkg/resources/spotinst"
 	"k8s.io/kops/pkg/truncate"
 	"k8s.io/kops/pkg/wellknownports"
+	"k8s.io/kops/third_party/forked/text/template"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/azure"
 	"k8s.io/kops/upup/pkg/fi/cloudup/do"
+	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce"
 	gcetpm "k8s.io/kops/upup/pkg/fi/cloudup/gce/tpm"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetzner"
 	"k8s.io/kops/upup/pkg/fi/cloudup/hetznertasks"
+	"k8s.io/kops/upup/pkg/fi/cloudup/linode"
 	"k8s.io/kops/upup/pkg/fi/cloudup/openstack"
+	"k8s.io/kops/upup/pkg/fi/cloudup/openstack/openstackcloudconfig"
 	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
-	"k8s.io/kops/upup/pkg/fi/cloudup/elemento"
+	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway/scalewaymetadata"
 	"k8s.io/kops/util/pkg/env"
-	"k8s.io/kops/util/pkg/maps"
 	"sigs.k8s.io/yaml"
 )
 
@@ -193,16 +197,10 @@ func (tf *TemplateFunctions) AddTo(dest template.FuncMap, secretStore fi.SecretS
 		return cluster.Spec.KubeDNS
 	}
 
-	dest["GossipEnabled"] = func() bool {
-		return cluster.UsesLegacyGossip()
-	}
 	dest["PublishesDNSRecords"] = func() bool {
 		return cluster.PublishesDNSRecords()
 	}
 	dest["ClusterDNSDomain"] = func() string {
-		if cluster.UsesLegacyGossip() {
-			return "k8s.local"
-		}
 		return cluster.Name
 	}
 
@@ -218,7 +216,6 @@ func (tf *TemplateFunctions) AddTo(dest template.FuncMap, secretStore fi.SecretS
 
 	dest["KopsControllerArgv"] = tf.KopsControllerArgv
 	dest["KopsControllerConfig"] = tf.KopsControllerConfig
-	kopscontroller.AddTemplateFunctions(cluster, dest)
 	dest["DnsControllerArgv"] = tf.DNSControllerArgv
 	dest["ExternalDnsArgv"] = tf.ExternalDNSArgv
 	dest["CloudControllerConfigArgv"] = tf.CloudControllerConfigArgv
@@ -256,26 +253,26 @@ func (tf *TemplateFunctions) AddTo(dest template.FuncMap, secretStore fi.SecretS
 	dest["HCLOUD_SSH_KEY"] = tf.HCloudSSHKey
 
 	dest["OPENSTACK_CONF"] = func() string {
-		lines := openstack.MakeCloudConfig(cluster.Spec.CloudProvider.Openstack)
+		lines := openstackcloudconfig.MakeCloudConfig(cluster.Spec.CloudProvider.Openstack)
 		return "[global]\n" + strings.Join(lines, "\n") + "\n"
 	}
 
 	dest["SCW_ACCESS_KEY"] = func() string {
-		profile, err := scaleway.CreateValidScalewayProfile()
+		profile, err := scalewaymetadata.CreateValidScalewayProfile()
 		if err != nil {
 			return ""
 		}
 		return fi.ValueOf(profile.AccessKey)
 	}
 	dest["SCW_SECRET_KEY"] = func() string {
-		profile, err := scaleway.CreateValidScalewayProfile()
+		profile, err := scalewaymetadata.CreateValidScalewayProfile()
 		if err != nil {
 			return ""
 		}
 		return fi.ValueOf(profile.SecretKey)
 	}
 	dest["SCW_DEFAULT_PROJECT_ID"] = func() string {
-		profile, err := scaleway.CreateValidScalewayProfile()
+		profile, err := scalewaymetadata.CreateValidScalewayProfile()
 		if err != nil {
 			return ""
 		}
@@ -423,7 +420,7 @@ func (tf *TemplateFunctions) AddTo(dest template.FuncMap, secretStore fi.SecretS
 			if cluster.Spec.ClusterAutoscaler.CustomPriorityExpanderConfig != nil {
 				priorities = cluster.Spec.ClusterAutoscaler.CustomPriorityExpanderConfig
 			} else {
-				igNames := maps.SortedKeys(tf.GetNodeInstanceGroups())
+				igNames := slices.Sorted(maps.Keys(tf.GetNodeInstanceGroups()))
 				for _, name := range igNames {
 					spec := tf.GetNodeInstanceGroups()[name]
 					if spec.Autoscale != nil {
@@ -433,7 +430,7 @@ func (tf *TemplateFunctions) AddTo(dest template.FuncMap, secretStore fi.SecretS
 			}
 
 			var prioritiesStr []string
-			for _, prio := range maps.SortedKeys(priorities) {
+			for _, prio := range slices.Sorted(maps.Keys(priorities)) {
 				prioritiesStr = append(prioritiesStr, fmt.Sprintf("%s:", prio))
 				for _, value := range priorities[prio] {
 					prioritiesStr = append(prioritiesStr, fmt.Sprintf("- %s", value))
@@ -481,6 +478,7 @@ func (tf *TemplateFunctions) AddTo(dest template.FuncMap, secretStore fi.SecretS
 	dest["IsKubernetesLT"] = tf.IsKubernetesLT
 
 	dest["KopsFeatureEnabled"] = tf.kopsFeatureEnabled
+	dest["UseSELinuxMount"] = tf.UseSELinuxMount
 	dest["KopsVersion"] = func() string { return kopsroot.Version }
 	dest["KopsVersionImageTag"] = kopsroot.KopsVersionImageTag
 	dest["KopsVersionForLabel"] = func() string {
@@ -769,72 +767,20 @@ func (tf *TemplateFunctions) DNSControllerArgv() ([]string, error) {
 		}
 	}
 
-	if cluster.UsesLegacyGossip() {
-		argv = append(argv, "--dns=gossip")
+	switch cluster.GetCloudProvider() {
+	case kops.CloudProviderAWS:
+		argv = append(argv, "--dns=aws-route53")
+	case kops.CloudProviderGCE:
+		argv = append(argv, "--dns=google-clouddns")
+	case kops.CloudProviderDO:
+		argv = append(argv, "--dns=digitalocean")
+	case kops.CloudProviderOpenstack:
+		argv = append(argv, "--dns=openstack-designate")
+	case kops.CloudProviderScaleway:
+		argv = append(argv, "--dns=scaleway")
 
-		// Configuration specifically for the DNS controller gossip
-		if cluster.Spec.DNSControllerGossipConfig != nil {
-			if cluster.Spec.DNSControllerGossipConfig.Protocol != nil {
-				argv = append(argv, "--gossip-protocol="+*cluster.Spec.DNSControllerGossipConfig.Protocol)
-			}
-			if cluster.Spec.DNSControllerGossipConfig.Listen != nil {
-				argv = append(argv, "--gossip-listen="+*cluster.Spec.DNSControllerGossipConfig.Listen)
-			}
-			if cluster.Spec.DNSControllerGossipConfig.Secret != nil {
-				argv = append(argv, "--gossip-secret="+*cluster.Spec.DNSControllerGossipConfig.Secret)
-			}
-
-			if cluster.Spec.DNSControllerGossipConfig.Seed != nil {
-				argv = append(argv, "--gossip-seed="+*cluster.Spec.DNSControllerGossipConfig.Seed)
-			} else {
-				argv = append(argv, fmt.Sprintf("--gossip-seed=127.0.0.1:%d", wellknownports.ProtokubeGossipWeaveMesh))
-			}
-
-			if cluster.Spec.DNSControllerGossipConfig.Secondary != nil {
-				if cluster.Spec.DNSControllerGossipConfig.Secondary.Protocol != nil {
-					argv = append(argv, "--gossip-protocol-secondary="+*cluster.Spec.DNSControllerGossipConfig.Secondary.Protocol)
-				}
-				if cluster.Spec.DNSControllerGossipConfig.Secondary.Listen != nil {
-					argv = append(argv, "--gossip-listen-secondary="+*cluster.Spec.DNSControllerGossipConfig.Secondary.Listen)
-				}
-				if cluster.Spec.DNSControllerGossipConfig.Secondary.Secret != nil {
-					argv = append(argv, "--gossip-secret-secondary="+*cluster.Spec.DNSControllerGossipConfig.Secondary.Secret)
-				}
-
-				if cluster.Spec.DNSControllerGossipConfig.Secondary.Seed != nil {
-					argv = append(argv, "--gossip-seed-secondary="+*cluster.Spec.DNSControllerGossipConfig.Secondary.Seed)
-				} else {
-					argv = append(argv, fmt.Sprintf("--gossip-seed-secondary=127.0.0.1:%d", wellknownports.ProtokubeGossipMemberlist))
-				}
-			}
-		} else {
-			// Default to primary mesh and secondary memberlist
-			argv = append(argv, fmt.Sprintf("--gossip-seed=127.0.0.1:%d", wellknownports.ProtokubeGossipWeaveMesh))
-
-			argv = append(argv, "--gossip-protocol-secondary=memberlist")
-			argv = append(argv, fmt.Sprintf("--gossip-listen-secondary=0.0.0.0:%d", wellknownports.DNSControllerGossipMemberlist))
-			argv = append(argv, fmt.Sprintf("--gossip-seed-secondary=127.0.0.1:%d", wellknownports.ProtokubeGossipMemberlist))
-		}
-	} else {
-		switch cluster.GetCloudProvider() {
-		case kops.CloudProviderAWS:
-			if strings.HasPrefix(os.Getenv("AWS_REGION"), "cn-") {
-				argv = append(argv, "--dns=gossip")
-			} else {
-				argv = append(argv, "--dns=aws-route53")
-			}
-		case kops.CloudProviderGCE:
-			argv = append(argv, "--dns=google-clouddns")
-		case kops.CloudProviderDO:
-			argv = append(argv, "--dns=digitalocean")
-		case kops.CloudProviderOpenstack:
-			argv = append(argv, "--dns=openstack-designate")
-		case kops.CloudProviderScaleway:
-			argv = append(argv, "--dns=scaleway")
-
-		default:
-			return nil, fmt.Errorf("unhandled cloudprovider %q", cluster.GetCloudProvider())
-		}
+	default:
+		return nil, fmt.Errorf("unhandled cloudprovider %q", cluster.GetCloudProvider())
 	}
 
 	zone := cluster.Spec.DNSZone
@@ -939,9 +885,10 @@ func (tf *TemplateFunctions) KopsControllerConfig() (string, error) {
 					}
 				}
 			}
-			config.Server.Provider.AWS = &awsup.AWSVerifierOptions{
-				NodesRoles: nodesRoles.List(),
-				Region:     tf.Region,
+			config.Server.Provider.AWS = &awsbootstrap.AWSVerifierOptions{
+				NodesRoles:          nodesRoles.List(),
+				Region:              tf.Region,
+				UseIPBasedNodeNames: fi.ValueOf(cluster.Spec.CloudProvider.AWS.UseIPBasedNodeNames),
 			}
 
 		case kops.CloudProviderGCE:
@@ -974,6 +921,9 @@ func (tf *TemplateFunctions) KopsControllerConfig() (string, error) {
 		case kops.CloudProviderElemento:
 			config.Server.Provider.Elemento = &elemento.ElementoVerifierOptions{}
 
+		case kops.CloudProviderLinode:
+			config.Server.Provider.Linode = &linode.LinodeVerifierOptions{}
+
 		case kops.CloudProviderMetal:
 			// Use crypto public/private keys for Metal
 			config.Server.PKI = &pkibootstrap.Options{}
@@ -985,12 +935,6 @@ func (tf *TemplateFunctions) KopsControllerConfig() (string, error) {
 
 	if cluster.Spec.IsKopsControllerIPAM() {
 		config.EnableCloudIPAM = true
-	}
-
-	if cluster.UsesLegacyGossip() {
-		config.Discovery = &kopscontrollerconfig.DiscoveryOptions{
-			Enabled: true,
-		}
 	}
 
 	// To avoid indentation problems, we marshal as json.  json is a subset of yaml
@@ -1148,10 +1092,10 @@ func (tf *TemplateFunctions) OpenStackCSITag() string {
 	return tag
 }
 
-// GetNodeInstanceGroups returns a map containing the defined instance groups of role "Node".
+// GetNodeInstanceGroups returns the instance groups of role "Node", including those not being updated.
 func (tf *TemplateFunctions) GetNodeInstanceGroups() map[string]kops.InstanceGroupSpec {
 	nodegroups := make(map[string]kops.InstanceGroupSpec)
-	for _, ig := range tf.KopsModelContext.InstanceGroups {
+	for _, ig := range tf.AllInstanceGroups {
 		if ig.Spec.Role.HasNode() {
 			nodegroups[ig.ObjectMeta.Name] = ig.Spec
 		}
@@ -1169,8 +1113,15 @@ type ClusterAutoscalerNodeGroup struct {
 // GetClusterAutoscalerNodeGroups returns a map containing ClusterAutoscaler info for each instance group of type Node.
 func (tf *TemplateFunctions) GetClusterAutoscalerNodeGroups() (map[string]ClusterAutoscalerNodeGroup, error) {
 	cluster := tf.Cluster
+	// The addon is applied to the whole cluster, so all instance groups are listed. On Hetzner,
+	// every node group needs a node config, which HCloudClusterConfig can only render for the
+	// instance groups being updated, so only those are listed there.
+	instanceGroups := tf.AllInstanceGroups
+	if cluster.GetCloudProvider() == kops.CloudProviderHetzner {
+		instanceGroups = tf.KopsModelContext.InstanceGroups
+	}
 	groups := make(map[string]ClusterAutoscalerNodeGroup)
-	for _, ig := range tf.KopsModelContext.InstanceGroups {
+	for _, ig := range instanceGroups {
 		if ig.Spec.Role.HasNode() && (ig.Spec.Autoscale == nil || fi.ValueOf(ig.Spec.Autoscale)) {
 			group := ClusterAutoscalerNodeGroup{
 				AutoScale: ig.Spec.Autoscale,
@@ -1241,6 +1192,8 @@ func (tf *TemplateFunctions) HCloudClusterConfig() (string, error) {
 		NodeConfigs: map[string]hcloudNodeConfig{},
 	}
 
+	// Only the instance groups being updated have a ServerGroup task, whose user data is needed
+	// here. GetClusterAutoscalerNodeGroups lists only these on Hetzner for this reason.
 	for _, ig := range tf.KopsModelContext.InstanceGroups {
 		if !ig.Spec.Role.HasNode() {
 			continue
@@ -1389,4 +1342,25 @@ func (tf *TemplateFunctions) kopsFeatureEnabled(featureName string) (bool, error
 		return false, err
 	}
 	return f.Enabled(), nil
+}
+
+// UseSELinuxMount reports whether CSI drivers should be configured with SELinux mount
+// support (CSIDriver.spec.seLinuxMount and the host mounts it requires). This requires
+// both the SELinuxMount feature flag (a plain kill switch, defaulting to true) and the
+// cluster explicitly enabling SELinux via spec.containerd.selinuxEnabled - without the
+// latter, adding the extra hostPath volumes would just pollute driver pods on clusters
+// that don't use SELinux. Note that this only looks at the cluster-level containerd
+// config; a per-InstanceGroup override cannot drive these cluster-scoped addon
+// manifests.
+//
+// This is safe to enable regardless of Kubernetes version: on clusters where
+// CSIDriver.spec.seLinuxMount isn't recognized or is still pre-GA, volumes just keep
+// being relabeled the old (recursive) way instead of mounted with the SELinux
+// context, so there's no functional regression either way.
+func (tf *TemplateFunctions) UseSELinuxMount() bool {
+	if !featureflag.SELinuxMount.Enabled() {
+		return false
+	}
+	containerd := tf.Cluster.Spec.Containerd
+	return containerd != nil && containerd.SeLinuxEnabled
 }

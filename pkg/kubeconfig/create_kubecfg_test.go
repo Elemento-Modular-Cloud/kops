@@ -156,10 +156,10 @@ func TestBuildKubecfg(t *testing.T) {
 
 	publicCluster := buildMinimalCluster("testcluster", "testcluster.test.com", false, false)
 	emptyMasterPublicNameCluster := buildMinimalCluster("emptyMasterPublicNameCluster", "", false, false)
-	gossipCluster := buildMinimalCluster("testgossipcluster.k8s.local", "", false, true)
+	k8sLocalCluster := buildMinimalCluster("testcluster.k8s.local", "", false, true)
 	certCluster := buildMinimalCluster("testcluster", "testcluster.test.com", true, false)
 	certNLBCluster := buildMinimalCluster("testcluster", "testcluster.test.com", true, true)
-	certGossipNLBCluster := buildMinimalCluster("testgossipcluster.k8s.local", "", true, true)
+	certK8sLocalNLBCluster := buildMinimalCluster("testcluster.k8s.local", "", true, true)
 
 	fakeStatus := fakeStatusCloud{
 		GetApiIngressStatusFn: func(cluster *kops.Cluster) ([]fi.ApiIngressStatus, error) {
@@ -290,17 +290,17 @@ func TestBuildKubecfg(t *testing.T) {
 			wantClientCert: false,
 		},
 		{
-			name: "Test Kube Config Data For Gossip cluster",
+			name: "Test Kube Config Data For k8s.local cluster",
 			args: args{
-				cluster: gossipCluster,
+				cluster: k8sLocalCluster,
 				status:  fakeStatus,
 			},
 			want: &KubeconfigBuilder{
-				Context:       "testgossipcluster.k8s.local",
+				Context:       "testcluster.k8s.local",
 				Server:        "https://elbHostName",
-				TLSServerName: "api.internal.testgossipcluster.k8s.local",
+				TLSServerName: "api.internal.testcluster.k8s.local",
 				CACerts:       []byte(nextCertificate + certData),
-				User:          "testgossipcluster.k8s.local",
+				User:          "testcluster.k8s.local",
 			},
 			wantClientCert: false,
 		},
@@ -350,20 +350,20 @@ func TestBuildKubecfg(t *testing.T) {
 			wantClientCert: true,
 		},
 		{
-			name: "Test Kube Config Data For Gossip cluster with admin and secondary NLB port",
+			name: "Test Kube Config Data For k8s.local cluster with admin and secondary NLB port",
 			args: args{
-				cluster: certGossipNLBCluster,
+				cluster: certK8sLocalNLBCluster,
 				status:  fakeStatus,
 				CreateKubecfgOptions: CreateKubecfgOptions{
 					Admin: DefaultKubecfgAdminLifetime,
 				},
 			},
 			want: &KubeconfigBuilder{
-				Context:       "testgossipcluster.k8s.local",
+				Context:       "testcluster.k8s.local",
 				Server:        "https://elbHostName:8443",
-				TLSServerName: "api.internal.testgossipcluster.k8s.local",
+				TLSServerName: "api.internal.testcluster.k8s.local",
 				CACerts:       []byte(nextCertificate + certData),
-				User:          "testgossipcluster.k8s.local",
+				User:          "testcluster.k8s.local",
 			},
 			wantClientCert: true,
 		},

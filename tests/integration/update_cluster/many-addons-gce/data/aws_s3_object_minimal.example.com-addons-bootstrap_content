@@ -5,14 +5,14 @@ spec:
   addons:
   - id: k8s-1.16
     manifest: kops-controller.addons.k8s.io/k8s-1.16.yaml
-    manifestHash: 49a74cc9f58a05d818753385a6159bbeecbeaa39f692e594cbaca2203255aa7c
+    manifestHash: 99fd63ebddf64f546f7d30eb4414b84dfb217a9cd789f3222cdf42fa9e7b3558
     name: kops-controller.addons.k8s.io
     needsRollingUpdate: control-plane
     selector:
       k8s-addon: kops-controller.addons.k8s.io
   - id: k8s-1.12
     manifest: coredns.addons.k8s.io/k8s-1.12.yaml
-    manifestHash: c89f00f91983d51347e920cada21c0d48792dfa4ae32f3eef9e4ebf45495250c
+    manifestHash: 0b180b32473059784ae4bc805d19bc5596a25a86a84041755b792a4766501627
     name: coredns.addons.k8s.io
     selector:
       k8s-addon: coredns.addons.k8s.io
@@ -29,7 +29,7 @@ spec:
       k8s-addon: limit-range.addons.k8s.io
   - id: k8s-1.12
     manifest: dns-controller.addons.k8s.io/k8s-1.12.yaml
-    manifestHash: 5c4088f2427f70a8ad8b6d574479b57f7764bd560a62aa18a1b1efad240e30a7
+    manifestHash: b152233243c9e23a3d6aec7b67209d47ded48c25e24e50fcf000bae06328ba70
     name: dns-controller.addons.k8s.io
     selector:
       k8s-addon: dns-controller.addons.k8s.io
@@ -48,7 +48,7 @@ spec:
       k8s-app: metrics-server
   - id: k8s-1.16
     manifest: certmanager.io/k8s-1.16.yaml
-    manifestHash: 43732258f53c5ff0b3485cad284217ef52f0aebdaa75bdc8d3d1aa76e1434cd8
+    manifestHash: 19a3ad8ab4b74c40b6bd72ed8efa42d71b4078f3a3c395024ee2a7147c67ab9b
     name: certmanager.io
     prune:
       kinds:
@@ -107,13 +107,13 @@ spec:
       k8s-addon: storage-gce.addons.k8s.io
   - id: k8s-1.23
     manifest: gcp-pd-csi-driver.addons.k8s.io/k8s-1.23.yaml
-    manifestHash: 6feff18c6ec4651da2eccc5a8ed76408cf1fcd78d76dc2f3ffdce3d8c983df09
+    manifestHash: 84ec39b04fcd3731091fa746930282f4694a318010e64819c4ab18c9e629d556
     name: gcp-pd-csi-driver.addons.k8s.io
     selector:
       k8s-addon: gcp-pd-csi-driver.addons.k8s.io
   - id: k8s-1.23
     manifest: gcp-cloud-controller.addons.k8s.io/k8s-1.23.yaml
-    manifestHash: a2f62812a76c78d88820673859e171b6f2f1da88cc3332f034cb0859d54736ff
+    manifestHash: f71543aa0f78057940feda013b5315bbaadfd0bb37065908b280e4f24bc8cd22
     name: gcp-cloud-controller.addons.k8s.io
     prune:
       kinds:

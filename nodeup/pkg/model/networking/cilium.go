@@ -64,7 +64,9 @@ func (b *CiliumBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 	if b.NodeupConfig.Networking.Cilium.IPAM == kops.CiliumIpamEni {
 		maskEC2NetUtilsUdevRules(c, b.Distribution)
 		setMACAddressPolicyNone(c, b.Distribution)
-		markSecondaryENIsUnmanaged(c, b.Distribution)
+		if err := markSecondaryENIsUnmanaged(c, b.Distribution); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -102,7 +104,7 @@ WantedBy=multi-user.target
 
 		service := &nodetasks.Service{
 			Name:       "sys-fs-bpf.mount",
-			Definition: fi.PtrTo(unit),
+			Definition: new(unit),
 		}
 		service.InitDefaults()
 		c.AddTask(service)
@@ -145,8 +147,8 @@ WantedBy=multi-user.target
 
 		service := &nodetasks.Service{
 			Name:         "run-cilium-cgroupv2.mount",
-			Definition:   fi.PtrTo(unit),
-			SmartRestart: fi.PtrTo(false),
+			Definition:   new(unit),
+			SmartRestart: new(false),
 		}
 		service.InitDefaults()
 		c.AddTask(service)
@@ -163,7 +165,7 @@ func (b *CiliumBuilder) buildCiliumEtcdSecrets(c *fi.NodeupModelBuilderContext) 
 		Path:     filepath.Join(dir, "etcd-ca.crt"),
 		Contents: fi.NewStringResource(b.NodeupConfig.CAs[signer]),
 		Type:     nodetasks.FileType_File,
-		Mode:     fi.PtrTo("0600"),
+		Mode:     new("0600"),
 	})
 	if b.HasAPIServer {
 		issueCert := &nodetasks.IssueCert{
@@ -187,7 +189,7 @@ func (b *CiliumBuilder) buildCiliumEtcdSecrets(c *fi.NodeupModelBuilderContext) 
 			Path:           filepath.Join(dir, name+".crt"),
 			Contents:       cert,
 			Type:           nodetasks.FileType_File,
-			Mode:           fi.PtrTo("0644"),
+			Mode:           new("0644"),
 			BeforeServices: []string{"kubelet.service"},
 		})
 
@@ -195,7 +197,7 @@ func (b *CiliumBuilder) buildCiliumEtcdSecrets(c *fi.NodeupModelBuilderContext) 
 			Path:           filepath.Join(dir, name+".key"),
 			Contents:       key,
 			Type:           nodetasks.FileType_File,
-			Mode:           fi.PtrTo("0400"),
+			Mode:           new("0400"),
 			BeforeServices: []string{"kubelet.service"},
 		})
 

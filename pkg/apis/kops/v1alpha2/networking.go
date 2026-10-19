@@ -62,7 +62,7 @@ func (s *NetworkingSpec) IsEmpty() bool {
 // ConfiguredOptions returns the set of networking options that are configured (non-nil)
 // in the struct.  We only expect a single option to be configured.
 func (s *NetworkingSpec) ConfiguredOptions() sets.Set[string] {
-	options, err := reflectutils.FindSetFields(s, "classic", "kubenet", "external", "cni", "kopeio", "weave", "flannel", "calico", "kuberouter", "romana", "amazonvpc", "cilium", "lyftvpc", "gce", "kindnet")
+	options, err := reflectutils.FindSetFields(s, "classic", "kubenet", "external", "cni", "kopeio", "weave", "flannel", "calico", "canal", "kuberouter", "romana", "amazonvpc", "cilium", "lyftvpc", "gce", "kindnet")
 	if err != nil {
 		klog.Fatalf("error getting configured options: %v", err)
 	}
@@ -283,7 +283,24 @@ type CanalNetworkingSpec struct {
 }
 
 // KuberouterNetworkingSpec declares that we want Kube-router networking
-type KuberouterNetworkingSpec struct{}
+type KuberouterNetworkingSpec struct {
+	// UseNFTablesForNetpol makes the network policy controller enforce
+	// NetworkPolicies with nftables instead of iptables and ipsets.
+	// This is experimental upstream and only affects the network policy
+	// controller; the service proxy and router controllers are unchanged.
+	// Default: false
+	UseNFTablesForNetpol *bool `json:"useNFTablesForNetpol,omitempty"`
+	// ExternalIPRanges are the CIDRs from which Service externalIPs are accepted.
+	// Setting this or LoadBalancerIPRanges turns on kube-router's strict external
+	// IP validation, which drops any address outside the configured ranges.
+	// Leaving both empty keeps strict validation off.
+	ExternalIPRanges []string `json:"externalIPRanges,omitempty"`
+	// LoadBalancerIPRanges are the CIDRs from which Service loadBalancerIPs are
+	// accepted. Setting this or ExternalIPRanges turns on kube-router's strict
+	// external IP validation, which drops any address outside the configured
+	// ranges. Leaving both empty keeps strict validation off.
+	LoadBalancerIPRanges []string `json:"loadBalancerIPRanges,omitempty"`
+}
 
 // RomanaNetworkingSpec declares that we want Romana networking
 // Romana is deprecated as of kOps 1.18 and removed as of kOps 1.19.

@@ -34,6 +34,10 @@ import (
 	"k8s.io/kops/pkg/resources"
 )
 
+// SSHAccessGranter grants short-lived SSH access to a cloud instance before the dumper connects.
+// instanceID matches resources.Instance.Name. AWS implements this with EC2 Instance Connect.
+type SSHAccessGranter func(ctx context.Context, instanceID string) error
+
 // logDumper gets all the nodes from a kubernetes cluster and dumps a well-known set of logs
 type logDumper struct {
 	sshClientFactory sshClientFactory
@@ -46,6 +50,13 @@ type logDumper struct {
 	services     []string
 	files        []string
 	podSelectors []string
+
+	// dumpBGP enables the Calico BIRD captures, which are meaningless on other CNIs.
+	dumpBGP bool
+
+	// sshAccessGranter grants short-lived SSH access to a node before connecting. On AWS it uses
+	// EC2 Instance Connect so Karpenter nodes, lacking the cluster SSH key pair, are reachable.
+	sshAccessGranter SSHAccessGranter
 }
 
 // NewLogDumper is the constructor for a logDumper
@@ -75,7 +86,6 @@ func NewLogDumper(bastionAddress string, sshConfig *ssh.ClientConfig, keyRing ag
 		"containerd",
 		"docker",
 		"kops-configuration",
-		"protokube",
 	}
 	d.files = []string{
 		"kops-controller",
@@ -107,6 +117,27 @@ func NewLogDumper(bastionAddress string, sshConfig *ssh.ClientConfig, keyRing ag
 	}
 
 	return d
+}
+
+// SetSSHAccessGranter registers a hook to grant SSH access to a node before connecting.
+func (d *logDumper) SetSSHAccessGranter(granter SSHAccessGranter) {
+	d.sshAccessGranter = granter
+}
+
+// SetDumpBGP enables capturing Calico BIRD session state from each node.
+func (d *logDumper) SetDumpBGP(enabled bool) {
+	d.dumpBGP = enabled
+}
+
+// grantSSHAccess best-effort grants SSH access before connecting. Failures are non-fatal: some
+// nodes already trust our key (e.g. control plane via its launch template key pair).
+func (d *logDumper) grantSSHAccess(ctx context.Context, instanceID string) {
+	if d.sshAccessGranter == nil || instanceID == "" {
+		return
+	}
+	if err := d.sshAccessGranter(ctx, instanceID); err != nil {
+		klog.Infof("could not grant SSH access to instance %s: %v", instanceID, err)
+	}
 }
 
 // DumpAllNodes connects to every node from kubectl get nodes and dumps the logs.
@@ -212,6 +243,8 @@ func (d *logDumper) dumpRegistered(ctx context.Context, node *corev1.Node) (stri
 		return "", ctx.Err()
 	}
 
+	d.grantSSHAccess(ctx, node.Name)
+
 	var publicIP, privateIP string
 	for _, address := range node.Status.Addresses {
 		if address.Type == "ExternalIP" {
@@ -243,6 +276,7 @@ func (d *logDumper) dumpNotRegistered(ctx context.Context, node *resources.Insta
 	}
 
 	klog.Infof("dumping node not registered in kubernetes: %s", node.Name)
+	d.grantSSHAccess(ctx, node.Name)
 	if len(node.PublicAddresses) > 0 {
 		return node.PublicAddresses[0], d.dumpNode(ctx, node.PublicAddresses[0], node.PublicAddresses[0], false)
 	}
@@ -393,6 +427,36 @@ func (n *logDumperNode) dump(ctx context.Context) []error {
 	}
 	if err := n.shellToFile(ctx, "ss -s", filepath.Join(n.dir, "netstat.log")); err != nil {
 		errors = append(errors, err)
+	}
+
+	if n.dumper.dumpBGP {
+		// calico-node is hostNetwork, so the sockets and conntrack entries are visible
+		// from the host, but birdcl and the confd-generated config only exist inside
+		// the container -- hence the hop into bird's mount namespace. Without "show
+		// protocols all" there is no record of why a session failed to establish:
+		// BIRD reports a stuck peer only in its own state, and the calico-node pod log
+		// is collected with kubectl logs and routinely truncated past the point where
+		// the session was set up. The pgrep guard still matters here: Calico in VXLAN
+		// mode runs no BIRD at all.
+		const inBirdNS = `pid=$(pgrep -x bird 2>/dev/null | head -1); if [ -n "$pid" ]; then sudo nsenter -t "$pid" -m -- `
+		if err := n.shellToFile(ctx, inBirdNS+"birdcl -s /var/run/calico/bird.ctl show protocols all; fi", filepath.Join(n.dir, "bgp-protocols.log")); err != nil {
+			errors = append(errors, err)
+		}
+		if err := n.shellToFile(ctx, inBirdNS+"cat /etc/calico/confd/config/bird.cfg; fi", filepath.Join(n.dir, "bird.cfg")); err != nil {
+			errors = append(errors, err)
+		}
+		if err := n.shellToFile(ctx, "sudo ss -tanp state all '( sport = :179 or dport = :179 )'", filepath.Join(n.dir, "bgp-sockets.log")); err != nil {
+			errors = append(errors, err)
+		}
+		// The conntrack CLI is absent from most node images, so fall back to the kernel
+		// table, which is populated whenever kube-proxy is running. It cannot be guarded
+		// with a test: /proc/net/nf_conntrack is 0440 root:root and this shell is not
+		// root, so only the privileged read itself can tell us whether it is there.
+		const conntrack179 = `if command -v conntrack &> /dev/null; then sudo conntrack -L -p tcp --dport 179; ` +
+			`else sudo grep -E 'sport=179|dport=179' /proc/net/nf_conntrack 2>/dev/null || true; fi`
+		if err := n.shellToFile(ctx, conntrack179, filepath.Join(n.dir, "bgp-conntrack.log")); err != nil {
+			errors = append(errors, err)
+		}
 	}
 
 	// Capture any file logs where the files exist

@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
+	k8stesting "k8s.io/client-go/testing"
 	kopsapi "k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/cloudinstances"
 	"k8s.io/kops/upup/pkg/fi"
@@ -41,6 +43,10 @@ type MockCloud struct {
 	t                      *testing.T
 	expectedCluster        *kopsapi.Cluster
 	expectedInstanceGroups []kopsapi.InstanceGroup
+
+	// cloudGroupFailures is keyed by InstanceGroup name. When non-nil, MockCloud
+	// implements cloudinstances.GroupFailureReporter and returns these errors.
+	cloudGroupFailures map[string][]cloudinstances.GroupFailure
 }
 
 var _ fi.Cloud = (*MockCloud)(nil)
@@ -71,13 +77,19 @@ func (c *MockCloud) GetCloudGroups(cluster *kopsapi.Cluster, instancegroups []*k
 }
 
 func testValidate(t *testing.T, groups map[string]*cloudinstances.CloudInstanceGroup, objects []runtime.Object) (*ValidationCluster, error) {
+	return testValidateWithTolerance(t, groups, objects, 0)
+}
+
+func testValidateWithTolerance(t *testing.T, groups map[string]*cloudinstances.CloudInstanceGroup, objects []runtime.Object, maxUnreadyNodes int) (*ValidationCluster, error) {
 	ctx := context.TODO()
 
 	cluster := &kopsapi.Cluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "testcluster.k8s.local"},
 		Spec: kopsapi.ClusterSpec{
-			ExternalDNS: &kopsapi.ExternalDNSConfig{
-				Provider: kopsapi.ExternalDNSProviderDNSController,
+			Networking: kopsapi.NetworkingSpec{
+				Topology: &kopsapi.TopologySpec{
+					DNS: kopsapi.DNSTypeNone,
+				},
 			},
 		},
 	}
@@ -133,7 +145,7 @@ func testValidate(t *testing.T, groups map[string]*cloudinstances.CloudInstanceG
 	restConfig := &rest.Config{
 		Host: "https://api.testcluster.k8s.local",
 	}
-	validator, err := NewClusterValidator(cluster, mockcloud, &kopsapi.InstanceGroupList{Items: instanceGroups}, nil, nil, restConfig, fake.NewClientset(objects...))
+	validator, err := NewClusterValidator(cluster, mockcloud, &kopsapi.InstanceGroupList{Items: instanceGroups}, nil, nil, maxUnreadyNodes, restConfig, fake.NewClientset(objects...))
 	if err != nil {
 		return nil, err
 	}
@@ -146,8 +158,10 @@ func Test_ValidateCloudGroupMissing(t *testing.T) {
 	cluster := &kopsapi.Cluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "testcluster.k8s.local"},
 		Spec: kopsapi.ClusterSpec{
-			ExternalDNS: &kopsapi.ExternalDNSConfig{
-				Provider: kopsapi.ExternalDNSProviderDNSController,
+			Networking: kopsapi.NetworkingSpec{
+				Topology: &kopsapi.TopologySpec{
+					DNS: kopsapi.DNSTypeNone,
+				},
 			},
 		},
 	}
@@ -168,7 +182,7 @@ func Test_ValidateCloudGroupMissing(t *testing.T) {
 	restConfig := &rest.Config{
 		Host: "https://api.testcluster.k8s.local",
 	}
-	validator, err := NewClusterValidator(cluster, mockcloud, &kopsapi.InstanceGroupList{Items: instanceGroups}, nil, nil, restConfig, fake.NewClientset())
+	validator, err := NewClusterValidator(cluster, mockcloud, &kopsapi.InstanceGroupList{Items: instanceGroups}, nil, nil, 0, restConfig, fake.NewClientset())
 	require.NoError(t, err)
 	v, err := validator.Validate(ctx)
 	require.NoError(t, err)
@@ -553,6 +567,7 @@ func Test_ValidateMasterStaticPods(t *testing.T) {
 				"phase":             string(v1.PodRunning),
 				"priorityClassName": "system-cluster-critical",
 				"hostip":            "1.2.3.4",
+				"nodeName":          "master-1a",
 			},
 			{
 				"name":              fmt.Sprintf("pod-b-%d", i),
@@ -562,6 +577,7 @@ func Test_ValidateMasterStaticPods(t *testing.T) {
 				"phase":             string(v1.PodRunning),
 				"priorityClassName": "system-cluster-critical",
 				"hostip":            "5.6.7.8",
+				"nodeName":          "master-1b",
 			},
 		}...)
 		expectedFailures = append(expectedFailures, &ValidationError{
@@ -732,7 +748,7 @@ func Test_ValidatePodFailure(t *testing.T) {
 	} {
 		for _, priority := range []string{"node", "cluster"} {
 			for _, namespace := range []string{"kube-system", "otherNamespace"} {
-				for _, hostIp := range []string{"1.2.3.4", "5.6.7.8", "9.10.11.12"} {
+				for hostIp, nodeName := range map[string]string{"1.2.3.4": "node-1a", "5.6.7.8": "node-1b", "9.10.11.12": "node-1c"} {
 					t.Run(fmt.Sprintf("%s-%s-%s", tc.name, priority, namespace), func(t *testing.T) {
 						v, err := testValidate(t, groups, makePodList(
 							[]map[string]string{
@@ -743,6 +759,7 @@ func Test_ValidatePodFailure(t *testing.T) {
 									"ready":             "false",
 									"phase":             string(tc.phase),
 									"hostip":            hostIp,
+									"nodeName":          nodeName,
 								},
 							},
 						))
@@ -795,6 +812,7 @@ func dummyPod(podMap map[string]string) v1.Pod {
 		},
 		Spec: v1.PodSpec{
 			PriorityClassName: podMap["priorityClassName"],
+			NodeName:          podMap["nodeName"],
 		},
 		Status: v1.PodStatus{
 			Phase: v1.PodPhase(podMap["phase"]),
@@ -912,4 +930,491 @@ func Test_ValidateDetachedNodesNotValidated(t *testing.T) {
 	if !assert.Empty(t, v.Failures) {
 		printDebug(t, v)
 	}
+}
+
+func Test_ValidateAllowedNotReadyNodes(t *testing.T) {
+	t.Run("tolerates single worker node failure when within limit", func(t *testing.T) {
+		groups := make(map[string]*cloudinstances.CloudInstanceGroup)
+		groups["node-1"] = &cloudinstances.CloudInstanceGroup{
+			InstanceGroup: &kopsapi.InstanceGroup{
+				ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
+				Spec:       kopsapi.InstanceGroupSpec{Role: kopsapi.InstanceGroupRoleNode},
+			},
+			MinSize:    2,
+			TargetSize: 2,
+			Ready: []*cloudinstances.CloudInstance{
+				{
+					ID: "i-00001",
+					Node: &v1.Node{
+						ObjectMeta: metav1.ObjectMeta{Name: "node-1a"},
+						Status: v1.NodeStatus{
+							Conditions: []v1.NodeCondition{
+								{Type: "Ready", Status: v1.ConditionTrue},
+							},
+						},
+					},
+				},
+			},
+			NeedUpdate: []*cloudinstances.CloudInstance{
+				{
+					ID: "i-00002",
+					Node: &v1.Node{
+						ObjectMeta: metav1.ObjectMeta{Name: "node-1b"},
+						Status: v1.NodeStatus{
+							Conditions: []v1.NodeCondition{
+								{Type: "Ready", Status: v1.ConditionFalse},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		v, err := testValidateWithTolerance(t, groups, nil, 1)
+		require.NoError(t, err)
+		assert.Empty(t, v.Failures)
+	})
+
+	t.Run("tolerates worker node failures when within max limit", func(t *testing.T) {
+		groups := make(map[string]*cloudinstances.CloudInstanceGroup)
+		groups["node-1"] = &cloudinstances.CloudInstanceGroup{
+			InstanceGroup: &kopsapi.InstanceGroup{
+				ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
+				Spec:       kopsapi.InstanceGroupSpec{Role: kopsapi.InstanceGroupRoleNode},
+			},
+			MinSize:    2,
+			TargetSize: 2, // 2 worker nodes total
+			Ready: []*cloudinstances.CloudInstance{
+				{
+					ID: "i-00001",
+					Node: &v1.Node{
+						ObjectMeta: metav1.ObjectMeta{Name: "node-1a"},
+						Status: v1.NodeStatus{
+							Conditions: []v1.NodeCondition{
+								{Type: "Ready", Status: v1.ConditionTrue},
+							},
+						},
+					},
+				},
+			},
+			NeedUpdate: []*cloudinstances.CloudInstance{
+				{
+					ID: "i-00002",
+					Node: &v1.Node{
+						ObjectMeta: metav1.ObjectMeta{Name: "node-1b"},
+						Status: v1.NodeStatus{
+							Conditions: []v1.NodeCondition{
+								{Type: "Ready", Status: v1.ConditionFalse},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		// 1 allowed unready node.
+		v, err := testValidateWithTolerance(t, groups, nil, 1)
+		require.NoError(t, err)
+		assert.Empty(t, v.Failures)
+	})
+
+	t.Run("tolerates single machine not joined when within limit", func(t *testing.T) {
+		groups := make(map[string]*cloudinstances.CloudInstanceGroup)
+		groups["node-1"] = &cloudinstances.CloudInstanceGroup{
+			InstanceGroup: &kopsapi.InstanceGroup{
+				ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
+				Spec:       kopsapi.InstanceGroupSpec{Role: kopsapi.InstanceGroupRoleNode},
+			},
+			MinSize:    2,
+			TargetSize: 2,
+			Ready: []*cloudinstances.CloudInstance{
+				{
+					ID: "i-00001",
+					Node: &v1.Node{
+						ObjectMeta: metav1.ObjectMeta{Name: "node-1a"},
+						Status: v1.NodeStatus{
+							Conditions: []v1.NodeCondition{
+								{Type: "Ready", Status: v1.ConditionTrue},
+							},
+						},
+					},
+				},
+			},
+			NeedUpdate: []*cloudinstances.CloudInstance{
+				{
+					ID:   "i-00002",
+					Node: nil,
+				},
+			},
+		}
+
+		v, err := testValidateWithTolerance(t, groups, nil, 1)
+		require.NoError(t, err)
+		assert.Empty(t, v.Failures)
+	})
+
+	t.Run("tolerates multiple failures on the same worker node", func(t *testing.T) {
+		groups := make(map[string]*cloudinstances.CloudInstanceGroup)
+		groups["node-1"] = &cloudinstances.CloudInstanceGroup{
+			InstanceGroup: &kopsapi.InstanceGroup{
+				ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
+				Spec:       kopsapi.InstanceGroupSpec{Role: kopsapi.InstanceGroupRoleNode},
+			},
+			MinSize:    2,
+			TargetSize: 2,
+			Ready: []*cloudinstances.CloudInstance{
+				{
+					ID: "i-00001",
+					Node: &v1.Node{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:   "node-1a",
+							Labels: map[string]string{v1.LabelHostname: "node-1a"},
+						},
+						Status: v1.NodeStatus{
+							Addresses: []v1.NodeAddress{
+								{Address: "1.2.3.4"},
+							},
+							Conditions: []v1.NodeCondition{
+								{Type: "Ready", Status: v1.ConditionTrue},
+							},
+						},
+					},
+				},
+			},
+			NeedUpdate: []*cloudinstances.CloudInstance{
+				{
+					ID: "i-00002",
+					Node: &v1.Node{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:   "node-1b",
+							Labels: map[string]string{v1.LabelHostname: "node-1b"},
+						},
+						Status: v1.NodeStatus{
+							Addresses: []v1.NodeAddress{
+								{Address: "5.6.7.8"},
+							},
+							Conditions: []v1.NodeCondition{
+								{Type: "Ready", Status: v1.ConditionFalse},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		pods := makePodList([]map[string]string{
+			{
+				"name":              "pod1",
+				"namespace":         "kube-system",
+				"priorityClassName": "system-node-critical",
+				"ready":             "false",
+				"phase":             string(v1.PodRunning),
+				"hostip":            "5.6.7.8",
+				"nodeName":          "node-1b",
+			},
+		})
+
+		v, err := testValidateWithTolerance(t, groups, pods, 1)
+		require.NoError(t, err)
+		assert.Empty(t, v.Failures)
+	})
+
+	t.Run("does not tolerate when count of failing nodes exceeds limit", func(t *testing.T) {
+		groups := make(map[string]*cloudinstances.CloudInstanceGroup)
+		groups["node-1"] = &cloudinstances.CloudInstanceGroup{
+			InstanceGroup: &kopsapi.InstanceGroup{
+				ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
+				Spec:       kopsapi.InstanceGroupSpec{Role: kopsapi.InstanceGroupRoleNode},
+			},
+			MinSize:    3,
+			TargetSize: 3,
+			Ready: []*cloudinstances.CloudInstance{
+				{
+					ID: "i-00001",
+					Node: &v1.Node{
+						ObjectMeta: metav1.ObjectMeta{Name: "node-1a"},
+						Status: v1.NodeStatus{
+							Conditions: []v1.NodeCondition{
+								{Type: "Ready", Status: v1.ConditionTrue},
+							},
+						},
+					},
+				},
+			},
+			NeedUpdate: []*cloudinstances.CloudInstance{
+				{
+					ID: "i-00002",
+					Node: &v1.Node{
+						ObjectMeta: metav1.ObjectMeta{Name: "node-1b"},
+						Status: v1.NodeStatus{
+							Conditions: []v1.NodeCondition{
+								{Type: "Ready", Status: v1.ConditionFalse},
+							},
+						},
+					},
+				},
+				{
+					ID: "i-00003",
+					Node: &v1.Node{
+						ObjectMeta: metav1.ObjectMeta{Name: "node-1c"},
+						Status: v1.NodeStatus{
+							Conditions: []v1.NodeCondition{
+								{Type: "Ready", Status: v1.ConditionFalse},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		v, err := testValidateWithTolerance(t, groups, nil, 1)
+		require.NoError(t, err)
+		assert.Len(t, v.Failures, 2)
+	})
+
+	t.Run("does not tolerate worker node failures when exceeding max limit", func(t *testing.T) {
+		groups := make(map[string]*cloudinstances.CloudInstanceGroup)
+		groups["node-1"] = &cloudinstances.CloudInstanceGroup{
+			InstanceGroup: &kopsapi.InstanceGroup{
+				ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
+				Spec:       kopsapi.InstanceGroupSpec{Role: kopsapi.InstanceGroupRoleNode},
+			},
+			MinSize:    2,
+			TargetSize: 2,
+			Ready: []*cloudinstances.CloudInstance{
+				{
+					ID: "i-00001",
+					Node: &v1.Node{
+						ObjectMeta: metav1.ObjectMeta{Name: "node-1a"},
+						Status: v1.NodeStatus{
+							Conditions: []v1.NodeCondition{
+								{Type: "Ready", Status: v1.ConditionTrue},
+							},
+						},
+					},
+				},
+			},
+			NeedUpdate: []*cloudinstances.CloudInstance{
+				{
+					ID: "i-00002",
+					Node: &v1.Node{
+						ObjectMeta: metav1.ObjectMeta{Name: "node-1b"},
+						Status: v1.NodeStatus{
+							Conditions: []v1.NodeCondition{
+								{Type: "Ready", Status: v1.ConditionFalse},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		// 0 allowed unready nodes.
+		v, err := testValidateWithTolerance(t, groups, nil, 0)
+		require.NoError(t, err)
+		assert.Len(t, v.Failures, 1)
+	})
+
+	t.Run("does not tolerate control-plane node failure", func(t *testing.T) {
+		groups := make(map[string]*cloudinstances.CloudInstanceGroup)
+		groups["master-1"] = &cloudinstances.CloudInstanceGroup{
+			InstanceGroup: &kopsapi.InstanceGroup{
+				ObjectMeta: metav1.ObjectMeta{Name: "master-1"},
+				Spec:       kopsapi.InstanceGroupSpec{Role: kopsapi.InstanceGroupRoleControlPlane},
+			},
+			MinSize:    2,
+			TargetSize: 2,
+			Ready: []*cloudinstances.CloudInstance{
+				{
+					ID: "i-00001",
+					Node: &v1.Node{
+						ObjectMeta: metav1.ObjectMeta{Name: "master-1a"},
+						Status: v1.NodeStatus{
+							Conditions: []v1.NodeCondition{
+								{Type: "Ready", Status: v1.ConditionTrue},
+							},
+						},
+					},
+				},
+			},
+			NeedUpdate: []*cloudinstances.CloudInstance{
+				{
+					ID: "i-00002",
+					Node: &v1.Node{
+						ObjectMeta: metav1.ObjectMeta{Name: "master-1b"},
+						Status: v1.NodeStatus{
+							Conditions: []v1.NodeCondition{
+								{Type: "Ready", Status: v1.ConditionFalse},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		v, err := testValidateWithTolerance(t, groups, nil, 1)
+		require.NoError(t, err)
+		assert.Len(t, v.Failures, 1)
+	})
+
+	t.Run("does not tolerate InstanceGroup sizing mismatches", func(t *testing.T) {
+		groups := make(map[string]*cloudinstances.CloudInstanceGroup)
+		groups["node-1"] = &cloudinstances.CloudInstanceGroup{
+			InstanceGroup: &kopsapi.InstanceGroup{
+				ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
+				Spec:       kopsapi.InstanceGroupSpec{Role: kopsapi.InstanceGroupRoleNode},
+			},
+			MinSize:    2,
+			TargetSize: 3,
+			Ready: []*cloudinstances.CloudInstance{
+				{
+					ID: "i-00001",
+					Node: &v1.Node{
+						ObjectMeta: metav1.ObjectMeta{Name: "node-1a"},
+						Status: v1.NodeStatus{
+							Conditions: []v1.NodeCondition{
+								{Type: "Ready", Status: v1.ConditionTrue},
+							},
+						},
+					},
+				},
+				{
+					ID: "i-00002",
+					Node: &v1.Node{
+						ObjectMeta: metav1.ObjectMeta{Name: "node-1b"},
+						Status: v1.NodeStatus{
+							Conditions: []v1.NodeCondition{
+								{Type: "Ready", Status: v1.ConditionTrue},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		v, err := testValidateWithTolerance(t, groups, nil, 1)
+		require.NoError(t, err)
+		assert.Len(t, v.Failures, 1)
+		assert.Equal(t, "InstanceGroup", v.Failures[0].Kind)
+	})
+}
+
+// failureReportingMockCloud wraps MockCloud to implement GroupFailureReporter.
+type failureReportingMockCloud struct {
+	*MockCloud
+}
+
+func (c *failureReportingMockCloud) GetGroupFailures(_ context.Context, group *cloudinstances.CloudInstanceGroup) ([]cloudinstances.GroupFailure, error) {
+	return c.cloudGroupFailures[group.InstanceGroup.Name], nil
+}
+
+func Test_ValidateGroupFailuresSurfaced(t *testing.T) {
+	ctx := context.TODO()
+
+	cluster := &kopsapi.Cluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "testcluster.k8s.local"},
+		Spec: kopsapi.ClusterSpec{
+			Networking: kopsapi.NetworkingSpec{
+				Topology: &kopsapi.TopologySpec{
+					DNS: kopsapi.DNSTypeNone,
+				},
+			},
+		},
+	}
+
+	ig := kopsapi.InstanceGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
+		Spec:       kopsapi.InstanceGroupSpec{Role: kopsapi.InstanceGroupRoleNode},
+	}
+	groups := map[string]*cloudinstances.CloudInstanceGroup{
+		"node-1": {
+			InstanceGroup: &ig,
+			MinSize:       1,
+			TargetSize:    2,
+		},
+	}
+
+	mockcloud := BuildMockCloud(t, groups, cluster, []kopsapi.InstanceGroup{ig})
+	mockcloud.cloudGroupFailures = map[string][]cloudinstances.GroupFailure{
+		"node-1": {
+			{
+				Code:     "ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS",
+				Message:  "The zone does not have enough resources available",
+				Instance: "node-1a",
+				Count:    3,
+				LastSeen: time.Date(2026, 5, 12, 20, 50, 0, 0, time.UTC),
+			},
+		},
+	}
+	reporter := &failureReportingMockCloud{MockCloud: mockcloud}
+
+	restConfig := &rest.Config{Host: "https://api.testcluster.k8s.local"}
+	validator, err := NewClusterValidator(cluster, reporter, &kopsapi.InstanceGroupList{Items: []kopsapi.InstanceGroup{ig}}, nil, nil, 0, restConfig, fake.NewClientset())
+	require.NoError(t, err)
+	v, err := validator.Validate(ctx)
+	require.NoError(t, err)
+
+	require.Len(t, v.Failures, 2)
+	assert.Equal(t, "InstanceGroup \"node-1\" did not have enough nodes 0 vs 2", v.Failures[0].Message)
+	assert.Contains(t, v.Failures[1].Message, "ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS")
+	assert.Contains(t, v.Failures[1].Message, "node-1a")
+	assert.Contains(t, v.Failures[1].Message, "observed 3 times")
+}
+
+func Test_ValidateGroupFailuresWithUnreachableAPIServer(t *testing.T) {
+	ctx := context.TODO()
+
+	cluster := &kopsapi.Cluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "testcluster.k8s.local"},
+		Spec: kopsapi.ClusterSpec{
+			Networking: kopsapi.NetworkingSpec{
+				Topology: &kopsapi.TopologySpec{
+					DNS: kopsapi.DNSTypeNone,
+				},
+			},
+		},
+	}
+
+	ig := kopsapi.InstanceGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "control-plane-1"},
+		Spec:       kopsapi.InstanceGroupSpec{Role: kopsapi.InstanceGroupRoleControlPlane},
+	}
+	groups := map[string]*cloudinstances.CloudInstanceGroup{
+		"control-plane-1": {
+			InstanceGroup: &ig,
+			MinSize:       1,
+			TargetSize:    1,
+		},
+	}
+
+	mockcloud := BuildMockCloud(t, groups, cluster, []kopsapi.InstanceGroup{ig})
+	mockcloud.cloudGroupFailures = map[string][]cloudinstances.GroupFailure{
+		"control-plane-1": {
+			{
+				Code:    "InsufficientInstanceCapacity",
+				Message: "We currently do not have sufficient t4g.large capacity in the Availability Zone you requested",
+				Count:   1,
+			},
+		},
+	}
+	reporter := &failureReportingMockCloud{MockCloud: mockcloud}
+
+	// The control plane never launched, so listing nodes fails the way it does
+	// in CI: an i/o timeout dialling the API load balancer.
+	k8sClient := fake.NewClientset()
+	k8sClient.PrependReactor("list", "nodes", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("Get \"https://api.testcluster.k8s.local/api/v1/nodes\": dial tcp 10.0.0.1:443: i/o timeout")
+	})
+
+	restConfig := &rest.Config{Host: "https://api.testcluster.k8s.local"}
+	validator, err := NewClusterValidator(cluster, reporter, &kopsapi.InstanceGroupList{Items: []kopsapi.InstanceGroup{ig}}, nil, nil, 0, restConfig, k8sClient)
+	require.NoError(t, err)
+	v, err := validator.Validate(ctx)
+	require.NoError(t, err)
+
+	require.Len(t, v.Failures, 3)
+	assert.Equal(t, "apiserver", v.Failures[0].Kind)
+	assert.Contains(t, v.Failures[0].Message, "i/o timeout")
+	assert.Equal(t, "InstanceGroup \"control-plane-1\" did not have enough nodes 0 vs 1", v.Failures[1].Message)
+	assert.Contains(t, v.Failures[2].Message, "InsufficientInstanceCapacity")
 }

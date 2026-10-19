@@ -61,6 +61,7 @@ The generated `EC2NodeClass` uses:
 
 * `amiFamily: Custom`
 * the InstanceGroup image translated into `amiSelectorTerms`
+* the InstanceGroup `spec.rootVolume` translated into `blockDeviceMappings`
 * the kOps node instance profile
 * the kOps node security groups
 * the subnets tagged for the InstanceGroup
@@ -75,6 +76,38 @@ Supported image selector forms are:
 * `ssm:<parameter>`
 * `<name>`
 * `<owner>/<name>`
+
+### Instance requirements
+{{ kops_feature_table(kops_added_default='1.37') }}
+
+By default, the generated `NodePool` requires one of the instance types listed in `spec.machineType` and `spec.mixedInstancesPolicy.instances`.
+To let Karpenter choose instance types based on a capacity range, set `spec.mixedInstancesPolicy.instanceRequirements`:
+
+```yaml
+spec:
+  role: Node
+  manager: Karpenter
+  mixedInstancesPolicy:
+    instanceRequirements:
+      cpu:
+        min: "2"
+        max: "16"
+      memory:
+        min: "2Gi"
+        max: "64Gi"
+      excludedInstanceTypes:
+      - m3.*
+      - t3.small
+```
+
+This generates the appropriate `karpenter.k8s.aws/instance-cpu` and `karpenter.k8s.aws/instance-memory` requirements on the `NodePool`.
+`excludedInstanceTypes` entries are mapped to `NotIn` requirements: a `<family>.*` wildcard excludes an instance family, and a bare instance type excludes that type.
+
+When `instanceRequirements` is set, neither `spec.machineType` nor `spec.mixedInstancesPolicy.instances` is required.
+If either field is set, its instance types further restrict the generated `NodePool`.
+
+Karpenter NodePools can include both GPU and non-GPU instance types.
+When using kOps-managed NVIDIA support, use a dedicated GPU-only InstanceGroup because kOps applies GPU labels and taints to the entire NodePool.
 
 ## Karpenter-managed InstanceGroups
 {{ kops_feature_table(kops_added_default='1.36') }}
@@ -109,3 +142,6 @@ Delete the generated NodePool before running `kops update cluster` after adding 
 * Generated `EC2NodeClass` objects use `spec.amiFamily: Custom`.
 * `spec.instanceStorePolicy` configuration is not supported in `EC2NodeClass`.
 * `spec.kubelet` settings that affect Karpenter scheduling (`maxPods`, `systemReserved`, `kubeReserved`) are mapped to `EC2NodeClass.spec.kubelet` so Karpenter computes node allocatable capacity correctly. Other `spec.kubelet` settings are applied via the nodeup bootstrap script but are not surfaced to `EC2NodeClass`.
+* `spec.rootVolume.optimization` has no `EC2NodeClass` equivalent and is ignored on Karpenter-managed InstanceGroups. Modern instance types are EBS-optimized by default.
+* `spec.volumes` and `spec.volumeMounts` (additional, non-root volumes) are not mapped to `EC2NodeClass.spec.blockDeviceMappings`.
+* The Karpenter controller policy grants `iam:PassRole` only for the kOps-managed node role. When a Karpenter-managed InstanceGroup uses a custom `spec.iam.profile`, kOps cannot determine the role inside the custom instance profile, so the policy allows passing any role to EC2 instead.

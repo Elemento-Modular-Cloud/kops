@@ -20,7 +20,14 @@ spec:
       accessLog:
         bucket: access-log-example
   authentication:
-    aws: {}
+    aws:
+      backendMode: CRD
+      clusterID: complex.example.com
+      identityMappings:
+      - arn: arn:aws-test:iam::000000000000:role/AWSReservedSSO_Developer_7de86b085b6056ae
+        groups:
+        - he:dev
+        username: dev:{{SessionNameRaw}}
   kubernetesApiAccess:
   - 1.1.1.0/24
   - pl-44444444
@@ -39,6 +46,8 @@ spec:
     Owner: John Doe
     foo/bar: fib+baz
   configBase: memfs://clusters.example.com/complex.example.com
+  containerd:
+    selinuxEnabled: true
   etcdClusters:
   - etcdMembers:
     - instanceGroup: master-us-test-1a
@@ -64,7 +73,7 @@ spec:
     memoryLimit: 1000Mi
   kubelet:
     anonymousAuth: false
-  kubernetesVersion: v1.31.0
+  kubernetesVersion: v1.32.0
   masterPublicName: api.complex.example.com
   networkCIDR: 172.20.0.0/16
   nodeTerminationHandler:

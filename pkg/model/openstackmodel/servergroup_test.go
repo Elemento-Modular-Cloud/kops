@@ -55,14 +55,14 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 					CloudProvider: kops.CloudProviderSpec{
 						Openstack: &kops.OpenstackSpec{
 							Router: &kops.OpenstackRouter{
-								ExternalNetwork: fi.PtrTo("test"),
+								ExternalNetwork: new("test"),
 							},
 							Metadata: &kops.OpenstackMetadata{
-								ConfigDrive: fi.PtrTo(false),
+								ConfigDrive: new(false),
 							},
 						},
 					},
-					KubernetesVersion: "1.31.0",
+					KubernetesVersion: "1.32.0",
 					Networking: kops.NetworkingSpec{
 						Subnets: []kops.ClusterSubnetSpec{
 							{
@@ -118,14 +118,14 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 					CloudProvider: kops.CloudProviderSpec{
 						Openstack: &kops.OpenstackSpec{
 							Router: &kops.OpenstackRouter{
-								ExternalNetwork: fi.PtrTo("test"),
+								ExternalNetwork: new("test"),
 							},
 							Metadata: &kops.OpenstackMetadata{
-								ConfigDrive: fi.PtrTo(false),
+								ConfigDrive: new(false),
 							},
 						},
 					},
-					KubernetesVersion: "1.31.0",
+					KubernetesVersion: "1.32.0",
 					Networking: kops.NetworkingSpec{
 						Subnets: []kops.ClusterSubnetSpec{
 							{
@@ -208,14 +208,14 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 					CloudProvider: kops.CloudProviderSpec{
 						Openstack: &kops.OpenstackSpec{
 							Router: &kops.OpenstackRouter{
-								ExternalNetwork: fi.PtrTo("test"),
+								ExternalNetwork: new("test"),
 							},
 							Metadata: &kops.OpenstackMetadata{
-								ConfigDrive: fi.PtrTo(false),
+								ConfigDrive: new(false),
 							},
 						},
 					},
-					KubernetesVersion: "1.31.0",
+					KubernetesVersion: "1.32.0",
 					Networking: kops.NetworkingSpec{
 						Subnets: []kops.ClusterSubnetSpec{
 							{
@@ -337,14 +337,14 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 					CloudProvider: kops.CloudProviderSpec{
 						Openstack: &kops.OpenstackSpec{
 							Router: &kops.OpenstackRouter{
-								ExternalNetwork: fi.PtrTo("test"),
+								ExternalNetwork: new("test"),
 							},
 							Metadata: &kops.OpenstackMetadata{
-								ConfigDrive: fi.PtrTo(false),
+								ConfigDrive: new(false),
 							},
 						},
 					},
-					KubernetesVersion: "1.31.0",
+					KubernetesVersion: "1.32.0",
 					Networking: kops.NetworkingSpec{
 						Subnets: []kops.ClusterSubnetSpec{
 							{
@@ -402,14 +402,14 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 						Openstack: &kops.OpenstackSpec{
 							Loadbalancer: &kops.OpenstackLoadbalancerConfig{},
 							Router: &kops.OpenstackRouter{
-								ExternalNetwork: fi.PtrTo("test"),
+								ExternalNetwork: new("test"),
 							},
 							Metadata: &kops.OpenstackMetadata{
-								ConfigDrive: fi.PtrTo(false),
+								ConfigDrive: new(false),
 							},
 						},
 					},
-					KubernetesVersion: "1.31.0",
+					KubernetesVersion: "1.32.0",
 					Networking: kops.NetworkingSpec{
 						Subnets: []kops.ClusterSubnetSpec{
 							{
@@ -534,34 +534,34 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 					CloudProvider: kops.CloudProviderSpec{
 						Openstack: &kops.OpenstackSpec{
 							BlockStorage: &kops.OpenstackBlockStorageConfig{
-								Version:            fi.PtrTo("v3"),
-								IgnoreAZ:           fi.PtrTo(false),
-								CreateStorageClass: fi.PtrTo(false),
-								CSITopologySupport: fi.PtrTo(true),
+								Version:            new("v3"),
+								IgnoreAZ:           new(false),
+								CreateStorageClass: new(false),
+								CSITopologySupport: new(true),
 							},
 							Loadbalancer: &kops.OpenstackLoadbalancerConfig{
-								FloatingNetwork: fi.PtrTo("test"),
-								FloatingSubnet:  fi.PtrTo("test-lb-subnet"),
-								Method:          fi.PtrTo("ROUND_ROBIN"),
-								Provider:        fi.PtrTo("amphora"),
-								UseOctavia:      fi.PtrTo(true),
+								FloatingNetwork: new("test"),
+								FloatingSubnet:  new("test-lb-subnet"),
+								Method:          new("ROUND_ROBIN"),
+								Provider:        new("amphora"),
+								UseOctavia:      new(true),
 							},
 							Monitor: &kops.OpenstackMonitor{
-								Delay:      fi.PtrTo("1m"),
-								MaxRetries: fi.PtrTo(3),
-								Timeout:    fi.PtrTo("30s"),
+								Delay:      new("1m"),
+								MaxRetries: new(3),
+								Timeout:    new("30s"),
 							},
 							Network: &kops.OpenstackNetwork{
-								AvailabilityZoneHints: []*string{fi.PtrTo("zone-1"), fi.PtrTo("zone-2"), fi.PtrTo("zone-3")},
+								AvailabilityZoneHints: []*string{new("zone-1"), new("zone-2"), new("zone-3")},
 							},
 							Router: &kops.OpenstackRouter{
-								DNSServers:            fi.PtrTo("8.8.8.8,8.8.4.4"),
-								ExternalSubnet:        fi.PtrTo("test-router-subnet"),
-								ExternalNetwork:       fi.PtrTo("test"),
-								AvailabilityZoneHints: []*string{fi.PtrTo("ha-zone")},
+								DNSServers:            new("8.8.8.8,8.8.4.4"),
+								ExternalSubnet:        new("test-router-subnet"),
+								ExternalNetwork:       new("test"),
+								AvailabilityZoneHints: []*string{new("ha-zone")},
 							},
 							Metadata: &kops.OpenstackMetadata{
-								ConfigDrive: fi.PtrTo(false),
+								ConfigDrive: new(false),
 							},
 						},
 					},
@@ -692,34 +692,34 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 					CloudProvider: kops.CloudProviderSpec{
 						Openstack: &kops.OpenstackSpec{
 							BlockStorage: &kops.OpenstackBlockStorageConfig{
-								Version:            fi.PtrTo("v3"),
-								IgnoreAZ:           fi.PtrTo(false),
-								CreateStorageClass: fi.PtrTo(false),
-								CSITopologySupport: fi.PtrTo(true),
+								Version:            new("v3"),
+								IgnoreAZ:           new(false),
+								CreateStorageClass: new(false),
+								CSITopologySupport: new(true),
 							},
 							Loadbalancer: &kops.OpenstackLoadbalancerConfig{
-								FloatingNetwork: fi.PtrTo("test"),
-								FloatingSubnet:  fi.PtrTo("test-lb-subnet"),
-								Method:          fi.PtrTo("ROUND_ROBIN"),
-								Provider:        fi.PtrTo("amphora"),
-								UseOctavia:      fi.PtrTo(true),
+								FloatingNetwork: new("test"),
+								FloatingSubnet:  new("test-lb-subnet"),
+								Method:          new("ROUND_ROBIN"),
+								Provider:        new("amphora"),
+								UseOctavia:      new(true),
 							},
 							Monitor: &kops.OpenstackMonitor{
-								Delay:      fi.PtrTo("1m"),
-								MaxRetries: fi.PtrTo(3),
-								Timeout:    fi.PtrTo("30s"),
+								Delay:      new("1m"),
+								MaxRetries: new(3),
+								Timeout:    new("30s"),
 							},
 							Network: &kops.OpenstackNetwork{
-								AvailabilityZoneHints: []*string{fi.PtrTo("zone-1")},
+								AvailabilityZoneHints: []*string{new("zone-1")},
 							},
 							Router: &kops.OpenstackRouter{
-								DNSServers:            fi.PtrTo("8.8.8.8,8.8.4.4"),
-								ExternalSubnet:        fi.PtrTo("test-router-subnet"),
-								ExternalNetwork:       fi.PtrTo("test"),
-								AvailabilityZoneHints: []*string{fi.PtrTo("zone-1")},
+								DNSServers:            new("8.8.8.8,8.8.4.4"),
+								ExternalSubnet:        new("test-router-subnet"),
+								ExternalNetwork:       new("test"),
+								AvailabilityZoneHints: []*string{new("zone-1")},
 							},
 							Metadata: &kops.OpenstackMetadata{
-								ConfigDrive: fi.PtrTo(false),
+								ConfigDrive: new(false),
 							},
 						},
 					},
@@ -819,11 +819,11 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 					CloudProvider: kops.CloudProviderSpec{
 						Openstack: &kops.OpenstackSpec{
 							Metadata: &kops.OpenstackMetadata{
-								ConfigDrive: fi.PtrTo(false),
+								ConfigDrive: new(false),
 							},
 						},
 					},
-					KubernetesVersion: "1.31.0",
+					KubernetesVersion: "1.32.0",
 					Networking: kops.NetworkingSpec{
 						Subnets: []kops.ClusterSubnetSpec{
 							{
@@ -945,14 +945,14 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 					CloudProvider: kops.CloudProviderSpec{
 						Openstack: &kops.OpenstackSpec{
 							Router: &kops.OpenstackRouter{
-								ExternalNetwork: fi.PtrTo("test"),
+								ExternalNetwork: new("test"),
 							},
 							Metadata: &kops.OpenstackMetadata{
-								ConfigDrive: fi.PtrTo(false),
+								ConfigDrive: new(false),
 							},
 						},
 					},
-					KubernetesVersion: "1.31.0",
+					KubernetesVersion: "1.32.0",
 					Networking: kops.NetworkingSpec{
 						Subnets: []kops.ClusterSubnetSpec{
 							{
@@ -1034,14 +1034,14 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 					CloudProvider: kops.CloudProviderSpec{
 						Openstack: &kops.OpenstackSpec{
 							Router: &kops.OpenstackRouter{
-								ExternalNetwork: fi.PtrTo("test"),
+								ExternalNetwork: new("test"),
 							},
 							Metadata: &kops.OpenstackMetadata{
-								ConfigDrive: fi.PtrTo(false),
+								ConfigDrive: new(false),
 							},
 						},
 					},
-					KubernetesVersion: "1.31.0",
+					KubernetesVersion: "1.32.0",
 					Networking: kops.NetworkingSpec{
 						Subnets: []kops.ClusterSubnetSpec{
 							{
@@ -1066,7 +1066,7 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 						MachineType:       "blc.1-2",
 						Subnets:           []string{"subnet"},
 						Zones:             []string{"zone-1"},
-						AssociatePublicIP: fi.PtrTo(false),
+						AssociatePublicIP: new(false),
 					},
 				},
 				{
@@ -1081,7 +1081,7 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 						MachineType:       "blc.2-4",
 						Subnets:           []string{"subnet"},
 						Zones:             []string{"zone-1"},
-						AssociatePublicIP: fi.PtrTo(false),
+						AssociatePublicIP: new(false),
 					},
 				},
 			},
@@ -1099,14 +1099,14 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 					CloudProvider: kops.CloudProviderSpec{
 						Openstack: &kops.OpenstackSpec{
 							Router: &kops.OpenstackRouter{
-								ExternalNetwork: fi.PtrTo("test"),
+								ExternalNetwork: new("test"),
 							},
 							Metadata: &kops.OpenstackMetadata{
-								ConfigDrive: fi.PtrTo(false),
+								ConfigDrive: new(false),
 							},
 						},
 					},
-					KubernetesVersion: "1.31.0",
+					KubernetesVersion: "1.32.0",
 					Networking: kops.NetworkingSpec{
 						Subnets: []kops.ClusterSubnetSpec{
 							{
@@ -1136,7 +1136,7 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 						MachineType:       "blc.1-2",
 						Subnets:           []string{"subnet"},
 						Zones:             []string{"zone-1"},
-						AssociatePublicIP: fi.PtrTo(false),
+						AssociatePublicIP: new(false),
 					},
 				},
 				{
@@ -1151,7 +1151,7 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 						MachineType:       "blc.1-2",
 						Subnets:           []string{"subnet"},
 						Zones:             []string{"zone-1"},
-						AssociatePublicIP: fi.PtrTo(false),
+						AssociatePublicIP: new(false),
 					},
 				},
 				{
@@ -1173,7 +1173,7 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 						MachineType:       "blc.1-2",
 						Subnets:           []string{"utility-subnet"},
 						Zones:             []string{"zone-1"},
-						AssociatePublicIP: fi.PtrTo(false),
+						AssociatePublicIP: new(false),
 					},
 				},
 			},
@@ -1191,11 +1191,11 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 					CloudProvider: kops.CloudProviderSpec{
 						Openstack: &kops.OpenstackSpec{
 							Metadata: &kops.OpenstackMetadata{
-								ConfigDrive: fi.PtrTo(false),
+								ConfigDrive: new(false),
 							},
 						},
 					},
-					KubernetesVersion: "1.31.0",
+					KubernetesVersion: "1.32.0",
 					Networking: kops.NetworkingSpec{
 						Subnets: []kops.ClusterSubnetSpec{
 							{
@@ -1240,11 +1240,11 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 					CloudProvider: kops.CloudProviderSpec{
 						Openstack: &kops.OpenstackSpec{
 							Metadata: &kops.OpenstackMetadata{
-								ConfigDrive: fi.PtrTo(false),
+								ConfigDrive: new(false),
 							},
 						},
 					},
-					KubernetesVersion: "1.31.0",
+					KubernetesVersion: "1.32.0",
 					Networking: kops.NetworkingSpec{
 						Subnets: []kops.ClusterSubnetSpec{
 							{
@@ -1291,11 +1291,11 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 					CloudProvider: kops.CloudProviderSpec{
 						Openstack: &kops.OpenstackSpec{
 							Metadata: &kops.OpenstackMetadata{
-								ConfigDrive: fi.PtrTo(false),
+								ConfigDrive: new(false),
 							},
 						},
 					},
-					KubernetesVersion: "1.31.0",
+					KubernetesVersion: "1.32.0",
 					Networking: kops.NetworkingSpec{
 						Subnets: []kops.ClusterSubnetSpec{
 							{
@@ -1340,11 +1340,11 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 					CloudProvider: kops.CloudProviderSpec{
 						Openstack: &kops.OpenstackSpec{
 							Metadata: &kops.OpenstackMetadata{
-								ConfigDrive: fi.PtrTo(false),
+								ConfigDrive: new(false),
 							},
 						},
 					},
-					KubernetesVersion: "1.31.0",
+					KubernetesVersion: "1.32.0",
 					Networking: kops.NetworkingSpec{
 						Subnets: []kops.ClusterSubnetSpec{
 							{
@@ -1389,11 +1389,11 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 					CloudProvider: kops.CloudProviderSpec{
 						Openstack: &kops.OpenstackSpec{
 							Metadata: &kops.OpenstackMetadata{
-								ConfigDrive: fi.PtrTo(false),
+								ConfigDrive: new(false),
 							},
 						},
 					},
-					KubernetesVersion: "1.31.0",
+					KubernetesVersion: "1.32.0",
 					Networking: kops.NetworkingSpec{
 						Subnets: []kops.ClusterSubnetSpec{
 							{
@@ -1438,11 +1438,11 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 					CloudProvider: kops.CloudProviderSpec{
 						Openstack: &kops.OpenstackSpec{
 							Metadata: &kops.OpenstackMetadata{
-								ConfigDrive: fi.PtrTo(false),
+								ConfigDrive: new(false),
 							},
 						},
 					},
-					KubernetesVersion: "1.31.0",
+					KubernetesVersion: "1.32.0",
 					Networking: kops.NetworkingSpec{
 						Subnets: []kops.ClusterSubnetSpec{
 							{
@@ -1487,11 +1487,11 @@ func getServerGroupModelBuilderTestInput() []serverGroupModelBuilderTestInput {
 					CloudProvider: kops.CloudProviderSpec{
 						Openstack: &kops.OpenstackSpec{
 							Metadata: &kops.OpenstackMetadata{
-								ConfigDrive: fi.PtrTo(false),
+								ConfigDrive: new(false),
 							},
 						},
 					},
-					KubernetesVersion: "1.31.0",
+					KubernetesVersion: "1.32.0",
 					Networking: kops.NetworkingSpec{
 						Subnets: []kops.ClusterSubnetSpec{
 							{
@@ -1577,11 +1577,11 @@ func RunGoldenTest(t *testing.T, basedir string, testCase serverGroupModelBuilde
 		NodeUpConfigBuilder: &nodeupConfigBuilder{},
 		NodeUpAssets: map[architectures.Architecture]*assets.MirroredAsset{
 			architectures.ArchitectureAmd64: {
-				Locations: []string{"nodeup-amd64-1", "nodeup-amd64-2"},
+				Locations: []string{"nodeup-amd64-1.xz", "nodeup-amd64-2.xz"},
 				Hash:      hashing.MustFromString("833723369ad345a88dd85d61b1e77336d56e61b864557ded71b92b6e34158e6a"),
 			},
 			architectures.ArchitectureArm64: {
-				Locations: []string{"nodeup-arm64-1", "nodeup-arm64-2"},
+				Locations: []string{"nodeup-arm64-1.xz", "nodeup-arm64-2.xz"},
 				Hash:      hashing.MustFromString("e525c28a65ff0ce4f95f9e730195b4e67fdcb15ceb1f36b5ad6921a8a4490c71"),
 			},
 		},
@@ -1596,7 +1596,7 @@ func RunGoldenTest(t *testing.T, basedir string, testCase serverGroupModelBuilde
 
 	// We need the CA and service-account for the bootstrap script
 	caTask := &fitasks.Keypair{
-		Name:    fi.PtrTo(fi.CertificateIDCA),
+		Name:    new(fi.CertificateIDCA),
 		Subject: "cn=kubernetes",
 		Type:    "ca",
 	}
@@ -1613,7 +1613,7 @@ func RunGoldenTest(t *testing.T, basedir string, testCase serverGroupModelBuilde
 		"service-account",
 	} {
 		task := &fitasks.Keypair{
-			Name:    fi.PtrTo(keypair),
+			Name:    new(keypair),
 			Subject: "cn=" + keypair,
 			Type:    "ca",
 		}
@@ -1624,7 +1624,7 @@ func RunGoldenTest(t *testing.T, basedir string, testCase serverGroupModelBuilde
 		"kube-proxy",
 	} {
 		task := &fitasks.Keypair{
-			Name:    fi.PtrTo(keypair),
+			Name:    new(keypair),
 			Subject: "cn=" + keypair,
 			Signer:  caTask,
 			Type:    "client",

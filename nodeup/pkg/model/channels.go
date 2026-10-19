@@ -45,8 +45,15 @@ type ChannelsBuilder struct {
 
 var _ fi.NodeupModelBuilder = &ChannelsBuilder{}
 
+func (b *ChannelsBuilder) runsChannels() bool {
+	if b.IsMaster || b.HasAPIServer {
+		return true
+	}
+	return false
+}
+
 func (b *ChannelsBuilder) Build(c *fi.NodeupModelBuilderContext) error {
-	if !b.IsMaster {
+	if !b.runsChannels() {
 		return nil
 	}
 
@@ -66,8 +73,8 @@ func (b *ChannelsBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 		Path:     channelsKubeconfigPath,
 		Contents: kubeconfig,
 		Type:     nodetasks.FileType_File,
-		Mode:     fi.PtrTo("0400"),
-		Owner:    fi.PtrTo(wellknownusers.KopsChannelsName),
+		Mode:     new("0400"),
+		Owner:    new(wellknownusers.KopsChannelsName),
 	})
 
 	manifest, err := b.readChannelsManifest(c)

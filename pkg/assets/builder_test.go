@@ -18,16 +18,22 @@ package assets
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/featureflag"
 	"k8s.io/kops/pkg/testutils/golden"
 	"k8s.io/kops/util/pkg/hashing"
+	"k8s.io/kops/util/pkg/vfs"
 )
 
 func buildAssetBuilder(t *testing.T) *AssetBuilder {
@@ -125,6 +131,84 @@ func TestValidate_RemapImage_ContainerRegistry_MappingMultipleTimesConverges(t *
 		if remapped != expected {
 			t.Errorf("Error remapping image (Expecting: %s, got %s, iteration: %d)", expected, remapped, i)
 		}
+	}
+}
+
+func TestRemapURLPathDelimiterEscaping(t *testing.T) {
+	canonicalURL, err := url.Parse("https://artifacts.k8s.io/binaries/kops/1.37.0/linux/arm64/nodeup")
+	if err != nil {
+		t.Fatalf("parsing canonical URL: %v", err)
+	}
+	knownHash := hashing.MustFromString("sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+	for _, tc := range []struct {
+		name           string
+		fileRepository string
+		expected       string
+	}{
+		{
+			name:           "S3 raw comma",
+			fileRepository: "s3://artifact-bucket/prefix,prod",
+			expected:       "s3://artifact-bucket/prefix%2Cprod/binaries/kops/1.37.0/linux/arm64/nodeup",
+		},
+		{
+			name:           "S3 encoded comma",
+			fileRepository: "s3://artifact-bucket/prefix%2Cprod",
+			expected:       "s3://artifact-bucket/prefix%2Cprod/binaries/kops/1.37.0/linux/arm64/nodeup",
+		},
+		{
+			name:           "GCS raw comma",
+			fileRepository: "gs://artifact-bucket/prefix,prod",
+			expected:       "gs://artifact-bucket/prefix%2Cprod/binaries/kops/1.37.0/linux/arm64/nodeup",
+		},
+		{
+			name:           "GCS encoded comma",
+			fileRepository: "gs://artifact-bucket/prefix%2Cprod",
+			expected:       "gs://artifact-bucket/prefix%2Cprod/binaries/kops/1.37.0/linux/arm64/nodeup",
+		},
+		{
+			name:           "HTTPS raw comma",
+			fileRepository: "https://artifacts.example.com/prefix,prod",
+			expected:       "https://artifacts.example.com/prefix%2Cprod/binaries/kops/1.37.0/linux/arm64/nodeup",
+		},
+		{
+			name:           "HTTPS encoded comma",
+			fileRepository: "https://artifacts.example.com/prefix%2Cprod",
+			expected:       "https://artifacts.example.com/prefix%2Cprod/binaries/kops/1.37.0/linux/arm64/nodeup",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fileRepository := tc.fileRepository
+			builder := NewAssetBuilder(nil, &kops.AssetsSpec{FileRepository: &fileRepository}, false)
+			asset, err := builder.RemapFile(canonicalURL, knownHash)
+			if err != nil {
+				t.Fatalf("remapping file: %v", err)
+			}
+
+			mirrored := BuildMirroredAsset(asset)
+			if len(mirrored.Locations) != 1 {
+				t.Fatalf("expected one location, got %d", len(mirrored.Locations))
+			}
+			if mirrored.Locations[0] != tc.expected {
+				t.Errorf("expected location %q, got %q", tc.expected, mirrored.Locations[0])
+			}
+
+			_, locations, ok := strings.Cut(mirrored.CompactString(), "@")
+			if !ok {
+				t.Fatalf("compact asset does not contain a hash separator")
+			}
+			if split := strings.Split(locations, ","); len(split) != 1 {
+				t.Fatalf("compact asset split into %d locations", len(split))
+			}
+			parsed, err := url.Parse(locations)
+			if err != nil {
+				t.Fatalf("parsing compact asset location: %v", err)
+			}
+			expectedPath := "/prefix,prod/binaries/kops/1.37.0/linux/arm64/nodeup"
+			if parsed.Path != expectedPath {
+				t.Errorf("expected decoded path %q, got %q", expectedPath, parsed.Path)
+			}
+		})
 	}
 }
 
@@ -258,5 +342,133 @@ func TestAssetBuilderConcurrentCollection(t *testing.T) {
 		if prev.Path > curr.Path {
 			t.Fatalf("static files not sorted: %q > %q", prev.Path, curr.Path)
 		}
+	}
+}
+
+func resetDownloadedFileHashes(t *testing.T) {
+	t.Helper()
+
+	downloadedFileHashes.Clear()
+	t.Cleanup(downloadedFileHashes.Clear)
+}
+
+func hashHandler(assetPath string, hash string, requests *atomic.Int64) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != assetPath+".sha256" {
+			// The VFS retries 404 and 5xx responses.
+			http.Error(w, "not found", http.StatusForbidden)
+			return
+		}
+		requests.Add(1)
+		fmt.Fprintf(w, "%s  %s\n", hash, path.Base(assetPath))
+	}
+}
+
+func newHashServer(t *testing.T, assetPath string, hash string, requests *atomic.Int64) *httptest.Server {
+	t.Helper()
+
+	server := httptest.NewServer(hashHandler(assetPath, hash, requests))
+	t.Cleanup(server.Close)
+
+	return server
+}
+
+func TestFindHashCachesDownloadedHashesByResolvedURL(t *testing.T) {
+	resetDownloadedFileHashes(t)
+
+	const assetPath = "/binaries/example/linux/amd64/example"
+	const canonicalHash = "2222222222222222222222222222222222222222222222222222222222222222"
+	const mirroredHash = "3333333333333333333333333333333333333333333333333333333333333333"
+
+	var canonicalRequests atomic.Int64
+	canonicalServer := newHashServer(t, assetPath, canonicalHash, &canonicalRequests)
+
+	var mirroredRequests atomic.Int64
+	mirroredServer := newHashServer(t, assetPath, mirroredHash, &mirroredRequests)
+
+	assetURL, err := url.Parse(canonicalServer.URL + assetPath)
+	if err != nil {
+		t.Fatalf("error parsing asset url: %v", err)
+	}
+
+	vfsContext := vfs.NewVFSContext()
+
+	// Each builder registers the asset, but only the first downloads its checksum.
+	for i := 0; i < 3; i++ {
+		builder := NewAssetBuilder(vfsContext, &kops.AssetsSpec{}, false)
+
+		asset, err := builder.RemapFile(assetURL, nil)
+		if err != nil {
+			t.Fatalf("error remapping file with builder %d: %v", i, err)
+		}
+		if actual := asset.SHAValue.Hex(); actual != canonicalHash {
+			t.Errorf("unexpected hash from builder %d: actual %q, expected %q", i, actual, canonicalHash)
+		}
+		if actual := len(builder.FileAssets()); actual != 1 {
+			t.Errorf("expected builder %d to register 1 file asset, got %d", i, actual)
+		}
+	}
+
+	// The mirror must not reuse the canonical URL's cached hash.
+	fileRepository := mirroredServer.URL
+	mirroredBuilder := NewAssetBuilder(vfsContext, &kops.AssetsSpec{FileRepository: &fileRepository}, false)
+	mirroredAsset, err := mirroredBuilder.RemapFile(assetURL, nil)
+	if err != nil {
+		t.Fatalf("error remapping mirrored file: %v", err)
+	}
+	if actual := mirroredAsset.SHAValue.Hex(); actual != mirroredHash {
+		t.Errorf("unexpected mirrored hash: actual %q, expected %q", actual, mirroredHash)
+	}
+
+	if actual := canonicalRequests.Load(); actual != 1 {
+		t.Errorf("expected 1 canonical checksum request, got %d", actual)
+	}
+	if actual := mirroredRequests.Load(); actual != 1 {
+		t.Errorf("expected 1 mirrored checksum request, got %d", actual)
+	}
+}
+
+func TestFindHashDoesNotCacheFailures(t *testing.T) {
+	resetDownloadedFileHashes(t)
+
+	const assetPath = "/binaries/example/linux/amd64/example"
+	const hash = "4444444444444444444444444444444444444444444444444444444444444444"
+
+	var published atomic.Bool
+	var requests atomic.Int64
+	handler := hashHandler(assetPath, hash, &requests)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !published.Load() {
+			// The VFS retries 404 and 5xx responses.
+			http.Error(w, "not found", http.StatusForbidden)
+			return
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(server.Close)
+
+	assetURL, err := url.Parse(server.URL + assetPath)
+	if err != nil {
+		t.Fatalf("error parsing asset url: %v", err)
+	}
+
+	vfsContext := vfs.NewVFSContext()
+	builder := NewAssetBuilder(vfsContext, &kops.AssetsSpec{}, false)
+
+	if _, err := builder.RemapFile(assetURL, nil); err == nil {
+		t.Fatal("expected an error while the checksum file is unavailable")
+	}
+
+	published.Store(true)
+
+	asset, err := builder.RemapFile(assetURL, nil)
+	if err != nil {
+		t.Fatalf("error remapping file after the checksum file was published: %v", err)
+	}
+	if actual := asset.SHAValue.Hex(); actual != hash {
+		t.Errorf("unexpected hash: actual %q, expected %q", actual, hash)
+	}
+	if actual := requests.Load(); actual != 1 {
+		t.Errorf("expected 1 successful checksum request, got %d", actual)
 	}
 }

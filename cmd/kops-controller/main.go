@@ -25,8 +25,8 @@ import (
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
+	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 	"k8s.io/klog/v2/klogr"
 	bootstrapapi "k8s.io/kops/clusterapi/bootstrap/kops/api/v1beta1"
@@ -36,13 +36,14 @@ import (
 	"k8s.io/kops/cmd/kops-controller/pkg/server"
 	"k8s.io/kops/pkg/apis/kops/v1alpha2"
 	"k8s.io/kops/pkg/bootstrap"
-	"k8s.io/kops/pkg/bootstrap/pkibootstrap"
+	"k8s.io/kops/pkg/bootstrap/awsbootstrap"
+	"k8s.io/kops/pkg/bootstrap/pkibootstrap/pkiverifier"
 	"k8s.io/kops/pkg/client/simple"
 	"k8s.io/kops/pkg/controllers/clusterapi"
 	"k8s.io/kops/pkg/nodeidentity"
 	nodeidentityaws "k8s.io/kops/pkg/nodeidentity/aws"
 	nodeidentityazure "k8s.io/kops/pkg/nodeidentity/azure"
-	nodeidentityclusterapi "k8s.io/kops/pkg/nodeidentity/clusterapi"
+	"k8s.io/kops/pkg/nodeidentity/clusterapi/capimanager"
 	nodeidentitydo "k8s.io/kops/pkg/nodeidentity/do"
 	nodeidentitygce "k8s.io/kops/pkg/nodeidentity/gce"
 	nodeidentityhetzner "k8s.io/kops/pkg/nodeidentity/hetzner"
@@ -141,9 +142,9 @@ func main() {
 
 	vfsContext := vfs.NewVFSContext()
 
-	var capiManager *nodeidentityclusterapi.Manager
+	var capiManager *capimanager.Manager
 	if opt.CAPI.IsEnabled() {
-		capiManager = nodeidentityclusterapi.NewManager(mgr.GetClient())
+		capiManager = capimanager.NewManager(mgr.GetClient())
 	}
 
 	var clientset simple.Clientset
@@ -152,7 +153,7 @@ func main() {
 		var verifiers []bootstrap.Verifier
 		var err error
 		if opt.Server.Provider.AWS != nil {
-			verifier, err := awsup.NewAWSVerifier(ctx, opt.Server.Provider.AWS)
+			verifier, err := awsbootstrap.NewAWSVerifier(ctx, opt.Server.Provider.AWS)
 			if err != nil {
 				setupLog.Error(err, "unable to create verifier")
 				os.Exit(1)
@@ -209,6 +210,12 @@ func main() {
 		}
 		if opt.Server.Provider.Linode != nil {
 			verifier, err := linodecloudup.NewLinodeVerifier(opt.Server.Provider.Linode)
+			if err != nil {
+				setupLog.Error(err, "unable to create verifier")
+				os.Exit(1)
+			}
+			verifiers = append(verifiers, verifier)
+		}
 		if opt.Server.Provider.Elemento != nil {
 			verifier, err := elemento.NewElementoVerifier(opt.Server.Provider.Elemento)
 			if err != nil {
@@ -219,7 +226,7 @@ func main() {
 		}
 
 		if opt.Server.PKI != nil {
-			verifier, err := pkibootstrap.NewVerifier(opt.Server.PKI, mgr.GetClient())
+			verifier, err := pkiverifier.NewVerifier(opt.Server.PKI, mgr.GetClient())
 			if err != nil {
 				setupLog.Error(err, "unable to create verifier")
 				os.Exit(1)
@@ -231,7 +238,13 @@ func main() {
 			klog.Fatalf("server verifiers not provided")
 		}
 
-		uncachedClient, err := client.New(mgr.GetConfig(), client.Options{
+		// Every /bootstrap request does one uncached single-key Node GET, and nodes
+		// retry until they join, so offered load scales with node count. Rely on API
+		// priority and fairness.
+		bootstrapConfig := rest.CopyConfig(mgr.GetConfig())
+		bootstrapConfig.QPS = -1
+
+		uncachedClient, err := client.New(bootstrapConfig, client.Options{
 			Scheme: mgr.GetScheme(),
 			Mapper: mgr.GetRESTMapper(),
 		})
@@ -261,11 +274,6 @@ func main() {
 
 	if err := addNodeController(ctx, mgr, &opt); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NodeController")
-		os.Exit(1)
-	}
-
-	if err := addGossipController(mgr, &opt); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "GossipController")
 		os.Exit(1)
 	}
 
@@ -314,9 +322,9 @@ func buildScheme(opt *config.Options) (*runtime.Scheme, error) {
 }
 
 func addNodeController(ctx context.Context, mgr manager.Manager, opt *config.Options) error {
-	var capiManager *nodeidentityclusterapi.Manager
+	var capiManager *capimanager.Manager
 	if opt.CAPI.IsEnabled() {
-		capiManager = nodeidentityclusterapi.NewManager(mgr.GetClient())
+		capiManager = capimanager.NewManager(mgr.GetClient())
 	}
 
 	var identifier nodeidentity.Identifier
@@ -400,28 +408,6 @@ func addNodeController(ctx context.Context, mgr manager.Manager, opt *config.Opt
 		return err
 	}
 	if err := nodeController.SetupWithManager(mgr); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func addGossipController(mgr manager.Manager, opt *config.Options) error {
-	if opt.Discovery == nil || !opt.Discovery.Enabled {
-		return nil
-	}
-
-	configMapID := types.NamespacedName{
-		Namespace: "kube-system",
-		Name:      "coredns",
-	}
-
-	controller, err := controllers.NewHostsReconciler(mgr, opt, configMapID)
-	if err != nil {
-		return err
-	}
-
-	if err := controller.SetupWithManager(mgr); err != nil {
 		return err
 	}
 

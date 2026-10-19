@@ -222,7 +222,7 @@ type KubeletConfigSpec struct {
 	// DEPRECATED: This parameter should be set via the config file specified by the Kubelet's --config flag.
 	ProtectKernelDefaults *bool `json:"protectKernelDefaults,omitempty" flag:"protect-kernel-defaults"`
 	// CgroupDriver allows the explicit setting of the kubelet cgroup driver.
-	// DEPRECATED: The cgroup driver is automatically detected.
+	// Valid values are "systemd" (the default) and "cgroupfs". containerd is configured to use the same driver.
 	CgroupDriver string `json:"cgroupDriver,omitempty" flag:"cgroup-driver"`
 	// HousekeepingInterval allows to specify interval between container housekeepings.
 	HousekeepingInterval *metav1.Duration `json:"housekeepingInterval,omitempty" flag:"housekeeping-interval"`
@@ -513,6 +513,11 @@ type KubeAPIServerConfig struct {
 	// RequestTimeout configures the duration a handler must keep a request open before timing it out. (default 1m0s)
 	RequestTimeout *metav1.Duration `json:"requestTimeout,omitempty" flag:"request-timeout"`
 
+	// StorageInitializationTimeout is the maximum amount of time to wait for the storage layer to initialize before declaring kube-apiserver ready.
+	// Increasing this value allows etcd more time to become ready on new control-plane nodes before kube-apiserver gives up and crashes.
+	// Default is 1m0s.
+	StorageInitializationTimeout *metav1.Duration `json:"storageInitializationTimeout,omitempty" flag:"storage-initialization-timeout"`
+
 	// MinRequestTimeout configures the minimum number of seconds a handler must keep a request open before timing it out.
 	// Currently only honored by the watch request handler
 	MinRequestTimeout *int32 `json:"minRequestTimeout,omitempty" flag:"min-request-timeout"`
@@ -573,6 +578,9 @@ type KubeAPIServerConfig struct {
 	// CorsAllowedOrigins is a list of origins for CORS. An allowed origin can be a regular
 	// expression to support subdomain matching. If this list is empty CORS will not be enabled.
 	CorsAllowedOrigins []string `json:"corsAllowedOrigins,omitempty" flag:"cors-allowed-origins"`
+
+	// StrictTransportSecurityDirectives is a list of directives for HSTS, comma separated. If this list is empty, then HSTS directives will not be added. Example: 'max-age=31536000,includeSubDomains,preload'
+	StrictTransportSecurityDirectives []string `json:"strictTransportSecurityDirectives,omitempty" flag:"strict-transport-security-directives"`
 
 	// DefaultNotReadyTolerationSeconds
 	DefaultNotReadyTolerationSeconds *int64 `json:"defaultNotReadyTolerationSeconds,omitempty" flag:"default-not-ready-toleration-seconds"`
@@ -990,6 +998,12 @@ type CloudConfiguration struct {
 	// GCEUseStartupScript specifies enables using startup-script instead of user-data metadata.
 	// +k8s:conversion-gen=false
 	GCEUseStartupScript *bool `json:"gceUseStartupScript,omitempty"`
+	// AWSBinariesLocation is the location of the AWS cloud provider binaries.
+	// +k8s:conversion-gen=false
+	AWSBinariesLocation *string `json:"awsBinariesLocation,omitempty"`
+	// GCEBinariesLocation is the location of the GCE cloud provider binaries.
+	// +k8s:conversion-gen=false
+	GCEBinariesLocation *string `json:"gceBinariesLocation,omitempty"`
 	// DisableSecurityGroupIngress disables the Cloud Controller Manager's creation
 	// of an AWS Security Group for each load balancer provisioned for a Service (AWS only).
 	// +k8s:conversion-gen=false
@@ -1003,6 +1017,10 @@ type CloudConfiguration struct {
 	// security groups for Network Load Balancers (AWS only). Valid value: "Managed"
 	// +k8s:conversion-gen=false
 	NLBSecurityGroupMode *string `json:"nlbSecurityGroupMode,omitempty"`
+	// UseIPBasedNodeNames names Kubernetes nodes after the EC2 private DNS name instead of the EC2
+	// instance ID (AWS only).
+	// +k8s:conversion-gen=false
+	UseIPBasedNodeNames *bool `json:"useIPBasedNodeNames,omitempty"`
 	// VSphereUsername is unused.
 	// +k8s:conversion-gen=false
 	VSphereUsername *string `json:"vSphereUsername,omitempty"`
@@ -1303,6 +1321,12 @@ type CertManagerConfig struct {
 
 	// FeatureGates is a list of experimental features that can be enabled or disabled.
 	FeatureGates map[string]bool `json:"featureGates,omitempty"`
+
+	// WebhookFeatureGates is a list of experimental features that can be enabled or disabled for the webhook.
+	WebhookFeatureGates map[string]bool `json:"webhookFeatureGates,omitempty"`
+
+	// CAInjectorFeatureGates is a list of experimental features that can be enabled or disabled for the cainjector.
+	CAInjectorFeatureGates map[string]bool `json:"cainjectorFeatureGates,omitempty"`
 }
 
 // LoadBalancerControllerSpec determines the AWS LB controller configuration.

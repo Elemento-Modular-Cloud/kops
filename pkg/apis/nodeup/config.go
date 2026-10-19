@@ -99,8 +99,6 @@ type Config struct {
 	APIServerConfig *APIServerConfig `json:",omitempty"`
 	// ControlPlaneConfig is additional configuration for control-plane nodes.
 	ControlPlaneConfig *ControlPlaneConfig `json:",omitempty"`
-	// GossipConfig is configuration for gossip DNS.
-	GossipConfig *kops.GossipConfig `json:",omitempty"`
 	// DNSZone is the DNS zone we should use when configuring DNS.
 	DNSZone string `json:",omitempty"`
 	// NvidiaGPU contains the configuration for nvidia
@@ -121,6 +119,8 @@ type Config struct {
 	NLBSecurityGroupMode *string `json:"nlbSecurityGroupMode,omitempty"`
 	// NodeIPFamilies controls the IP families reported for each node.
 	NodeIPFamilies []string `json:"nodeIPFamilies,omitempty"`
+	// UseIPBasedNodeNames names the node after the EC2 private DNS name instead of the instance ID.
+	UseIPBasedNodeNames bool `json:"useIPBasedNodeNames,omitempty"`
 	// WarmPoolImages are the container images to pre-pull during instance pre-initialization
 	WarmPoolImages []string `json:"warmPoolImages,omitempty"`
 
@@ -137,8 +137,7 @@ type Config struct {
 	Openstack *kops.OpenstackSpec `json:",omitempty"`
 
 	// Discovery methods
-	UsesLegacyGossip bool `json:"usesLegacyGossip"`
-	UsesNoneDNS      bool `json:"usesNoneDNS"`
+	UsesNoneDNS bool `json:"usesNoneDNS"`
 
 	// DiscoveryService implements discovery using a hosted discovery service.
 	DiscoveryService *DiscoveryServiceOptions `json:"discoveryServiceWithUniverse,omitempty"`
@@ -247,7 +246,6 @@ func NewConfig(cluster *kops.Cluster, instanceGroup *kops.InstanceGroup) (*Confi
 		VolumeMounts:         instanceGroup.Spec.VolumeMounts,
 		FileAssets:           append(filterFileAssets(instanceGroup.Spec.FileAssets, role), filterFileAssets(cluster.Spec.FileAssets, role)...),
 		Hooks:                [][]kops.HookSpec{igHooks, clusterHooks},
-		UsesLegacyGossip:     cluster.UsesLegacyGossip(),
 		UsesNoneDNS:          cluster.UsesNoneDNS(),
 	}
 
@@ -288,12 +286,14 @@ func NewConfig(cluster *kops.Cluster, instanceGroup *kops.InstanceGroup) (*Confi
 			config.EnableLifecycleHook = true
 		}
 
-		if instanceGroup.HasAPIServer() {
+		if instanceGroup.RunsAPIServer() {
 			config.DisableSecurityGroupIngress = aws.DisableSecurityGroupIngress
 			config.ElbSecurityGroup = aws.ElbSecurityGroup
 			config.NLBSecurityGroupMode = aws.NLBSecurityGroupMode
 			config.NodeIPFamilies = aws.NodeIPFamilies
 		}
+
+		config.UseIPBasedNodeNames = aws.UseIPBasedNodeNames != nil && *aws.UseIPBasedNodeNames
 	}
 
 	if cluster.Spec.CloudProvider.Azure != nil {
@@ -365,7 +365,7 @@ func NewConfig(cluster *kops.Cluster, instanceGroup *kops.InstanceGroup) (*Confi
 		config.KubeletConfig = *instanceGroup.Spec.Kubelet
 	}
 
-	if instanceGroup.HasAPIServer() {
+	if instanceGroup.RunsAPIServer() {
 		config.APIServerConfig = &APIServerConfig{
 			ClusterDNSDomain: cluster.Spec.ClusterDNSDomain,
 			KubeAPIServer:    cluster.Spec.KubeAPIServer,
@@ -375,11 +375,13 @@ func NewConfig(cluster *kops.Cluster, instanceGroup *kops.InstanceGroup) (*Confi
 			},
 		}
 		if cluster.Spec.Authentication != nil {
-			config.APIServerConfig.Authentication = cluster.Spec.Authentication
-			if cluster.Spec.Authentication.AWS != nil {
+			// Copy before clearing fields, so that we don't mutate the shared cluster spec.
+			authentication := *cluster.Spec.Authentication
+			if authentication.AWS != nil {
 				// The values go into the manifest and aren't needed by nodeup.
-				config.APIServerConfig.Authentication.AWS = &kops.AWSAuthenticationSpec{}
+				authentication.AWS = &kops.AWSAuthenticationSpec{}
 			}
+			config.APIServerConfig.Authentication = &authentication
 		}
 		if cluster.Spec.API.DNS != nil {
 			config.APIServerConfig.API.DNS = &kops.DNSAccessSpec{}
@@ -389,29 +391,39 @@ func NewConfig(cluster *kops.Cluster, instanceGroup *kops.InstanceGroup) (*Confi
 		}
 	}
 
-	if instanceGroup.HasAPIServer() || !model.UseKopsControllerForNodeConfig(cluster) {
+	if instanceGroup.RunsAPIServer() || instanceGroup.RunsEtcd() || instanceGroup.RunsKubeControllerManager() || instanceGroup.RunsScheduler() {
 		config.ConfigStore = &kops.ConfigStoreSpec{
 			Keypairs: cluster.Spec.ConfigStore.Keypairs,
 			Secrets:  cluster.Spec.ConfigStore.Secrets,
 		}
 	}
 
-	if instanceGroup.HasAPIServer() || cluster.UsesLegacyGossip() {
+	if instanceGroup.RunsAPIServer() {
 		config.Networking.EgressProxy = cluster.Spec.Networking.EgressProxy
 	}
 
-	if instanceGroup.IsControlPlane() || cluster.UsesLegacyGossip() {
+	if instanceGroup.RunsAPIServer() {
 		config.DNSZone = cluster.Spec.DNSZone
-	}
-
-	if cluster.UsesLegacyGossip() {
-		config.GossipConfig = cluster.Spec.GossipConfig
 	}
 
 	if instanceGroup.IsControlPlane() {
 		config.ControlPlaneConfig = &ControlPlaneConfig{
 			KubeControllerManager: *cluster.Spec.KubeControllerManager,
 			KubeScheduler:         *cluster.Spec.KubeScheduler,
+		}
+	} else if instanceGroup.IsKubeControllerManagerOnly() {
+		config.ControlPlaneConfig = &ControlPlaneConfig{
+			KubeControllerManager: *cluster.Spec.KubeControllerManager,
+		}
+		config.APIServerConfig = &APIServerConfig{
+			ClusterDNSDomain: cluster.Spec.ClusterDNSDomain,
+		}
+	} else if instanceGroup.IsSchedulerOnly() {
+		config.ControlPlaneConfig = &ControlPlaneConfig{
+			KubeScheduler: *cluster.Spec.KubeScheduler,
+		}
+		config.APIServerConfig = &APIServerConfig{
+			ClusterDNSDomain: cluster.Spec.ClusterDNSDomain,
 		}
 	}
 

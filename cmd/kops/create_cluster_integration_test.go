@@ -44,30 +44,8 @@ import (
 
 var MagicTimestamp = metav1.Time{Time: time.Date(2017, 1, 1, 0, 0, 0, 0, time.UTC)}
 
-// TestCreateClusterGossipAWS creates a minimal AWS gossip cluster
-func TestCreateClusterGossipAWS(t *testing.T) {
-	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/gossip-aws", "v1alpha2")
-}
-
-// TestCreateClusterGossipAzure creates a minimal Azure gossip cluster
-func TestCreateClusterGossipAzure(t *testing.T) {
-	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/gossip-azure", "v1alpha2")
-}
-
-// TestCreateClusterGossipGCE creates a cminimal GCE gossip cluster
-func TestCreateClusterGossipGCE(t *testing.T) {
-	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/gossip-gce", "v1alpha2")
-}
-
-// TestCreateClusterGossipHetzner creates a minimal Hetzner gossip cluster
-func TestCreateClusterGossipHetzner(t *testing.T) {
-	t.Setenv("HCLOUD_TOKEN", "REDACTED")
-	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/gossip-hetzner", "v1alpha2")
-}
-
 // TestCreateClusterMinimal runs kops create cluster minimal.example.com --zones us-test-1a
 func TestCreateClusterMinimal(t *testing.T) {
-	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-1.31", "v1alpha2")
 	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-1.32", "v1alpha2")
 	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-1.35", "v1alpha2")
 	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/minimal-1.36", "v1alpha2")
@@ -154,6 +132,14 @@ func TestCreateClusterHAGCE(t *testing.T) {
 // TestCreateClusterGCE runs kops create cluster gce.example.com --cloud gce --zones us-test1-a --gce-service-account=test-account@testproject.iam.gserviceaccounts.com
 func TestCreateClusterGCE(t *testing.T) {
 	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/gce_byo_sa", "v1alpha2")
+}
+
+// TestCreateClusterExperimentalRoles tests kops create cluster with ExperimentalRoles and control-plane-count=0
+func TestCreateClusterExperimentalRoles(t *testing.T) {
+	featureflag.ParseFlags("+APIServerNodes,+ExperimentalRoles")
+	defer featureflag.ParseFlags("-APIServerNodes,-ExperimentalRoles")
+
+	runCreateClusterIntegrationTest(t, "../../tests/integration/create_cluster/experimental-roles", "v1alpha2")
 }
 
 // TestCreateClusterHASharedZone tests kops create cluster when the master count is bigger than the number of zones

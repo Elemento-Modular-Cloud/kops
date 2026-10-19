@@ -19,7 +19,9 @@ package awstasks
 import (
 	"context"
 	"fmt"
+	"maps"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 
@@ -32,7 +34,6 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraform"
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraformWriter"
-	"k8s.io/kops/util/pkg/maps"
 )
 
 const (
@@ -165,7 +166,7 @@ func (e *AutoscalingGroup) Find(c *fi.CloudupContext) (*AutoscalingGroup, error)
 
 	// Use 0 as default value when api returns nil (same as model)
 	if g.MaxInstanceLifetime == nil {
-		actual.MaxInstanceLifetime = fi.PtrTo(int32(0))
+		actual.MaxInstanceLifetime = new(int32(0))
 	} else {
 		actual.MaxInstanceLifetime = g.MaxInstanceLifetime
 	}
@@ -178,43 +179,6 @@ func (e *AutoscalingGroup) Find(c *fi.CloudupContext) (*AutoscalingGroup, error)
 		})
 	}
 
-	{
-		// pkg/model/awsmodel/autoscalinggroup.go doesn't know the LoadBalancerName of the API ELB task that it passes to the master ASGs,
-		// it only knows the LoadBalancerName of external load balancers passed through the InstanceGroupSpec.
-		// We lookup the LoadBalancerName for LoadBalancer tasks that don't have it set in order to attach the LB to the ASG.
-		//
-		// This means some LoadBalancer tasks have LoadBalancerName and others do not.
-		// When `Find`ing the ASG and recreating the LoadBalancer tasks we need them to match how the model creates them,
-		// but we only know the LoadBalancerNames, not the task names associated with them.
-		// This reuslts in spurious changes being reported during subsequent `update cluster` runs because the API ELB task is named differently
-		// between the kops model and the ASG's `Find`.
-		//
-		// To prevent this, we need to update the API ELB task in the ASG's LoadBalancers list.
-		// Because we don't know whether any given LoadBalancerName attached to an ASG is the API ELB task or not,
-		// we have to find the API ELB task, lookup its LoadBalancerName, and then compare that to the list of attached LoadBalancers.
-		var apiLBTask *ClassicLoadBalancer
-		for _, lb := range e.LoadBalancers {
-			// All external ELBs have their Shared field set to true. The API ELB does not.
-			// Note that Shared is set by the kops model rather than AWS tags.
-			if !fi.ValueOf(lb.Shared) {
-				apiLBTask = lb
-			}
-		}
-		if apiLBTask != nil && len(actual.LoadBalancers) > 0 {
-			apiLBDesc, err := awsup.GetCloud(c).FindELBByNameTag(fi.ValueOf(apiLBTask.Name))
-			if err != nil {
-				return nil, err
-			}
-			if apiLBDesc != nil {
-				for i := 0; i < len(actual.LoadBalancers); i++ {
-					lb := actual.LoadBalancers[i]
-					if aws.ToString(apiLBDesc.LoadBalancerName) == aws.ToString(lb.Name) {
-						actual.LoadBalancers[i] = apiLBTask
-					}
-				}
-			}
-		}
-	}
 	sort.Stable(OrderLoadBalancersByName(actual.LoadBalancers))
 
 	actual.TargetGroups = []*TargetGroup{}
@@ -279,7 +243,7 @@ func (e *AutoscalingGroup) Find(c *fi.CloudupContext) (*AutoscalingGroup, error)
 			actual.MixedSpotMaxPrice = mpd.SpotMaxPrice
 			// MixedSpotMaxPrice must be set to "" in order to unset.
 			if mpd.SpotMaxPrice == nil {
-				actual.MixedSpotMaxPrice = fi.PtrTo("")
+				actual.MixedSpotMaxPrice = new("")
 			}
 		}
 
@@ -397,7 +361,7 @@ func (v *AutoscalingGroup) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *Autos
 			MaxSize:                          e.MaxSize,
 			NewInstancesProtectedFromScaleIn: e.InstanceProtection,
 			Tags:                             v.AutoscalingGroupTags(),
-			VPCZoneIdentifier:                fi.PtrTo(strings.Join(e.AutoscalingGroupSubnets(), ",")),
+			VPCZoneIdentifier:                new(strings.Join(e.AutoscalingGroupSubnets(), ",")),
 			CapacityRebalance:                e.CapacityRebalance,
 		}
 
@@ -410,17 +374,9 @@ func (v *AutoscalingGroup) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *Autos
 
 		for _, k := range e.LoadBalancers {
 			if k.LoadBalancerName == nil {
-				lbDesc, err := t.Cloud.FindELBByNameTag(fi.ValueOf(k.GetName()))
-				if err != nil {
-					return err
-				}
-				if lbDesc == nil {
-					return fmt.Errorf("could not find load balancer to attach")
-				}
-				request.LoadBalancerNames = append(request.LoadBalancerNames, aws.ToString(lbDesc.LoadBalancerName))
-			} else {
-				request.LoadBalancerNames = append(request.LoadBalancerNames, aws.ToString(k.LoadBalancerName))
+				return fmt.Errorf("load balancer %q has no LoadBalancerName", fi.ValueOf(k.GetName()))
 			}
+			request.LoadBalancerNames = append(request.LoadBalancerNames, aws.ToString(k.LoadBalancerName))
 		}
 
 		for _, tg := range e.TargetGroups {
@@ -448,7 +404,7 @@ func (v *AutoscalingGroup) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *Autos
 			p := request.MixedInstancesPolicy.LaunchTemplate
 			for _, x := range e.MixedInstanceOverrides {
 				p.Overrides = append(p.Overrides, autoscalingtypes.LaunchTemplateOverrides{
-					InstanceType: fi.PtrTo(x),
+					InstanceType: new(x),
 				},
 				)
 			}
@@ -561,7 +517,7 @@ func (v *AutoscalingGroup) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *Autos
 			if changes.MixedInstanceOverrides != nil {
 				p := request.MixedInstancesPolicy.LaunchTemplate
 				for _, x := range changes.MixedInstanceOverrides {
-					p.Overrides = append(p.Overrides, autoscalingtypes.LaunchTemplateOverrides{InstanceType: fi.PtrTo(x)})
+					p.Overrides = append(p.Overrides, autoscalingtypes.LaunchTemplateOverrides{InstanceType: new(x)})
 				}
 				changes.MixedInstanceOverrides = nil
 			}
@@ -591,7 +547,7 @@ func (v *AutoscalingGroup) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *Autos
 			request.MaxInstanceLifetime = e.MaxInstanceLifetime
 			changes.MaxInstanceLifetime = nil
 		} else {
-			request.MaxInstanceLifetime = fi.PtrTo(int32(0))
+			request.MaxInstanceLifetime = new(int32(0))
 		}
 
 		var updateTagsRequest *autoscaling.CreateOrUpdateTagsInput
@@ -985,12 +941,12 @@ func (_ *AutoscalingGroup) RenderTerraform(t *terraform.TerraformTarget, a, e, c
 		tf.VPCZoneIdentifier = append(tf.VPCZoneIdentifier, s.TerraformLink())
 	}
 
-	for _, k := range maps.SortedKeys(e.Tags) {
+	for _, k := range slices.Sorted(maps.Keys(e.Tags)) {
 		v := e.Tags[k]
 		tf.Tags = append(tf.Tags, &terraformASGTag{
-			Key:               fi.PtrTo(k),
-			Value:             fi.PtrTo(v),
-			PropagateAtLaunch: fi.PtrTo(true),
+			Key:               new(k),
+			Value:             new(v),
+			PropagateAtLaunch: new(true),
 		})
 	}
 
@@ -1006,7 +962,7 @@ func (_ *AutoscalingGroup) RenderTerraform(t *terraform.TerraformTarget, a, e, c
 
 	if e.UseMixedInstancesPolicy() {
 		// Temporary warning until https://github.com/terraform-providers/terraform-provider-aws/issues/9750 is resolved
-		if e.MixedSpotAllocationStrategy == fi.PtrTo("capacity-optimized") {
+		if e.MixedSpotAllocationStrategy == new("capacity-optimized") {
 			fmt.Print("Terraform does not currently support a capacity optimized strategy - please see https://github.com/terraform-providers/terraform-provider-aws/issues/9750")
 		}
 
@@ -1036,7 +992,7 @@ func (_ *AutoscalingGroup) RenderTerraform(t *terraform.TerraformTarget, a, e, c
 		}
 
 		for _, x := range e.MixedInstanceOverrides {
-			tf.MixedInstancesPolicy[0].LaunchTemplate[0].Override = append(tf.MixedInstancesPolicy[0].LaunchTemplate[0].Override, &terraformAutoscalingMixedInstancesPolicyLaunchTemplateOverride{InstanceType: fi.PtrTo(x)})
+			tf.MixedInstancesPolicy[0].LaunchTemplate[0].Override = append(tf.MixedInstancesPolicy[0].LaunchTemplate[0].Override, &terraformAutoscalingMixedInstancesPolicyLaunchTemplateOverride{InstanceType: new(x)})
 		}
 	} else if e.LaunchTemplate != nil {
 		tf.LaunchTemplate = &terraformAutoscalingLaunchTemplateSpecification{
@@ -1084,7 +1040,7 @@ func (_ *AutoscalingGroup) RenderTerraform(t *terraform.TerraformTarget, a, e, c
 	var processes []*string
 	if e.SuspendProcesses != nil {
 		for _, p := range *e.SuspendProcesses {
-			processes = append(processes, fi.PtrTo(p))
+			processes = append(processes, new(p))
 		}
 	}
 	tf.SuspendedProcesses = processes

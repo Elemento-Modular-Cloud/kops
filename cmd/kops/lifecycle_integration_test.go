@@ -102,11 +102,11 @@ func TestLifecyclePrivateCalico(t *testing.T) {
 	})
 }
 
-// TestLifecyclePrivateKopeio runs the test on a private topology, with kopeio networking
-func TestLifecyclePrivateKopeio(t *testing.T) {
+// TestLifecyclePrivateSharedNAT runs the test on a private topology, with shared NAT gateways
+func TestLifecyclePrivateSharedNAT(t *testing.T) {
 	runLifecycleTestAWS(&LifecycleTestOptions{
 		t:      t,
-		SrcDir: "privatekopeio",
+		SrcDir: "private-shared-nat",
 		Shared: []string{"nat-a2345678", "nat-b2345678"},
 	})
 }
@@ -376,7 +376,7 @@ func runLifecycleTestAWS(o *LifecycleTestOptions) {
 	h := testutils.NewIntegrationTestHarness(o.t)
 	defer h.Close()
 
-	h.MockKopsVersion("1.34.0-beta.1")
+	h.MockKopsVersion(integrationTestKopsVersion)
 	cloud := h.SetupMockAWS()
 
 	var beforeIds []string
@@ -408,7 +408,7 @@ func runLifecycleTestOpenstack(o *LifecycleTestOptions) {
 	h := testutils.NewIntegrationTestHarness(o.t)
 	defer h.Close()
 
-	h.MockKopsVersion("1.34.0-beta.1")
+	h.MockKopsVersion(integrationTestKopsVersion)
 	cloud := testutils.SetupMockOpenstack()
 
 	var beforeIds []string
@@ -461,7 +461,7 @@ func runLifecycleTestGCE(o *LifecycleTestOptions) {
 	h := testutils.NewIntegrationTestHarness(o.t)
 	defer h.Close()
 
-	h.MockKopsVersion("1.34.0-beta.1")
+	h.MockKopsVersion(integrationTestKopsVersion)
 
 	cloud := h.SetupMockGCE()
 

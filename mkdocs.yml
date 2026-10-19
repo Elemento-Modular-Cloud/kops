@@ -145,7 +145,6 @@ nav:
     - Cluster boot sequence: "boot-sequence.md"
     - Philosophy: "philosophy.md"
     - State store: "state.md"
-    - AWS China: "aws-china.md"
     - Custom CA: "custom_ca.md"
     - Horizontal Pod Autoscaling: "horizontal_pod_autoscaling.md"
     - Egress Proxy: "http_proxy.md"
@@ -167,12 +166,12 @@ nav:
     - Hack Directory: "contributing/hack.md"
     - How to update kOps API: "contributing/api_updates.md"
     - Low level description on how kOps works: "contributing/how_it_works.md"
-    - Notes on Gossip design: "contributing/gossip.md"
     - Notes on master instance sizing: "contributing/instancesizes.md"
     - Vendoring: "contributing/vendoring.md"
     - Ports: "contributing/ports.md"
     - Cluster Addons & Manager : "contributing/addons.md"
   - Releases:
+    - "1.37": releases/1.37-NOTES.md
     - "1.36": releases/1.36-NOTES.md
     - "1.35": releases/1.35-NOTES.md
     - "1.34": releases/1.34-NOTES.md

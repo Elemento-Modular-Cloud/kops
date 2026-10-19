@@ -18,18 +18,50 @@ package cloudup
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"testing"
-	"text/template"
+	stdtemplate "text/template"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gcemock "k8s.io/kops/cloudmock/gce"
+	kopscontrollerconfig "k8s.io/kops/cmd/kops-controller/pkg/config"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/featureflag"
+	"k8s.io/kops/third_party/forked/text/template"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/fitasks"
 )
+
+var _ func(*TemplateFunctions, stdtemplate.FuncMap, fi.SecretStore) error = (*TemplateFunctions).AddTo
+
+func TestTemplateFunctionsKopsControllerConfigLinode(t *testing.T) {
+	cluster := &kops.Cluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "linode.example.com"},
+		Spec: kops.ClusterSpec{
+			CloudProvider: kops.CloudProviderSpec{
+				Linode: &kops.LinodeSpec{},
+			},
+			KubeProxy: &kops.KubeProxyConfig{},
+		},
+	}
+	tf := &TemplateFunctions{}
+	tf.Cluster = cluster
+
+	configJSON, err := tf.KopsControllerConfig()
+	if err != nil {
+		t.Fatalf("KopsControllerConfig() error = %v", err)
+	}
+
+	config := &kopscontrollerconfig.Options{}
+	if err := json.Unmarshal([]byte(configJSON), config); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if config.Server == nil || config.Server.Provider.Linode == nil {
+		t.Fatalf("Linode verifier configuration was not generated: %s", configJSON)
+	}
+}
 
 func Test_TemplateFunctions_CloudControllerConfigArgv(t *testing.T) {
 	tests := []struct {
@@ -161,7 +193,7 @@ func Test_TemplateFunctions_CloudControllerConfigArgv(t *testing.T) {
 					Openstack: &kops.OpenstackSpec{},
 				},
 				ExternalCloudControllerManager: &kops.CloudControllerManagerConfig{
-					AllocateNodeCIDRs: fi.PtrTo(true),
+					AllocateNodeCIDRs: new(true),
 				},
 			}},
 			expectedArgv: []string{
@@ -179,7 +211,7 @@ func Test_TemplateFunctions_CloudControllerConfigArgv(t *testing.T) {
 					Openstack: &kops.OpenstackSpec{},
 				},
 				ExternalCloudControllerManager: &kops.CloudControllerManagerConfig{
-					ConfigureCloudRoutes: fi.PtrTo(true),
+					ConfigureCloudRoutes: new(true),
 				},
 			}},
 			expectedArgv: []string{
@@ -197,7 +229,7 @@ func Test_TemplateFunctions_CloudControllerConfigArgv(t *testing.T) {
 					Openstack: &kops.OpenstackSpec{},
 				},
 				ExternalCloudControllerManager: &kops.CloudControllerManagerConfig{
-					CIDRAllocatorType: fi.PtrTo("RangeAllocator"),
+					CIDRAllocatorType: new("RangeAllocator"),
 				},
 			}},
 			expectedArgv: []string{
@@ -215,7 +247,7 @@ func Test_TemplateFunctions_CloudControllerConfigArgv(t *testing.T) {
 					Openstack: &kops.OpenstackSpec{},
 				},
 				ExternalCloudControllerManager: &kops.CloudControllerManagerConfig{
-					UseServiceAccountCredentials: fi.PtrTo(false),
+					UseServiceAccountCredentials: new(false),
 				},
 			}},
 			expectedArgv: []string{
@@ -232,7 +264,7 @@ func Test_TemplateFunctions_CloudControllerConfigArgv(t *testing.T) {
 					Openstack: &kops.OpenstackSpec{},
 				},
 				ExternalCloudControllerManager: &kops.CloudControllerManagerConfig{
-					LeaderElection: &kops.LeaderElectionConfiguration{LeaderElect: fi.PtrTo(true)},
+					LeaderElection: &kops.LeaderElectionConfiguration{LeaderElect: new(true)},
 				},
 			}},
 			expectedArgv: []string{
@@ -314,6 +346,63 @@ func TestKopsFeatureEnabled(t *testing.T) {
 			}
 			if value != tc.expectedValue {
 				t.Errorf("expected value %t, got %t", tc.expectedValue, value)
+			}
+		})
+	}
+}
+
+func TestUseSELinuxMount(t *testing.T) {
+	// Restore the default (enabled) once done; the flag state is process-global.
+	defer featureflag.ParseFlags("+SELinuxMount")
+
+	tests := []struct {
+		name           string
+		featureFlags   string
+		selinuxEnabled bool
+		expected       bool
+	}{
+		{
+			name:           "flag enabled, containerd selinux disabled",
+			featureFlags:   "+SELinuxMount",
+			selinuxEnabled: false,
+			expected:       false,
+		},
+		{
+			name:           "flag enabled, containerd selinux enabled",
+			featureFlags:   "+SELinuxMount",
+			selinuxEnabled: true,
+			expected:       true,
+		},
+		{
+			name:           "flag disabled, containerd selinux enabled",
+			featureFlags:   "-SELinuxMount",
+			selinuxEnabled: true,
+			expected:       false,
+		},
+		{
+			name:           "flag disabled, containerd selinux disabled",
+			featureFlags:   "-SELinuxMount",
+			selinuxEnabled: false,
+			expected:       false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			featureflag.ParseFlags(tc.featureFlags)
+
+			tf := &TemplateFunctions{}
+			tf.Cluster = &kops.Cluster{
+				Spec: kops.ClusterSpec{
+					KubernetesVersion: "1.32.0",
+					Containerd: &kops.ContainerdConfig{
+						SeLinuxEnabled: tc.selinuxEnabled,
+					},
+				},
+			}
+
+			if actual := tf.UseSELinuxMount(); actual != tc.expected {
+				t.Errorf("UseSELinuxMount() = %t, want %t", actual, tc.expected)
 			}
 		})
 	}
@@ -451,12 +540,12 @@ func TestTemplateFunctions_TaskHelpers(t *testing.T) {
 	tf.Cluster = &kops.Cluster{}
 	tf.tasks = map[string]fi.CloudupTask{
 		"ManagedFile/zeta": &fitasks.ManagedFile{
-			Name:     fi.PtrTo("zeta"),
-			Location: fi.PtrTo("addons/zeta.yaml"),
+			Name:     new("zeta"),
+			Location: new("addons/zeta.yaml"),
 		},
 		"ManagedFile/alpha": &fitasks.ManagedFile{
-			Name:     fi.PtrTo("alpha"),
-			Location: fi.PtrTo("addons/alpha.yaml"),
+			Name:     new("alpha"),
+			Location: new("addons/alpha.yaml"),
 		},
 	}
 
@@ -492,12 +581,13 @@ func TestTemplateFunctions_TaskHelpers(t *testing.T) {
 		t.Fatalf("unexpected task order %v", gotKeys)
 	}
 
-	funcMap := template.FuncMap{}
-	if err := tf.AddTo(funcMap, nil); err != nil {
+	// AddTo remains source-compatible with callers using the standard library FuncMap.
+	stdlibFuncMap := stdtemplate.FuncMap{}
+	if err := tf.AddTo(stdlibFuncMap, nil); err != nil {
 		t.Fatalf("AddTo returned error: %v", err)
 	}
 
-	tmpl, err := template.New("tasks").Funcs(funcMap).Parse(`{{ TaskKey (Task "ManagedFile" "alpha") }}|{{ range $task := TasksByType "ManagedFile" }}{{ TaskKey $task }};{{ end }}`)
+	tmpl, err := template.New("tasks").Funcs(stdlibFuncMap).Parse(`{{ TaskKey (Task "ManagedFile" "alpha") }}|{{ range $task := TasksByType "ManagedFile" }}{{ TaskKey $task }};{{ end }}`)
 	if err != nil {
 		t.Fatalf("error parsing template: %v", err)
 	}
@@ -529,8 +619,8 @@ func TestGetClusterAutoscalerNodeGroupsGCE(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: name},
 			Spec: kops.InstanceGroupSpec{
 				Role:    kops.InstanceGroupRoleNode,
-				MinSize: fi.PtrTo(minSize),
-				MaxSize: fi.PtrTo(maxSize),
+				MinSize: new(minSize),
+				MaxSize: new(maxSize),
 				Zones:   zones,
 			},
 		}
@@ -574,7 +664,67 @@ func TestGetClusterAutoscalerNodeGroupsGCE(t *testing.T) {
 		t.Run(g.desc, func(t *testing.T) {
 			tf := &TemplateFunctions{cloud: cloud}
 			tf.Cluster = cluster
-			tf.InstanceGroups = []*kops.InstanceGroup{g.ig}
+			tf.AllInstanceGroups = []*kops.InstanceGroup{g.ig}
+			tf.InstanceGroups = tf.AllInstanceGroups
+
+			actual, err := tf.GetClusterAutoscalerNodeGroups()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !reflect.DeepEqual(actual, g.expected) {
+				t.Errorf("expected %+v, got %+v", g.expected, actual)
+			}
+		})
+	}
+}
+
+func TestGetClusterAutoscalerNodeGroupsWhenUpdatingSomeInstanceGroups(t *testing.T) {
+	newIG := func(name string) *kops.InstanceGroup {
+		return &kops.InstanceGroup{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+			Spec: kops.InstanceGroupSpec{
+				Role:        kops.InstanceGroupRoleNode,
+				MachineType: "cx22",
+				MinSize:     new(int32(1)),
+				MaxSize:     new(int32(3)),
+				Subnets:     []string{"fsn1"},
+			},
+		}
+	}
+	nodesA, nodesB := newIG("nodes-a"), newIG("nodes-b")
+
+	grid := []struct {
+		desc          string
+		cloudProvider kops.CloudProviderSpec
+		expected      map[string]ClusterAutoscalerNodeGroup
+	}{
+		{
+			desc:          "AWS",
+			cloudProvider: kops.CloudProviderSpec{AWS: &kops.AWSSpec{}},
+			expected: map[string]ClusterAutoscalerNodeGroup{
+				"nodes-a": {MinSize: 1, MaxSize: 3, Other: "nodes-a.minimal.example.com"},
+				"nodes-b": {MinSize: 1, MaxSize: 3, Other: "nodes-b.minimal.example.com"},
+			},
+		},
+		{
+			// The Hetzner autoscaler needs the node config of every node group, which can only be
+			// rendered for the instance groups being updated.
+			desc:          "Hetzner",
+			cloudProvider: kops.CloudProviderSpec{Hetzner: &kops.HetznerSpec{}},
+			expected: map[string]ClusterAutoscalerNodeGroup{
+				"nodes-a": {MinSize: 1, MaxSize: 3, Other: "cx22:fsn1:nodes-a"},
+			},
+		},
+	}
+	for _, g := range grid {
+		t.Run(g.desc, func(t *testing.T) {
+			tf := &TemplateFunctions{}
+			tf.Cluster = &kops.Cluster{
+				ObjectMeta: metav1.ObjectMeta{Name: "minimal.example.com"},
+				Spec:       kops.ClusterSpec{CloudProvider: g.cloudProvider},
+			}
+			tf.AllInstanceGroups = []*kops.InstanceGroup{nodesA, nodesB}
+			tf.InstanceGroups = []*kops.InstanceGroup{nodesA}
 
 			actual, err := tf.GetClusterAutoscalerNodeGroups()
 			if err != nil {

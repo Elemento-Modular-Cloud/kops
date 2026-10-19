@@ -19,7 +19,7 @@ locals {
   subnet_utility-us-test-1a_id  = "subnet-abcdef"
   vpc_cidr_block                = data.aws_vpc.private-shared-subnet-example-com.cidr_block
   vpc_id                        = "vpc-12345678"
-  vpc_ipv6_cidr_block           = data.aws_vpc.private-shared-subnet-example-com.ipv6_cidr_block
+  vpc_ipv6_cidr_block           = element(concat([for a in data.aws_vpc.private-shared-subnet-example-com.ipv6_cidr_block_associations : a.ipv6_cidr_block if a.state == "associated"], [""]), 0)
   vpc_ipv6_cidr_length          = local.vpc_ipv6_cidr_block == "" ? null : tonumber(regex(".*/(\\d+)", local.vpc_ipv6_cidr_block)[0])
 }
 
@@ -104,7 +104,7 @@ output "vpc_id" {
 }
 
 output "vpc_ipv6_cidr_block" {
-  value = data.aws_vpc.private-shared-subnet-example-com.ipv6_cidr_block
+  value = element(concat([for a in data.aws_vpc.private-shared-subnet-example-com.ipv6_cidr_block_associations : a.ipv6_cidr_block if a.state == "associated"], [""]), 0)
 }
 
 output "vpc_ipv6_cidr_length" {
@@ -172,7 +172,6 @@ resource "aws_autoscaling_group" "master-us-test-1a-masters-private-shared-subne
     id      = aws_launch_template.master-us-test-1a-masters-private-shared-subnet-example-com.id
     version = aws_launch_template.master-us-test-1a-masters-private-shared-subnet-example-com.latest_version
   }
-  load_balancers        = [aws_elb.api-private-shared-subnet-example-com.id]
   max_instance_lifetime = 0
   max_size              = 1
   metrics_granularity   = "1Minute"
@@ -229,6 +228,7 @@ resource "aws_autoscaling_group" "master-us-test-1a-masters-private-shared-subne
     propagate_at_launch = true
     value               = "owned"
   }
+  target_group_arns   = [aws_lb_target_group.tcp-private-shared-subnet-ou2df6.id]
   vpc_zone_identifier = ["subnet-12345678"]
 }
 
@@ -400,34 +400,6 @@ resource "aws_ebs_volume" "us-test-1a-etcd-main-private-shared-subnet-example-co
   type       = "gp3"
 }
 
-resource "aws_elb" "api-private-shared-subnet-example-com" {
-  connection_draining         = true
-  connection_draining_timeout = 300
-  cross_zone_load_balancing   = false
-  health_check {
-    healthy_threshold   = 2
-    interval            = 10
-    target              = "SSL:443"
-    timeout             = 5
-    unhealthy_threshold = 2
-  }
-  idle_timeout = 300
-  listener {
-    instance_port     = 443
-    instance_protocol = "TCP"
-    lb_port           = 443
-    lb_protocol       = "TCP"
-  }
-  name            = "api-private-shared-subnet-n2f8ak"
-  security_groups = [aws_security_group.api-elb-private-shared-subnet-example-com.id]
-  subnets         = ["subnet-abcdef"]
-  tags = {
-    "KubernetesCluster"                                       = "private-shared-subnet.example.com"
-    "Name"                                                    = "api.private-shared-subnet.example.com"
-    "kubernetes.io/cluster/private-shared-subnet.example.com" = "owned"
-  }
-}
-
 resource "aws_iam_instance_profile" "bastions-private-shared-subnet-example-com" {
   name = "bastions.private-shared-subnet.example.com"
   role = aws_iam_role.bastions-private-shared-subnet-example-com.name
@@ -488,22 +460,10 @@ resource "aws_iam_role" "nodes-private-shared-subnet-example-com" {
   }
 }
 
-resource "aws_iam_role_policy" "bastions-private-shared-subnet-example-com" {
-  name   = "bastions.private-shared-subnet.example.com"
-  policy = file("${path.module}/data/aws_iam_role_policy_bastions.private-shared-subnet.example.com_policy")
-  role   = aws_iam_role.bastions-private-shared-subnet-example-com.name
-}
-
 resource "aws_iam_role_policy" "masters-private-shared-subnet-example-com" {
   name   = "masters.private-shared-subnet.example.com"
   policy = file("${path.module}/data/aws_iam_role_policy_masters.private-shared-subnet.example.com_policy")
   role   = aws_iam_role.masters-private-shared-subnet-example-com.name
-}
-
-resource "aws_iam_role_policy" "nodes-private-shared-subnet-example-com" {
-  name   = "nodes.private-shared-subnet.example.com"
-  policy = file("${path.module}/data/aws_iam_role_policy_nodes.private-shared-subnet.example.com_policy")
-  role   = aws_iam_role.nodes-private-shared-subnet-example-com.name
 }
 
 resource "aws_key_pair" "kubernetes-private-shared-subnet-example-com-c4a6ed9aa889b9e2c39cd663eb9c7157" {
@@ -782,6 +742,22 @@ resource "aws_launch_template" "nodes-private-shared-subnet-example-com" {
   user_data = filebase64("${path.module}/data/aws_launch_template_nodes.private-shared-subnet.example.com_user_data")
 }
 
+resource "aws_lb" "api-private-shared-subnet-example-com" {
+  enable_cross_zone_load_balancing = false
+  internal                         = false
+  load_balancer_type               = "network"
+  name                             = "api-private-shared-subnet-n2f8ak"
+  security_groups                  = [aws_security_group.api-elb-private-shared-subnet-example-com.id]
+  subnet_mapping {
+    subnet_id = "subnet-abcdef"
+  }
+  tags = {
+    "KubernetesCluster"                                       = "private-shared-subnet.example.com"
+    "Name"                                                    = "api.private-shared-subnet.example.com"
+    "kubernetes.io/cluster/private-shared-subnet.example.com" = "owned"
+  }
+}
+
 resource "aws_lb" "bastion-private-shared-subnet-example-com" {
   enable_cross_zone_load_balancing = false
   internal                         = false
@@ -796,6 +772,16 @@ resource "aws_lb" "bastion-private-shared-subnet-example-com" {
     "Name"                                                    = "bastion.private-shared-subnet.example.com"
     "kubernetes.io/cluster/private-shared-subnet.example.com" = "owned"
   }
+}
+
+resource "aws_lb_listener" "api-private-shared-subnet-example-com-443" {
+  default_action {
+    target_group_arn = aws_lb_target_group.tcp-private-shared-subnet-ou2df6.id
+    type             = "forward"
+  }
+  load_balancer_arn = aws_lb.api-private-shared-subnet-example-com.id
+  port              = 443
+  protocol          = "TCP"
 }
 
 resource "aws_lb_listener" "bastion-private-shared-subnet-example-com-22" {
@@ -828,11 +814,31 @@ resource "aws_lb_target_group" "bastion-private-shared-su-5ol32q" {
   vpc_id = "vpc-12345678"
 }
 
+resource "aws_lb_target_group" "tcp-private-shared-subnet-ou2df6" {
+  connection_termination = "true"
+  deregistration_delay   = "30"
+  health_check {
+    healthy_threshold   = 2
+    interval            = 10
+    protocol            = "TCP"
+    unhealthy_threshold = 2
+  }
+  name     = "tcp-private-shared-subnet-ou2df6"
+  port     = 443
+  protocol = "TCP"
+  tags = {
+    "KubernetesCluster"                                       = "private-shared-subnet.example.com"
+    "Name"                                                    = "tcp-private-shared-subnet-ou2df6"
+    "kubernetes.io/cluster/private-shared-subnet.example.com" = "owned"
+  }
+  vpc_id = "vpc-12345678"
+}
+
 resource "aws_route53_record" "api-private-shared-subnet-example-com" {
   alias {
     evaluate_target_health = false
-    name                   = aws_elb.api-private-shared-subnet-example-com.dns_name
-    zone_id                = aws_elb.api-private-shared-subnet-example-com.zone_id
+    name                   = aws_lb.api-private-shared-subnet-example-com.dns_name
+    zone_id                = aws_lb.api-private-shared-subnet-example-com.zone_id
   }
   name    = "api.private-shared-subnet.example.com"
   type    = "A"
@@ -842,8 +848,8 @@ resource "aws_route53_record" "api-private-shared-subnet-example-com" {
 resource "aws_route53_record" "api-private-shared-subnet-example-com-AAAA" {
   alias {
     evaluate_target_health = false
-    name                   = aws_elb.api-private-shared-subnet-example-com.dns_name
-    zone_id                = aws_elb.api-private-shared-subnet-example-com.zone_id
+    name                   = aws_lb.api-private-shared-subnet-example-com.dns_name
+    zone_id                = aws_lb.api-private-shared-subnet-example-com.zone_id
   }
   name    = "api.private-shared-subnet.example.com"
   type    = "AAAA"
@@ -1365,7 +1371,7 @@ terraform {
     aws = {
       "configuration_aliases" = [aws.files]
       "source"                = "hashicorp/aws"
-      "version"               = ">= 5.0.0"
+      "version"               = ">= 6.57.1"
     }
   }
 }

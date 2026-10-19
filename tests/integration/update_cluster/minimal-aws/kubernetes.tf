@@ -366,12 +366,6 @@ resource "aws_iam_role_policy" "masters-minimal-aws-example-com" {
   role   = aws_iam_role.masters-minimal-aws-example-com.name
 }
 
-resource "aws_iam_role_policy" "nodes-minimal-aws-example-com" {
-  name   = "nodes.minimal-aws.example.com"
-  policy = file("${path.module}/data/aws_iam_role_policy_nodes.minimal-aws.example.com_policy")
-  role   = aws_iam_role.nodes-minimal-aws-example-com.name
-}
-
 resource "aws_internet_gateway" "minimal-aws-example-com" {
   tags = {
     "KubernetesCluster"                             = "minimal-aws.example.com"
@@ -972,7 +966,7 @@ terraform {
     aws = {
       "configuration_aliases" = [aws.files]
       "source"                = "hashicorp/aws"
-      "version"               = ">= 5.0.0"
+      "version"               = ">= 6.57.1"
     }
   }
 }

@@ -40,9 +40,10 @@ GOBIN := $(shell go env GOPATH)/bin
 endif
 
 # CODEGEN_VERSION is the version of k8s.io/code-generator to use
-CODEGEN_VERSION=v0.34.1
+CODEGEN_VERSION=v0.37.0
 
-KO=go run github.com/google/ko@v0.18.0
+KO_VERSION=v0.18.0
+KO=go run github.com/google/ko@$(KO_VERSION)
 
 UPLOAD_CMD=$(KOPS_ROOT)/hack/upload ${UPLOAD_ARGS}
 
@@ -68,8 +69,6 @@ export GITSHA
 
 # We lock the versions of our controllers also
 # We need to keep in sync with:
-#   pkg/model/components/etcdmanager/model.go
-KOPS_UTILS_CP_TAG=$(IMAGE_TAG)
 #   upup/models/cloudup/resources/addons/dns-controller/
 DNS_CONTROLLER_TAG=$(IMAGE_TAG)
 #   upup/models/cloudup/resources/addons/kops-controller.addons.k8s.io/
@@ -83,7 +82,15 @@ KOPS_CHANNELS_TAG=$(IMAGE_TAG)
 
 CGO_ENABLED=0
 export CGO_ENABLED
-BUILDFLAGS=-trimpath -buildvcs=false
+# disable_grpc_modules removes the unused GCS gRPC transport and its envoy/xds proto chain from
+# cloud.google.com/go/storage. It is safe because kOps only uses the GCS HTTP JSON API.
+# It saves ~12MB.
+# grpcnotrace removes golang.org/x/net/trace from google.golang.org/grpc. It is safe because kOps
+# does not use gRPC's x/net/trace integration. In binaries with no other text/template usage, it
+# restores linker dead-code elimination disabled by x/net/trace's use of text/template and saves
+# ~21MB in the dns-controller and channels images.
+BUILDTAGS=disable_grpc_modules,grpcnotrace
+BUILDFLAGS=-trimpath -buildvcs=false -tags=${BUILDTAGS}
 
 
 # Go exports:
@@ -109,7 +116,7 @@ nodeup-install: nodeup
 all-install: all kops-install nodeup-install
 
 .PHONY: all
-all: kops protokube nodeup ko-kops-controller-export ko-kops-channels-export ko-dns-controller-export ko-kops-utils-cp-export ko-kube-apiserver-healthcheck-export ko-discovery-server-export
+all: kops nodeup ko-kops-controller-export ko-kops-channels-export ko-dns-controller-export ko-kube-apiserver-healthcheck-export ko-discovery-server-export
 
 include tests/e2e/e2e.mk
 
@@ -164,19 +171,24 @@ verify-codegen:
 .PHONY: protobuf
 protobuf:
 	protoc --go_out=. --go_opt=paths=source_relative pkg/otel/otlptracefile/pb/file.proto
-	go run golang.org/x/tools/cmd/goimports@latest -w pkg/otel/otlptracefile/pb/file.pb.go
-	protoc --go_out=. --go_opt=paths=source_relative protokube/pkg/gossip/mesh/mesh.proto
-	go run golang.org/x/tools/cmd/goimports@latest -w protokube/pkg/gossip/mesh/mesh.pb.go
-	protoc --go_out=. --go_opt=paths=source_relative third_party/forked/memberlistmesh/clusterpb/cluster.proto
-	go run golang.org/x/tools/cmd/goimports@latest -w third_party/forked/memberlistmesh/clusterpb/cluster.pb.go
+	cd hack && go run golang.org/x/tools/cmd/goimports -w ${KOPS_ROOT}/pkg/otel/otlptracefile/pb/file.pb.go
 
 .PHONY: hooks
 hooks: # Install Git hooks
 	cp hack/pre-commit.sh .git/hooks/pre-commit
 
+# In nested modules, only packages with test files run, because some of those modules build
+# only on Linux (govet covers them). Scenario tests need a live cluster and run from their
+# run-test scripts.
 .PHONY: test
 test:
 	go test -v ./...
+	for dir in $$(find . -name go.mod -not -path './go.mod' -not -path './vendor/*' -not -path '*/.*' | xargs -n1 dirname | sort); do \
+		echo "go test: $$dir"; \
+		( cd "$$dir" && pkgs=$$(go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./...) || exit 1; \
+			pkgs=$$(echo "$$pkgs" | grep -v /tests/e2e/scenarios/); \
+			[ -z "$$pkgs" ] || go test -v $$pkgs ) || exit 1; \
+	done
 
 .PHONY: test-windows
 test-windows:
@@ -219,17 +231,6 @@ nodeup: nodeup-amd64
 .PHONY: crossbuild-nodeup
 crossbuild-nodeup: nodeup-amd64 nodeup-arm64
 
-.PHONY: protokube-amd64 protokube-arm64
-protokube-amd64 protokube-arm64: protokube-%:
-	mkdir -p ${DIST}/linux/$*
-	GOOS=linux GOARCH=$* go build -tags=peer_name_alternative,peer_name_hash ${GCFLAGS} ${BUILDFLAGS} ${EXTRA_BUILDFLAGS} -o ${DIST}/linux/$*/protokube ${LDFLAGS}"${EXTRA_LDFLAGS} -X k8s.io/kops.Version=${VERSION} -X k8s.io/kops.GitVersion=${GITSHA}" k8s.io/kops/protokube/cmd/protokube
-
-.PHONY: protokube
-protokube: protokube-amd64
-
-.PHONY: crossbuild-protokube
-crossbuild-protokube: protokube-amd64 protokube-arm64
-
 .PHONY: channels
 channels:
 	mkdir -p ${DIST}/linux/amd64
@@ -241,24 +242,24 @@ upload: version-dist # Upload kops to S3
 
 # gcs-upload builds kops and uploads to GCS
 .PHONY: gcs-upload
-gcs-upload: gsutil version-dist
+gcs-upload: gcloud version-dist
 	@echo "== Uploading kops =="
-	gsutil -h "Cache-Control:private, max-age=0, no-transform" -m cp -n -r ${UPLOAD}/kops/* ${GCS_LOCATION}
+	gcloud storage cp --cache-control="private, max-age=0, no-transform" --no-clobber --recursive ${UPLOAD}/kops/* ${GCS_LOCATION}
 
 # gcs-upload-tag runs gcs-upload to upload, then uploads a version-marker to LATEST_FILE
 .PHONY: gcs-upload-and-tag
-gcs-upload-and-tag: gsutil gcs-upload
+gcs-upload-and-tag: gcloud gcs-upload
 	echo "${GCS_URL}${VERSION}" > ${UPLOAD}/latest.txt
-	gsutil -h "Cache-Control:private, max-age=0, no-transform" cp ${UPLOAD}/latest.txt ${GCS_LOCATION}${LATEST_FILE}
+	gcloud storage cp --cache-control="private, max-age=0, no-transform" ${UPLOAD}/latest.txt ${GCS_LOCATION}${LATEST_FILE}
 
 # gcs-publish-ci is the entry point for CI testing
 .PHONY: gcs-publish-ci
-gcs-publish-ci: gsutil version-dist-ci
+gcs-publish-ci: gcloud version-dist-ci
 	@echo "== Uploading kops =="
-	gsutil -h "Cache-Control:private, max-age=0, no-transform" -m cp -n -r ${UPLOAD}/kops/* ${GCS_LOCATION}
+	gcloud storage cp --cache-control="private, max-age=0, no-transform" --no-clobber --recursive ${UPLOAD}/kops/* ${GCS_LOCATION}
 	echo "VERSION: ${VERSION}"
 	echo "${GCS_URL}/${VERSION}" > ${UPLOAD}/${LATEST_FILE}
-	gsutil -h "Cache-Control:private, max-age=0, no-transform" cp ${UPLOAD}/${LATEST_FILE} ${GCS_LOCATION}
+	gcloud storage cp --cache-control="private, max-age=0, no-transform" ${UPLOAD}/${LATEST_FILE} ${GCS_LOCATION}
 
 .PHONY: gen-cli-docs
 gen-cli-docs: kops # Regenerate CLI docs
@@ -297,14 +298,7 @@ dns-controller-push: ko-dns-controller-push
 
 .PHONY: ko-dns-controller-push
 ko-dns-controller-push:
-	KO_DOCKER_REPO="${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}dns-controller" GOFLAGS="-tags=peer_name_alternative,peer_name_hash" ${KO} build --tags ${DNS_CONTROLLER_TAG} --platform=linux/amd64,linux/arm64 --bare ./dns-controller/cmd/dns-controller/
-
-.PHONY: kops-utils-cp-push
-kops-utils-cp-push: ko-kops-utils-cp-push
-
-.PHONY: ko-kops-utils-cp-push
-ko-kops-utils-cp-push:
-	KO_DOCKER_REPO="${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}kops-utils-cp" ${KO} build --tags ${KOPS_UTILS_CP_TAG} --platform=linux/amd64,linux/arm64 --bare ./cmd/kops-utils-cp/
+	KO_DOCKER_REPO="${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}dns-controller" GOFLAGS="-tags=${BUILDTAGS}" ${KO} build --tags ${DNS_CONTROLLER_TAG} --platform=linux/amd64,linux/arm64 --bare ./dns-controller/cmd/dns-controller/
 
 # --------------------------------------------------
 # development targets
@@ -333,6 +327,10 @@ verify-goimports:
 .PHONY: govet
 govet:
 	go vet ./...
+	for dir in $$(find . -name go.mod -not -path './go.mod' -not -path './vendor/*' -not -path '*/.*' | xargs -n1 dirname | sort); do \
+		echo "go vet: $$dir"; \
+		( cd "$$dir" && go vet ./... ) || exit 1; \
+	done
 
 # --------------------------------------------------
 # Continuous integration targets
@@ -381,10 +379,6 @@ verify-shellcheck:
 .PHONY: verify-terraform
 verify-terraform:
 	hack/verify-terraform.sh
-
-.PHONY: verify-hashes
-verify-hashes:
-	hack/verify-hashes.sh
 
 .PHONY: verify-ig-role-comparisons
 verify-ig-role-comparisons:
@@ -499,9 +493,9 @@ verify-crds:
 verify-versions:
 	hack/verify-versions.sh
 
-.PHONY: gsutil
-gsutil:
-	hack/install-gsutil.sh
+.PHONY: gcloud
+gcloud:
+	hack/install-gcloud.sh
 
 .PHONY: check-markdown-links
 check-markdown-links:
@@ -517,7 +511,7 @@ check-markdown-links:
 .PHONY: ko-kops-controller-export-linux-amd64 ko-kops-controller-export-linux-arm64
 ko-kops-controller-export-linux-amd64 ko-kops-controller-export-linux-arm64: ko-kops-controller-export-linux-%:
 	mkdir -p ${IMAGES}
-	KO_DOCKER_REPO="registry.k8s.io/kops" ${KO} build --tags ${KOPS_CONTROLLER_TAG} --platform=linux/$* -B --push=false --tarball=${IMAGES}/kops-controller-$*.tar ./cmd/kops-controller/
+	KO_DOCKER_REPO="registry.k8s.io/kops" GOFLAGS="-tags=${BUILDTAGS}" ${KO} build --tags ${KOPS_CONTROLLER_TAG} --platform=linux/$* -B --push=false --tarball=${IMAGES}/kops-controller-$*.tar ./cmd/kops-controller/
 	gzip -f ${IMAGES}/kops-controller-$*.tar
 	tools/sha256 ${IMAGES}/kops-controller-$*.tar.gz ${IMAGES}/kops-controller-$*.tar.gz.sha256
 
@@ -528,7 +522,7 @@ ko-kops-controller-export: ko-kops-controller-export-linux-amd64 ko-kops-control
 .PHONY: ko-kops-channels-export-linux-amd64 ko-kops-channels-export-linux-arm64
 ko-kops-channels-export-linux-amd64 ko-kops-channels-export-linux-arm64: ko-kops-channels-export-linux-%:
 	mkdir -p ${IMAGES}
-	KO_DOCKER_REPO="registry.k8s.io/kops" ${KO} build --tags ${KOPS_CHANNELS_TAG} --platform=linux/$* -B --push=false --tarball=${IMAGES}/kops-channels-$*.tar ./channels/cmd/channels/
+	KO_DOCKER_REPO="registry.k8s.io/kops" GOFLAGS="-tags=${BUILDTAGS}" ${KO} build --tags ${KOPS_CHANNELS_TAG} --platform=linux/$* -B --push=false --tarball=${IMAGES}/kops-channels-$*.tar ./channels/cmd/channels/
 	gzip -f ${IMAGES}/kops-channels-$*.tar
 	tools/sha256 ${IMAGES}/kops-channels-$*.tar.gz ${IMAGES}/kops-channels-$*.tar.gz.sha256
 
@@ -550,24 +544,13 @@ ko-kube-apiserver-healthcheck-export: ko-kube-apiserver-healthcheck-export-linux
 .PHONY: ko-dns-controller-export-linux-amd64 ko-dns-controller-export-linux-arm64
 ko-dns-controller-export-linux-amd64 ko-dns-controller-export-linux-arm64: ko-dns-controller-export-linux-%:
 	mkdir -p ${IMAGES}
-	KO_DOCKER_REPO="registry.k8s.io/kops" GOFLAGS="-tags=peer_name_alternative,peer_name_hash" ${KO} build --tags ${DNS_CONTROLLER_TAG} --platform=linux/$* -B --push=false --tarball=${IMAGES}/dns-controller-$*.tar ./dns-controller/cmd/dns-controller
+	KO_DOCKER_REPO="registry.k8s.io/kops" GOFLAGS="-tags=${BUILDTAGS}" ${KO} build --tags ${DNS_CONTROLLER_TAG} --platform=linux/$* -B --push=false --tarball=${IMAGES}/dns-controller-$*.tar ./dns-controller/cmd/dns-controller
 	gzip -f ${IMAGES}/dns-controller-$*.tar
 	tools/sha256 ${IMAGES}/dns-controller-$*.tar.gz ${IMAGES}/dns-controller-$*.tar.gz.sha256
 
 .PHONY: ko-dns-controller-export
 ko-dns-controller-export: ko-dns-controller-export-linux-amd64 ko-dns-controller-export-linux-arm64
 	echo "Done exporting dns-controller images"
-
-.PHONY: ko-kops-utils-cp-export-linux-amd64 ko-kops-utils-cp-export-linux-arm64
-ko-kops-utils-cp-export-linux-amd64 ko-kops-utils-cp-export-linux-arm64: ko-kops-utils-cp-export-linux-%:
-	mkdir -p ${IMAGES}
-	KO_DOCKER_REPO="registry.k8s.io/kops" ${KO} build --tags ${KOPS_UTILS_CP_TAG} --platform=linux/$* -B --push=false --tarball=${IMAGES}/kops-utils-cp-$*.tar ./cmd/kops-utils-cp/
-	gzip -f ${IMAGES}/kops-utils-cp-$*.tar
-	tools/sha256 ${IMAGES}/kops-utils-cp-$*.tar.gz ${IMAGES}/kops-utils-cp-$*.tar.gz.sha256
-
-.PHONY: ko-kops-utils-cp-export
-ko-kops-utils-cp-export: ko-kops-utils-cp-export-linux-amd64 ko-kops-utils-cp-export-linux-arm64
-	echo "Done exporting kops-utils-cp images"
 
 .PHONY: ko-discovery-server-export-linux-amd64 ko-discovery-server-export-linux-arm64
 ko-discovery-server-export-linux-amd64 ko-discovery-server-export-linux-arm64: ko-discovery-server-export-linux-%:
@@ -639,8 +622,9 @@ version-dist-nodeup: version-dist-nodeup-amd64 version-dist-nodeup-arm64
 
 version-dist-nodeup-amd64 version-dist-nodeup-arm64: version-dist-nodeup-%: nodeup-%
 	mkdir -p ${UPLOAD}/kops/${VERSION}/linux/$*/
-	cp -fp ${DIST}/linux/$*/nodeup ${UPLOAD}/kops/${VERSION}/linux/$*/nodeup
-	tools/sha256 ${UPLOAD}/kops/${VERSION}/linux/$*/nodeup ${UPLOAD}/kops/${VERSION}/linux/$*/nodeup.sha256
+	rm -f ${UPLOAD}/kops/${VERSION}/linux/$*/nodeup ${UPLOAD}/kops/${VERSION}/linux/$*/nodeup.sha256
+	tools/xz.sh ${DIST}/linux/$*/nodeup ${UPLOAD}/kops/${VERSION}/linux/$*/nodeup.xz
+	tools/sha256 ${UPLOAD}/kops/${VERSION}/linux/$*/nodeup.xz ${UPLOAD}/kops/${VERSION}/linux/$*/nodeup.xz.sha256
 
 .PHONY: dev-upload-nodeup
 dev-upload-nodeup: version-dist-nodeup
@@ -648,23 +632,6 @@ dev-upload-nodeup: version-dist-nodeup
 
 .PHONY: dev-upload-nodeup-amd64 dev-upload-nodeup-arm64
 dev-upload-nodeup-amd64 dev-upload-nodeup-arm64: dev-upload-nodeup-%: version-dist-nodeup-%
-	${UPLOAD_CMD} ${UPLOAD}/ ${UPLOAD_DEST}
-
-# dev-upload-protokube uploads protokube
-.PHONY: version-dist-protokube version-dist-protokube-amd64 version-dist-protokube-arm64
-version-dist-protokube: version-dist-protokube-amd64 version-dist-protokube-arm64
-
-version-dist-protokube-amd64 version-dist-protokube-arm64: version-dist-protokube-%: protokube-%
-	mkdir -p ${UPLOAD}/kops/${VERSION}/linux/$*/
-	cp -fp ${DIST}/linux/$*/protokube ${UPLOAD}/kops/${VERSION}/linux/$*/protokube
-	tools/sha256 ${UPLOAD}/kops/${VERSION}/linux/$*/protokube ${UPLOAD}/kops/${VERSION}/linux/$*/protokube.sha256
-
-.PHONY: dev-upload-protokube
-dev-upload-protokube: version-dist-protokube
-	${UPLOAD_CMD} ${UPLOAD}/ ${UPLOAD_DEST}
-
-.PHONY: dev-upload-protokube-amd64 dev-upload-protokube-arm64
-dev-upload-protokube-amd64 dev-upload-protokube-arm64: dev-upload-protokube-%: version-dist-protokube-%
 	${UPLOAD_CMD} ${UPLOAD}/ ${UPLOAD_DEST}
 
 # dev-upload-kops-controller uploads kops-controller
@@ -735,23 +702,6 @@ dev-upload-dns-controller: version-dist-dns-controller
 dev-upload-dns-controller-amd64 dev-upload-dns-controller-arm64: dev-upload-dns-controller-%: version-dist-dns-controller-%
 	${UPLOAD_CMD} ${UPLOAD}/ ${UPLOAD_DEST}
 
-# dev-upload-kops-utils-cp uploads kops-utils-cp
-.PHONY: version-dist-kops-utils-cp version-dist-kops-utils-cp-amd64 version-dist-kops-utils-cp-arm64
-version-dist-kops-utils-cp: version-dist-kops-utils-cp-amd64 version-dist-kops-utils-cp-arm64
-
-version-dist-kops-utils-cp-amd64 version-dist-kops-utils-cp-arm64: version-dist-kops-utils-cp-%: ko-kops-utils-cp-export-linux-%
-	mkdir -p ${UPLOAD}/kops/${VERSION}/images/
-	cp -fp ${IMAGES}/kops-utils-cp-$*.tar.gz ${UPLOAD}/kops/${VERSION}/images/kops-utils-cp-$*.tar.gz
-	cp -fp ${IMAGES}/kops-utils-cp-$*.tar.gz.sha256 ${UPLOAD}/kops/${VERSION}/images/kops-utils-cp-$*.tar.gz.sha256
-
-.PHONY: dev-upload-kops-utils-cp
-dev-upload-kops-utils-cp: version-dist-kops-utils-cp
-	${UPLOAD_CMD} ${UPLOAD}/ ${UPLOAD_DEST}
-
-.PHONY: dev-upload-kops-utils-cp-amd64 dev-upload-kops-utils-cp-arm64
-dev-upload-kops-utils-cp-amd64 dev-upload-kops-utils-cp-arm64: dev-upload-kops-utils-cp-%: version-dist-kops-utils-cp-%
-	${UPLOAD_CMD} ${UPLOAD}/ ${UPLOAD_DEST}
-
 # dev-upload-discovery-server uploads discovery-server
 .PHONY: version-dist-discovery-server version-dist-discovery-server-amd64 version-dist-discovery-server-arm64
 version-dist-discovery-server: version-dist-discovery-server-amd64 version-dist-discovery-server-arm64
@@ -773,11 +723,11 @@ dev-upload-discovery-server-amd64 dev-upload-discovery-server-arm64: dev-upload-
 .PHONY: dev-version-dist dev-version-dist-amd64 dev-version-dist-arm64
 dev-version-dist: dev-version-dist-amd64 dev-version-dist-arm64
 
-dev-version-dist-amd64 dev-version-dist-arm64: dev-version-dist-%: version-dist-nodeup-% version-dist-protokube-% version-dist-kops-controller-% version-dist-kops-channels-% version-dist-kube-apiserver-healthcheck-% version-dist-dns-controller-% version-dist-kops-utils-cp-% version-dist-discovery-server-%
+dev-version-dist-amd64 dev-version-dist-arm64: dev-version-dist-%: version-dist-nodeup-% version-dist-kops-controller-% version-dist-kops-channels-% version-dist-kube-apiserver-healthcheck-% version-dist-dns-controller-% version-dist-discovery-server-%
 
 .PHONY: dev-upload-linux-amd64 dev-upload-linux-arm64
 dev-upload-linux-amd64 dev-upload-linux-arm64: dev-upload-linux-%: dev-version-dist-%
-	${UPLOAD_CMD} ${UPLOAD}/ ${UPLOAD_DEST}
+	${UPLOAD_CMD} ${UPLOAD}/kops/${VERSION}/ ${UPLOAD_DEST}/kops/${VERSION}
 
 # dev-upload does a faster build and uploads to GCS / S3
 .PHONY: dev-upload
@@ -797,7 +747,7 @@ kops-controller-push: ko-kops-controller-push
 
 .PHONY: ko-kops-controller-push
 ko-kops-controller-push:
-	KO_DOCKER_REPO="${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}kops-controller" ${KO} build --tags ${KOPS_CONTROLLER_TAG} --platform=linux/amd64,linux/arm64 --bare ./cmd/kops-controller/
+	KO_DOCKER_REPO="${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}kops-controller" GOFLAGS="-tags=${BUILDTAGS}" ${KO} build --tags ${KOPS_CONTROLLER_TAG} --platform=linux/amd64,linux/arm64 --bare ./cmd/kops-controller/
 
 #------------------------------------------------------
 # kops-channels
@@ -807,7 +757,7 @@ kops-channels-push: ko-kops-channels-push
 
 .PHONY: ko-kops-channels-push
 ko-kops-channels-push:
-	KO_DOCKER_REPO="${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}channels" ${KO} build --tags ${KOPS_CHANNELS_TAG} --platform=linux/amd64,linux/arm64 --bare ./channels/cmd/channels/
+	KO_DOCKER_REPO="${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}channels" GOFLAGS="-tags=${BUILDTAGS}" ${KO} build --tags ${KOPS_CHANNELS_TAG} --platform=linux/amd64,linux/arm64 --bare ./channels/cmd/channels/
 
 #------------------------------------------------------
 # kube-apiserver-healthcheck

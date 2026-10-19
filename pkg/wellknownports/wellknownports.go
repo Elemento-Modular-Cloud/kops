@@ -26,6 +26,9 @@ const (
 	// EtcdMetricsPort is used to serve etcd metrics
 	EtcdMetricsPort = 2382
 
+	// EtcdEventsMetricsPort is used to serve etcd metrics for the events etcd
+	EtcdEventsMetricsPort = 2384
+
 	// KopsChannelsHealthCheck is the loopback port the kops-channels static pod serves /readyz on.
 	KopsChannelsHealthCheck = 3986
 
@@ -44,7 +47,9 @@ const (
 	EtcdCiliumGRPC                  = 3991
 	EtcdCiliumQuarantinedClientPort = 3992
 
-	// DNSControllerGossipMemberlist is the port where dns-controller listens for the memberlist-backed gossip
+	// DNSControllerGossipMemberlist was the port where dns-controller listened for the memberlist-backed gossip.
+	//
+	// Deprecated: gossip DNS support was removed in kOps 1.37; retained so the port is not reused.
 	DNSControllerGossipMemberlist = 3993
 
 	// EtcdMainQuarantinedClientPort is the port used by etcd when quarantined, for the main etcd
@@ -65,13 +70,19 @@ const (
 	// EtcdLeasesGRPC is the GRPC port used by etcd-manager, for the leases etcd
 	EtcdLeasesGRPC = 4006
 
-	// DNSControllerGossipWeaveMesh is the port where dns-controller listens for the weave-mesh backend gossip
+	// DNSControllerGossipWeaveMesh was the port where dns-controller listened for the weave-mesh-backed gossip.
+	//
+	// Deprecated: gossip DNS support was removed in kOps 1.37; retained so the port is not reused.
 	DNSControllerGossipWeaveMesh = 3998
 
-	// ProtokubeGossipWeaveMesh is the port where protokube listens for the weave-mesh-backed gossip
+	// ProtokubeGossipWeaveMesh was the port where protokube listened for the weave-mesh-backed gossip.
+	//
+	// Deprecated: gossip DNS support was removed in kOps 1.37; retained so the port is not reused.
 	ProtokubeGossipWeaveMesh = 3999
 
-	// ProtokubeGossipMemberlist is the port where protokube listens for the memberlist-backed gossip
+	// ProtokubeGossipMemberlist was the port where protokube listened for the memberlist-backed gossip.
+	//
+	// Deprecated: gossip DNS support was removed in kOps 1.37; retained so the port is not reused.
 	ProtokubeGossipMemberlist = 4000
 
 	// EtcdMainClientPort is the client port for the main etcd cluster
@@ -118,19 +129,14 @@ const (
 
 	// KubeControllerManagerMetricsPort is used by kube-controller-manager to expose metrics
 	KubeControllerManagerMetricsPort = 10257
+
+	// NodeExporterMetricsPort is used by node-exporter to expose node metrics
+	NodeExporterMetricsPort = 9100
 )
 
 type PortRange struct {
 	Min int
 	Max int
-}
-
-func DNSGossipPortRanges() []PortRange {
-	return []PortRange{
-		// 3993 is used by dns-controller, which is less important, so we might be able to drop it
-		{Min: 3993, Max: 3993},
-		{Min: 3998, Max: 4000},
-	}
 }
 
 func ETCDPortRanges() []PortRange {

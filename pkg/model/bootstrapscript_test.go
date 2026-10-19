@@ -146,7 +146,7 @@ func TestBootstrapUserData(t *testing.T) {
 		}
 
 		caTask := &fitasks.Keypair{
-			Name:    fi.PtrTo(fi.CertificateIDCA),
+			Name:    new(fi.CertificateIDCA),
 			Subject: "cn=kubernetes",
 			Type:    "ca",
 		}
@@ -165,7 +165,7 @@ func TestBootstrapUserData(t *testing.T) {
 			"service-account",
 		} {
 			task := &fitasks.Keypair{
-				Name:    fi.PtrTo(keypair),
+				Name:    new(keypair),
 				Subject: "cn=" + keypair,
 				Type:    "ca",
 			}
@@ -181,11 +181,11 @@ func TestBootstrapUserData(t *testing.T) {
 			NodeUpConfigBuilder: &nodeupConfigBuilder{cluster: cluster},
 			NodeUpAssets: map[architectures.Architecture]*assets.MirroredAsset{
 				architectures.ArchitectureAmd64: {
-					Locations: []string{"nodeup-amd64-1", "nodeup-amd64-2"},
+					Locations: []string{"nodeup-amd64-1.xz", "nodeup-amd64-2.xz"},
 					Hash:      hashing.MustFromString("833723369ad345a88dd85d61b1e77336d56e61b864557ded71b92b6e34158e6a"),
 				},
 				architectures.ArchitectureArm64: {
-					Locations: []string{"nodeup-arm64-1", "nodeup-arm64-2"},
+					Locations: []string{"nodeup-arm64-1.xz", "nodeup-arm64-2.xz"},
 					Hash:      hashing.MustFromString("e525c28a65ff0ce4f95f9e730195b4e67fdcb15ceb1f36b5ad6921a8a4490c71"),
 				},
 			},
@@ -233,7 +233,7 @@ func makeTestCluster(hookSpecRoles []kops.InstanceGroupRole, fileAssetSpecRoles 
 					Members: []kops.EtcdMemberSpec{
 						{
 							Name:          "test",
-							InstanceGroup: fi.PtrTo("ig-1"),
+							InstanceGroup: new("ig-1"),
 						},
 					},
 					Version: "3.1.11",
@@ -243,7 +243,7 @@ func makeTestCluster(hookSpecRoles []kops.InstanceGroupRole, fileAssetSpecRoles 
 					Members: []kops.EtcdMemberSpec{
 						{
 							Name:          "test",
-							InstanceGroup: fi.PtrTo("ig-1"),
+							InstanceGroup: new("ig-1"),
 						},
 					},
 					Version: "3.1.11",
@@ -251,7 +251,7 @@ func makeTestCluster(hookSpecRoles []kops.InstanceGroupRole, fileAssetSpecRoles 
 				},
 			},
 			Containerd: &kops.ContainerdConfig{
-				LogLevel: fi.PtrTo("info"),
+				LogLevel: new("info"),
 			},
 			KubeAPIServer: &kops.KubeAPIServerConfig{
 				Image: "CoreOS",

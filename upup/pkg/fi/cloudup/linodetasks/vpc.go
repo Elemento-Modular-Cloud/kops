@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/linode/linodego"
+	"github.com/linode/linodego/v2"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/linode"
 )
@@ -44,15 +44,19 @@ func (v *VPC) CompareWithID() *string {
 		return nil
 	}
 	id := strconv.Itoa(fi.ValueOf(v.ID))
-	return fi.PtrTo(id)
+	return new(id)
 }
 
 func (v *VPC) Find(c *fi.CloudupContext) (*VPC, error) {
 	cloud := c.T.Cloud.(linode.LinodeCloud)
-
-	vpcs, err := cloud.Client().ListVPCs(c.Context(), nil)
+	listOptions, err := linode.ListOptionsForLabel(fi.ValueOf(v.Name))
 	if err != nil {
-		return nil, fmt.Errorf("error listing Linode (Akamai) VPCs: %w", err)
+		return nil, err
+	}
+
+	vpcs, err := cloud.Client().ListVPCs(c.Context(), listOptions)
+	if err != nil {
+		return nil, fmt.Errorf("error listing Akamai (Linode) VPCs: %w", err)
 	}
 
 	var found *linodego.VPC
@@ -66,7 +70,7 @@ func (v *VPC) Find(c *fi.CloudupContext) (*VPC, error) {
 			continue
 		}
 		if found != nil {
-			return nil, fmt.Errorf("found multiple Linode (Akamai) VPCs named %q", name)
+			return nil, fmt.Errorf("found multiple Akamai (Linode) VPCs named %q", name)
 		}
 		found = candidate
 	}
@@ -76,11 +80,11 @@ func (v *VPC) Find(c *fi.CloudupContext) (*VPC, error) {
 	}
 
 	actual := &VPC{
-		Name:        fi.PtrTo(found.Label),
-		ID:          fi.PtrTo(found.ID),
+		Name:        new(found.Label),
+		ID:          new(found.ID),
 		Lifecycle:   v.Lifecycle,
-		Description: fi.PtrTo(found.Description),
-		Region:      fi.PtrTo(found.Region),
+		Description: new(found.Description),
+		Region:      new(found.Region),
 	}
 	v.ID = actual.ID
 
@@ -119,9 +123,9 @@ func (_ *VPC) RenderLinode(t *linode.APITarget, actual, expected, changes *VPC) 
 			Region:      fi.ValueOf(expected.Region),
 		})
 		if err != nil {
-			return fmt.Errorf("error creating Linode (Akamai) VPC %q: %w", fi.ValueOf(expected.Name), err)
+			return fmt.Errorf("error creating Akamai (Linode) VPC %q: %w", fi.ValueOf(expected.Name), err)
 		}
-		expected.ID = fi.PtrTo(vpc.ID)
+		expected.ID = new(vpc.ID)
 		return nil
 	}
 
@@ -135,9 +139,9 @@ func (_ *VPC) RenderLinode(t *linode.APITarget, actual, expected, changes *VPC) 
 		Description: fi.ValueOf(expected.Description),
 	})
 	if err != nil {
-		return fmt.Errorf("error updating Linode (Akamai) VPC %q: %w", fi.ValueOf(expected.Name), err)
+		return fmt.Errorf("error updating Akamai (Linode) VPC %q: %w", fi.ValueOf(expected.Name), err)
 	}
-	expected.ID = fi.PtrTo(vpc.ID)
+	expected.ID = new(vpc.ID)
 
 	return nil
 }

@@ -5,14 +5,14 @@ spec:
   addons:
   - id: k8s-1.16
     manifest: kops-controller.addons.k8s.io/k8s-1.16.yaml
-    manifestHash: 3331f594e11b433d43b80e0bd3d21689f4c6b12771b61a0d09a084f53be3033c
+    manifestHash: 2337119c00118e5db0f807325835cb21fc384c518fe255a12faddf0304d00950
     name: kops-controller.addons.k8s.io
     needsRollingUpdate: control-plane
     selector:
       k8s-addon: kops-controller.addons.k8s.io
   - id: k8s-1.12
     manifest: coredns.addons.k8s.io/k8s-1.12.yaml
-    manifestHash: 801c48240c4d6a84caac3520acb073a2909ce6bc68bfb607fb587f297c8eed58
+    manifestHash: c667c37f20ede7aa86a25a7d7fc11f9ec518fe675a7adb09c882a206e016f3b6
     name: coredns.addons.k8s.io
     selector:
       k8s-addon: coredns.addons.k8s.io
@@ -29,7 +29,7 @@ spec:
       k8s-addon: limit-range.addons.k8s.io
   - id: k8s-1.12
     manifest: dns-controller.addons.k8s.io/k8s-1.12.yaml
-    manifestHash: 79f67a86a7e0be29c653e10b4a3d94554719c53d0bee4d01694aef6f2c7ec801
+    manifestHash: 4ba4efb6c71119fef810c60fb9ba610a8f9add26d728f68e47d56012f46f2f78
     name: dns-controller.addons.k8s.io
     selector:
       k8s-addon: dns-controller.addons.k8s.io
@@ -91,20 +91,20 @@ spec:
       k8s-addon: storage-aws.addons.k8s.io
   - id: k8s-1.16
     manifest: networking.cilium.io/k8s-1.16-v1.15.yaml
-    manifestHash: 61ee5224662b0115bf8a03a0ad85c23de95969b6ef85c5e7268f5c10f0f4e8b3
+    manifestHash: 143795d57c8cd47fcbb9cb39107020f2cd2b30108b3b8f721375415ca2387f6a
     name: networking.cilium.io
     needsRollingUpdate: all
     selector:
       role.kubernetes.io/networking: "1"
   - id: k8s-1.18
     manifest: aws-cloud-controller.addons.k8s.io/k8s-1.18.yaml
-    manifestHash: 9266c7bc89474c13897f90fda68803c86ba903e900b8ecfd4a8550c69d477b32
+    manifestHash: 4e505ad4cfbd8fd89c5d6f3af03f37e9984982edf33c18138109ec200a03d473
     name: aws-cloud-controller.addons.k8s.io
     selector:
       k8s-addon: aws-cloud-controller.addons.k8s.io
   - id: k8s-1.17
     manifest: aws-ebs-csi-driver.addons.k8s.io/k8s-1.17.yaml
-    manifestHash: 0fbea47fad932fd9893871dac59a7df7f1acd12172a7839dfb5f17c6c42d1b7c
+    manifestHash: 5e0fb5dc9a58fc090b9d821979b2d372d57b2c283350309ff563d8a9a37598ec
     name: aws-ebs-csi-driver.addons.k8s.io
     selector:
       k8s-addon: aws-ebs-csi-driver.addons.k8s.io

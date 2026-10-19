@@ -5,14 +5,14 @@ spec:
   addons:
   - id: k8s-1.16
     manifest: kops-controller.addons.k8s.io/k8s-1.16.yaml
-    manifestHash: 182b4b26986b5d6c7bfc00d7e3d2dd305bc70ef54b35bb4a0a6ed57d0d314c8d
+    manifestHash: 8b14b65acc1765cbaf3cdccdef106152094143f0ab6601484091912c6c210b30
     name: kops-controller.addons.k8s.io
     needsRollingUpdate: control-plane
     selector:
       k8s-addon: kops-controller.addons.k8s.io
   - id: k8s-1.12
     manifest: coredns.addons.k8s.io/k8s-1.12.yaml
-    manifestHash: c89f00f91983d51347e920cada21c0d48792dfa4ae32f3eef9e4ebf45495250c
+    manifestHash: 0b180b32473059784ae4bc805d19bc5596a25a86a84041755b792a4766501627
     name: coredns.addons.k8s.io
     selector:
       k8s-addon: coredns.addons.k8s.io
@@ -29,7 +29,7 @@ spec:
       k8s-addon: limit-range.addons.k8s.io
   - id: k8s-1.12
     manifest: dns-controller.addons.k8s.io/k8s-1.12.yaml
-    manifestHash: 5c4088f2427f70a8ad8b6d574479b57f7764bd560a62aa18a1b1efad240e30a7
+    manifestHash: b152233243c9e23a3d6aec7b67209d47ded48c25e24e50fcf000bae06328ba70
     name: dns-controller.addons.k8s.io
     selector:
       k8s-addon: dns-controller.addons.k8s.io
@@ -41,13 +41,13 @@ spec:
       k8s-addon: storage-gce.addons.k8s.io
   - id: k8s-1.23
     manifest: gcp-pd-csi-driver.addons.k8s.io/k8s-1.23.yaml
-    manifestHash: 2bb04ab48e3fc035c4f2810723d91977860e261ec1feae2e38c5abe5bc0a8a9e
+    manifestHash: 385da9430f92779c8802081710c50f84cbd8048e8e32622d3b4a89675146693a
     name: gcp-pd-csi-driver.addons.k8s.io
     selector:
       k8s-addon: gcp-pd-csi-driver.addons.k8s.io
   - id: k8s-1.23
     manifest: gcp-cloud-controller.addons.k8s.io/k8s-1.23.yaml
-    manifestHash: 636e8e2070f1442f016924e2e26eee4b29dfe0749e880cdcc71e19854f7bb191
+    manifestHash: fd2d5ff6acac1e3c81906037a4b5de0f276d1953bb5dbe09f97808bef91584fc
     name: gcp-cloud-controller.addons.k8s.io
     prune:
       kinds:
@@ -99,7 +99,7 @@ spec:
       k8s-addon: gcp-cloud-controller.addons.k8s.io
   - id: k8s-1.16
     manifest: networking.cilium.io/k8s-1.16-v1.15.yaml
-    manifestHash: dc6932d3ad92cb226fb9ec8f30e5e30371f3ce3f05366c5044e625241d405a7b
+    manifestHash: 2cf30cabddc12a82501adc58c15ddb2aa5c671ba993585f9a2e45731fb8cfe6a
     name: networking.cilium.io
     needsRollingUpdate: all
     selector:

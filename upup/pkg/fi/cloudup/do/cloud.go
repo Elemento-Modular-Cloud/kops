@@ -34,7 +34,7 @@ import (
 	dns "k8s.io/kops/dnsprovider/pkg/dnsprovider/providers/do"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/cloudinstances"
-	"k8s.io/kops/protokube/pkg/etcd"
+	"k8s.io/kops/pkg/etcd"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/util/pkg/vfs"
 )
@@ -73,6 +73,7 @@ type DOCloud interface {
 	GetAllVolumesByRegion() ([]godo.Volume, error)
 	GetVPCUUID(networkCIDR string, vpcName string) (string, error)
 	GetAllVPCs() ([]*godo.VPC, error)
+	GetAllSSHKeys() ([]godo.Key, error)
 }
 
 var readBackoff = wait.Backoff{
@@ -555,6 +556,36 @@ func (c *doCloudImplementation) GetAllLoadBalancers() ([]godo.LoadBalancer, erro
 	}
 
 	return allLoadBalancers, nil
+}
+
+// GetAllSSHKeys returns every SSH key registered on the account. DigitalOcean
+// keys are account-scoped rather than cluster-scoped, so callers must filter by
+// name to find the ones belonging to a cluster.
+func (c *doCloudImplementation) GetAllSSHKeys() ([]godo.Key, error) {
+	allKeys := []godo.Key{}
+
+	opt := &godo.ListOptions{}
+	for {
+		keys, resp, err := c.KeysService().List(context.TODO(), opt)
+		if err != nil {
+			return nil, err
+		}
+
+		allKeys = append(allKeys, keys...)
+
+		if resp.Links == nil || resp.Links.IsLastPage() {
+			break
+		}
+
+		page, err := resp.Links.CurrentPage()
+		if err != nil {
+			return nil, err
+		}
+
+		opt.Page = page + 1
+	}
+
+	return allKeys, nil
 }
 
 func (c *doCloudImplementation) GetAllVPCs() ([]*godo.VPC, error) {

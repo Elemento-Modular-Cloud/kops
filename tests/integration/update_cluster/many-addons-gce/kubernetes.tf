@@ -272,8 +272,8 @@ resource "google_compute_firewall" "master-to-master-minimal-example-com" {
   disabled    = false
   name        = "master-to-master-minimal-example-com"
   network     = google_compute_network.minimal-example-com.name
-  source_tags = ["minimal-example-com-k8s-io-role-control-plane", "minimal-example-com-k8s-io-role-master"]
-  target_tags = ["minimal-example-com-k8s-io-role-control-plane", "minimal-example-com-k8s-io-role-master"]
+  source_tags = ["minimal-example-com-k8s-io-role-control-plane", "minimal-example-com-k8s-io-role-etcd", "minimal-example-com-k8s-io-role-scheduler", "minimal-example-com-k8s-io-role-kubecontrollermanager", "minimal-example-com-k8s-io-role-master"]
+  target_tags = ["minimal-example-com-k8s-io-role-control-plane", "minimal-example-com-k8s-io-role-etcd", "minimal-example-com-k8s-io-role-scheduler", "minimal-example-com-k8s-io-role-kubecontrollermanager", "minimal-example-com-k8s-io-role-master"]
 }
 
 resource "google_compute_firewall" "master-to-node-minimal-example-com" {
@@ -313,6 +313,30 @@ resource "google_compute_firewall" "node-to-master-minimal-example-com" {
   }
   allow {
     ports    = ["3988"]
+    protocol = "tcp"
+  }
+  allow {
+    ports    = ["10257"]
+    protocol = "tcp"
+  }
+  allow {
+    ports    = ["10259"]
+    protocol = "tcp"
+  }
+  allow {
+    ports    = ["10249"]
+    protocol = "tcp"
+  }
+  allow {
+    ports    = ["2382"]
+    protocol = "tcp"
+  }
+  allow {
+    ports    = ["2384"]
+    protocol = "tcp"
+  }
+  allow {
+    ports    = ["9100"]
     protocol = "tcp"
   }
   disabled    = false
@@ -389,7 +413,7 @@ resource "google_compute_firewall" "ssh-external-to-master-ipv6-minimal-example-
   name          = "ssh-external-to-master-ipv6-minimal-example-com"
   network       = google_compute_network.minimal-example-com.name
   source_ranges = ["::/0"]
-  target_tags   = ["minimal-example-com-k8s-io-role-control-plane", "minimal-example-com-k8s-io-role-master"]
+  target_tags   = ["minimal-example-com-k8s-io-role-control-plane", "minimal-example-com-k8s-io-role-etcd", "minimal-example-com-k8s-io-role-scheduler", "minimal-example-com-k8s-io-role-kubecontrollermanager", "minimal-example-com-k8s-io-role-master"]
 }
 
 resource "google_compute_firewall" "ssh-external-to-master-minimal-example-com" {
@@ -401,7 +425,7 @@ resource "google_compute_firewall" "ssh-external-to-master-minimal-example-com" 
   name          = "ssh-external-to-master-minimal-example-com"
   network       = google_compute_network.minimal-example-com.name
   source_ranges = ["0.0.0.0/0"]
-  target_tags   = ["minimal-example-com-k8s-io-role-control-plane", "minimal-example-com-k8s-io-role-master"]
+  target_tags   = ["minimal-example-com-k8s-io-role-control-plane", "minimal-example-com-k8s-io-role-etcd", "minimal-example-com-k8s-io-role-scheduler", "minimal-example-com-k8s-io-role-kubecontrollermanager", "minimal-example-com-k8s-io-role-master"]
 }
 
 resource "google_compute_firewall" "ssh-external-to-node-ipv6-minimal-example-com" {
@@ -494,7 +518,7 @@ resource "google_compute_instance_template" "master-us-test1-a-minimal-example-c
   metadata = {
     "cluster-name"                    = "minimal.example.com"
     "kops-k8s-io-instance-group-name" = "master-us-test1-a"
-    "ssh-keys"                        = "admin: ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQCtWu40XQo8dczLsCq0OWV+hxm9uV3WxeH9Kgh4sMzQxNtoU1pvW0XdjpkBesRKGoolfWeCLXWxpyQb1IaiMkKoz7MdhQ/6UKjMjP66aFWWp3pwD0uj0HuJ7tq4gKHKRYGTaZIRWpzUiANBrjugVgA+Sd7E/mYwc/DMXkIyRZbvhQ=="
+    "ssh-keys"                        = "ubuntu: ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQCtWu40XQo8dczLsCq0OWV+hxm9uV3WxeH9Kgh4sMzQxNtoU1pvW0XdjpkBesRKGoolfWeCLXWxpyQb1IaiMkKoz7MdhQ/6UKjMjP66aFWWp3pwD0uj0HuJ7tq4gKHKRYGTaZIRWpzUiANBrjugVgA+Sd7E/mYwc/DMXkIyRZbvhQ=="
     "user-data"                       = file("${path.module}/data/google_compute_instance_template_master-us-test1-a-minimal-example-com_metadata_user-data")
   }
   name_prefix = "master-us-test1-a-minimal-e8ua4m-"
@@ -548,7 +572,7 @@ resource "google_compute_instance_template" "nodes-minimal-example-com" {
     "cluster-name"                    = "minimal.example.com"
     "kops-k8s-io-instance-group-name" = "nodes"
     "kube-env"                        = "AUTOSCALER_ENV_VARS: os_distribution=ubuntu;arch=amd64;os=linux"
-    "ssh-keys"                        = "admin: ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQCtWu40XQo8dczLsCq0OWV+hxm9uV3WxeH9Kgh4sMzQxNtoU1pvW0XdjpkBesRKGoolfWeCLXWxpyQb1IaiMkKoz7MdhQ/6UKjMjP66aFWWp3pwD0uj0HuJ7tq4gKHKRYGTaZIRWpzUiANBrjugVgA+Sd7E/mYwc/DMXkIyRZbvhQ=="
+    "ssh-keys"                        = "ubuntu: ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQCtWu40XQo8dczLsCq0OWV+hxm9uV3WxeH9Kgh4sMzQxNtoU1pvW0XdjpkBesRKGoolfWeCLXWxpyQb1IaiMkKoz7MdhQ/6UKjMjP66aFWWp3pwD0uj0HuJ7tq4gKHKRYGTaZIRWpzUiANBrjugVgA+Sd7E/mYwc/DMXkIyRZbvhQ=="
     "user-data"                       = file("${path.module}/data/google_compute_instance_template_nodes-minimal-example-com_metadata_user-data")
   }
   name_prefix = "nodes-minimal-example-com-"
@@ -611,11 +635,11 @@ terraform {
     aws = {
       "configuration_aliases" = [aws.files]
       "source"                = "hashicorp/aws"
-      "version"               = ">= 5.0.0"
+      "version"               = ">= 6.57.1"
     }
     google = {
       "source"  = "hashicorp/google"
-      "version" = ">= 5.11.0"
+      "version" = ">= 6.8.0"
     }
   }
 }

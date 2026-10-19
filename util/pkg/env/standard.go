@@ -23,7 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/upup/pkg/fi"
-	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
+	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway/scalewaymetadata"
 	"k8s.io/kops/util/pkg/vfs/openstackconfig"
 )
 
@@ -85,11 +85,11 @@ func BuildSystemComponentEnvVars(spec *kops.ClusterSpec) EnvVars {
 	// Hetzner Cloud related values.
 	vars.addEnvVariableIfExist("HCLOUD_TOKEN")
 
-	// Linode (Akamai) related values.
+	// Akamai (Linode) related values.
 	vars.addEnvVariableIfExist("LINODE_TOKEN")
 
 	// Scaleway related values.
-	profile, err := scaleway.CreateValidScalewayProfile()
+	profile, err := scalewaymetadata.CreateValidScalewayProfile()
 	if err == nil {
 		vars["SCW_ACCESS_KEY"] = fi.ValueOf(profile.AccessKey)
 		vars["SCW_SECRET_KEY"] = fi.ValueOf(profile.SecretKey)

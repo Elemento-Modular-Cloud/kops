@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -153,17 +154,10 @@ type AWSCloud interface {
 	// UpdateTags will update tags of the specified resource to match tags, using getTags(), createTags() and deleteTags()
 	UpdateTags(resourceId string, tags map[string]string) error
 	AddAWSTags(id string, expected map[string]string) error
-	GetELBTags(loadBalancerName string) (map[string]string, error)
 	GetELBV2Tags(ResourceArn string) (map[string]string, error)
 
-	// CreateELBTags will add tags to the specified loadBalancer, retrying up to MaxCreateTagsAttempts times if it hits an eventual-consistency type error
-	CreateELBTags(loadBalancerName string, tags map[string]string) error
 	CreateELBV2Tags(ResourceArn string, tags map[string]string) error
-	// RemoveELBTags will remove tags from the specified loadBalancer, retrying up to MaxCreateTagsAttempts times if it hits an eventual-consistency type error
-	RemoveELBTags(loadBalancerName string, tags map[string]string) error
 	RemoveELBV2Tags(ResourceArn string, tags map[string]string) error
-	FindELBByNameTag(findNameTag string) (*elbtypes.LoadBalancerDescription, error)
-	DescribeELBTags(loadBalancerNames []string) (map[string][]elbtypes.Tag, error)
 	// TODO: Remove, replace with awsup.ListELBV2LoadBalancers
 	DescribeELBV2Tags(loadBalancerNames []string) (map[string][]elbv2types.Tag, error)
 	FindELBV2NetworkInterfacesByName(vpcID string, loadBalancerName string) ([]ec2types.NetworkInterface, error)
@@ -1090,8 +1084,146 @@ func buildCloudInstance(i autoscalingtypes.Instance, instances map[string]*ec2ty
 	return nil
 }
 
+// asgInstanceIDRegex extracts the first EC2 instance ID (i-xxxxxxxx) found in a
+// scaling activity's StatusMessage or Description. The capture is best-effort:
+// if no ID is found, GroupFailure.Instance is left blank.
+//
+// Instance IDs are exactly 8 or 17 hex digits, and the word boundaries matter:
+// an unanchored `i-[0-9a-f]{8,17}` matches inside "eni-0abcdef1234567890",
+// which scaling activity messages routinely mention, and would report a
+// network interface as the failing instance.
+var asgInstanceIDRegex = regexp.MustCompile(`\bi-(?:[0-9a-f]{17}|[0-9a-f]{8})\b`)
+
+// isFinishedScalingActivity reports whether a scaling activity has reached a
+// terminal state. Every other status code means the activity is still in
+// flight, and AWS lists those ahead of the finished ones.
+func isFinishedScalingActivity(code autoscalingtypes.ScalingActivityStatusCode) bool {
+	switch code {
+	case autoscalingtypes.ScalingActivityStatusCodeSuccessful,
+		autoscalingtypes.ScalingActivityStatusCodeFailed,
+		autoscalingtypes.ScalingActivityStatusCodeCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+// maxScalingActivityPages bounds how far back getGroupFailures reads. The
+// activities are most-recent-first and identical failures are aggregated, so
+// later pages almost never contribute a distinct entry.
+const maxScalingActivityPages = 5
+
+var _ cloudinstances.GroupFailureReporter = (*awsCloudImplementation)(nil)
+
+// GetGroupFailures returns recent provisioning failures observed by the AWS
+// Auto Scaling group backing this CloudInstanceGroup. See getGroupFailures
+// for the filtering and aggregation logic.
+func (c *awsCloudImplementation) GetGroupFailures(ctx context.Context, group *cloudinstances.CloudInstanceGroup) ([]cloudinstances.GroupFailure, error) {
+	return getGroupFailures(ctx, c, group)
+}
+
+// getGroupFailures returns recent failed scaling activities for the ASG
+// backing the given group.
+//
+// Results are filtered to errors timestamped after the most recent successful
+// instance creation in the group (the LaunchTime of an existing instance). If
+// the group has no instances at all, no filter is applied so the full retention
+// window is surfaced — that is precisely the failure mode this exists to
+// diagnose. Pagination short-circuits once activities pre-date the watermark,
+// since DescribeScalingActivities returns most-recent-first.
+func getGroupFailures(ctx context.Context, c AWSCloud, group *cloudinstances.CloudInstanceGroup) ([]cloudinstances.GroupFailure, error) {
+	asg, ok := group.Raw.(*autoscalingtypes.AutoScalingGroup)
+	if !ok || asg == nil {
+		return nil, nil
+	}
+	asgName := aws.ToString(asg.AutoScalingGroupName)
+	if asgName == "" {
+		return nil, nil
+	}
+
+	watermark := cloudinstances.Watermark(group)
+
+	type key struct{ code, message string }
+	agg := map[key]*cloudinstances.GroupFailure{}
+
+	paginator := autoscaling.NewDescribeScalingActivitiesPaginator(c.Autoscaling(), &autoscaling.DescribeScalingActivitiesInput{
+		AutoScalingGroupName: aws.String(asgName),
+	})
+paginate:
+	// A group with no instances has no watermark, so the short-circuit below
+	// never fires and pagination would otherwise walk the ASG's full six-week
+	// activity retention on every validation poll.
+	for pages := 0; paginator.HasMorePages() && pages < maxScalingActivityPages; pages++ {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("describing scaling activities for ASG %q: %w", asgName, err)
+		}
+		for _, a := range page.Activities {
+			var ts time.Time
+			if a.StartTime != nil {
+				ts = *a.StartTime
+			}
+			// Activities are returned most-recent-first, so the first finished
+			// one older than the watermark means every remaining one is older
+			// too. This is checked before the status filter below: a run of old
+			// successful activities would otherwise be skipped without ever
+			// ending the scan, so a group merely short of its target would read
+			// every page on every poll.
+			//
+			// Only finished activities may end it. An in-progress activity is
+			// listed ahead of the finished ones and carries the StartTime of
+			// when it began, which can already predate the watermark.
+			if isFinishedScalingActivity(a.StatusCode) && !watermark.IsZero() && !ts.IsZero() && ts.Before(watermark) {
+				break paginate
+			}
+			if a.StatusCode != autoscalingtypes.ScalingActivityStatusCodeFailed && a.StatusCode != autoscalingtypes.ScalingActivityStatusCodeCancelled {
+				continue
+			}
+			message := aws.ToString(a.StatusMessage)
+			if message == "" {
+				message = aws.ToString(a.Cause)
+			}
+			k := key{string(a.StatusCode), message}
+			e, ok := agg[k]
+			if !ok {
+				instance := asgInstanceIDRegex.FindString(message)
+				if instance == "" {
+					instance = asgInstanceIDRegex.FindString(aws.ToString(a.Description))
+				}
+				e = &cloudinstances.GroupFailure{
+					Code:      string(a.StatusCode),
+					Message:   message,
+					Instance:  instance,
+					FirstSeen: ts,
+					LastSeen:  ts,
+				}
+				agg[k] = e
+			}
+			e.Count++
+			if !ts.IsZero() {
+				if e.FirstSeen.IsZero() || ts.Before(e.FirstSeen) {
+					e.FirstSeen = ts
+				}
+				if ts.After(e.LastSeen) {
+					e.LastSeen = ts
+				}
+			}
+		}
+	}
+
+	out := make([]cloudinstances.GroupFailure, 0, len(agg))
+	for _, e := range agg {
+		out = append(out, *e)
+	}
+	cloudinstances.SortFailures(out)
+	return out, nil
+}
+
 func addCloudInstanceData(cm *cloudinstances.CloudInstance, instance *ec2types.Instance) {
 	cm.MachineType = string(instance.InstanceType)
+	if instance.LaunchTime != nil {
+		cm.CreationTimestamp = *instance.LaunchTime
+	}
 	for _, tag := range instance.Tags {
 		key := aws.ToString(tag.Key)
 		if !strings.HasPrefix(key, TagNameRolePrefix) {
@@ -1418,89 +1550,6 @@ func addAWSTags(c AWSCloud, id string, expected map[string]string) error {
 	return nil
 }
 
-func (c *awsCloudImplementation) GetELBTags(loadBalancerName string) (map[string]string, error) {
-	return getELBTags(c, loadBalancerName)
-}
-
-func getELBTags(c AWSCloud, loadBalancerName string) (map[string]string, error) {
-	ctx := context.TODO()
-	tags := map[string]string{}
-
-	request := &elb.DescribeTagsInput{
-		LoadBalancerNames: []string{loadBalancerName},
-	}
-	response, err := c.ELB().DescribeTags(ctx, request)
-	if err != nil {
-		return nil, fmt.Errorf("error listing tags on %v: %v", loadBalancerName, err)
-	}
-
-	for _, tagset := range response.TagDescriptions {
-		for _, tag := range tagset.Tags {
-			tags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
-		}
-	}
-	return tags, nil
-}
-
-// CreateELBTags will add tags to the specified loadBalancer,
-// retrying up to MaxCreateTagsAttempts times if it hits an eventual-consistency type error
-func (c *awsCloudImplementation) CreateELBTags(loadBalancerName string, tags map[string]string) error {
-	return createELBTags(c, loadBalancerName, tags)
-}
-
-func createELBTags(c AWSCloud, loadBalancerName string, tags map[string]string) error {
-	if len(tags) == 0 {
-		return nil
-	}
-	ctx := context.TODO()
-
-	elbTags := []elbtypes.Tag{}
-	for k, v := range tags {
-		elbTags = append(elbTags, elbtypes.Tag{Key: aws.String(k), Value: aws.String(v)})
-	}
-
-	request := &elb.AddTagsInput{
-		Tags:              elbTags,
-		LoadBalancerNames: []string{loadBalancerName},
-	}
-
-	_, err := c.ELB().AddTags(ctx, request)
-	if err != nil {
-		return fmt.Errorf("error creating tags on %v: %v", loadBalancerName, err)
-	}
-
-	return nil
-}
-
-// RemoveELBTags will remove tags to the specified loadBalancer, retrying up to MaxCreateTagsAttempts times if it hits an eventual-consistency type error
-func (c *awsCloudImplementation) RemoveELBTags(loadBalancerName string, tags map[string]string) error {
-	return removeELBTags(c, loadBalancerName, tags)
-}
-
-func removeELBTags(c AWSCloud, loadBalancerName string, tags map[string]string) error {
-	if len(tags) == 0 {
-		return nil
-	}
-	ctx := context.TODO()
-
-	elbTagKeysOnly := []elbtypes.TagKeyOnly{}
-	for k := range tags {
-		elbTagKeysOnly = append(elbTagKeysOnly, elbtypes.TagKeyOnly{Key: aws.String(k)})
-	}
-
-	request := &elb.RemoveTagsInput{
-		Tags:              elbTagKeysOnly,
-		LoadBalancerNames: []string{loadBalancerName},
-	}
-
-	_, err := c.ELB().RemoveTags(ctx, request)
-	if err != nil {
-		return fmt.Errorf("error creating tags on %v: %v", loadBalancerName, err)
-	}
-
-	return nil
-}
-
 func (c *awsCloudImplementation) RemoveELBV2Tags(ResourceArn string, tags map[string]string) error {
 	return removeELBV2Tags(c, ResourceArn, tags)
 }
@@ -1605,93 +1654,6 @@ func (c *awsCloudImplementation) AddTags(name *string, tags map[string]string) {
 	for k, v := range c.tags {
 		tags[k] = v
 	}
-}
-
-func (c *awsCloudImplementation) FindELBByNameTag(findNameTag string) (*elbtypes.LoadBalancerDescription, error) {
-	return findELBByNameTag(c, findNameTag)
-}
-
-func findELBByNameTag(c AWSCloud, findNameTag string) (*elbtypes.LoadBalancerDescription, error) {
-	ctx := context.TODO()
-	// TODO: Any way around this?
-	klog.V(2).Infof("Listing all ELBs for findLoadBalancerByNameTag")
-
-	request := &elb.DescribeLoadBalancersInput{}
-	// ELB DescribeTags has a limit of 20 names, so we set the page size here to 20 also
-	request.PageSize = aws.Int32(20)
-
-	var found []elbtypes.LoadBalancerDescription
-
-	paginator := elb.NewDescribeLoadBalancersPaginator(c.ELB(), request)
-	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("error describing LoadBalancers: %w", err)
-		}
-		if len(page.LoadBalancerDescriptions) == 0 {
-			continue
-		}
-
-		// TODO: Filter by cluster?
-
-		var names []string
-		nameToELB := make(map[string]elbtypes.LoadBalancerDescription)
-		for _, elb := range page.LoadBalancerDescriptions {
-			name := aws.ToString(elb.LoadBalancerName)
-			nameToELB[name] = elb
-			names = append(names, name)
-		}
-
-		tagMap, err := c.DescribeELBTags(names)
-		if err != nil {
-			return nil, fmt.Errorf("error describing LoadBalancer tags: %w", err)
-		}
-
-		for loadBalancerName, tags := range tagMap {
-			name, foundNameTag := FindELBTag(tags, "Name")
-			if !foundNameTag || name != findNameTag {
-				continue
-			}
-
-			elb := nameToELB[loadBalancerName]
-			found = append(found, elb)
-		}
-	}
-
-	if len(found) == 0 {
-		return nil, nil
-	}
-
-	if len(found) != 1 {
-		return nil, fmt.Errorf("Found multiple ELBs with Name %q", findNameTag)
-	}
-
-	return &found[0], nil
-}
-
-func (c *awsCloudImplementation) DescribeELBTags(loadBalancerNames []string) (map[string][]elbtypes.Tag, error) {
-	return describeELBTags(c, loadBalancerNames)
-}
-
-func describeELBTags(c AWSCloud, loadBalancerNames []string) (map[string][]elbtypes.Tag, error) {
-	ctx := context.TODO()
-	// TODO: Filter by cluster?
-
-	request := &elb.DescribeTagsInput{}
-	request.LoadBalancerNames = loadBalancerNames
-
-	// TODO: Cache?
-	klog.V(2).Infof("Querying ELB tags for %s", loadBalancerNames)
-	response, err := c.ELB().DescribeTags(ctx, request)
-	if err != nil {
-		return nil, err
-	}
-
-	tagMap := make(map[string][]elbtypes.Tag)
-	for _, tagset := range response.TagDescriptions {
-		tagMap[aws.ToString(tagset.LoadBalancerName)] = tagset.Tags
-	}
-	return tagMap, nil
 }
 
 func FindLatestELBV2ByNameTag(loadBalancers []*LoadBalancerInfo, findNameTag string) *LoadBalancerInfo {
@@ -2131,14 +2093,7 @@ func findDNSName(cloud AWSCloud, cluster *kops.Cluster) (string, error) {
 	if cluster.Spec.API.LoadBalancer == nil {
 		return "", nil
 	}
-	switch cluster.Spec.API.LoadBalancer.Class {
-	case kops.LoadBalancerClassClassic:
-		if lb, err := cloud.FindELBByNameTag(name); err != nil {
-			return "", fmt.Errorf("error looking for AWS ELB: %v", err)
-		} else if lb != nil {
-			return aws.ToString(lb.DNSName), nil
-		}
-	case kops.LoadBalancerClassNetwork:
+	if cluster.Spec.API.LoadBalancer.Class == kops.LoadBalancerClassNetwork {
 		allLoadBalancers, err := ListELBV2LoadBalancers(ctx, cloud)
 		if err != nil {
 			return "", fmt.Errorf("looking for AWS NLB: %w", err)
@@ -2322,44 +2277,4 @@ func GetRolesInInstanceProfile(c AWSCloud, profileName string) ([]string, error)
 		roleNames = append(roleNames, *role.RoleName)
 	}
 	return roleNames, nil
-}
-
-// GetInstanceCertificateNames returns the instance hostname and addresses that should go into certificates.
-// The first value is the node name and any additional values are the DNS name and IP addresses.
-func GetInstanceCertificateNames(instances *ec2.DescribeInstancesOutput) (addrs []string, err error) {
-	if len(instances.Reservations) != 1 {
-		return nil, fmt.Errorf("too many reservations returned for the single instance-id")
-	}
-
-	if len(instances.Reservations[0].Instances) != 1 {
-		return nil, fmt.Errorf("too many instances returned for the single instance-id")
-	}
-
-	instance := instances.Reservations[0].Instances[0]
-
-	addrs = append(addrs, *instance.InstanceId)
-
-	if instance.PrivateDnsName != nil {
-		addrs = append(addrs, *instance.PrivateDnsName)
-	}
-
-	// We only use data for the first interface, and only the first IP
-	for _, iface := range instance.NetworkInterfaces {
-		if iface.Attachment == nil {
-			continue
-		}
-		if *iface.Attachment.DeviceIndex != 0 {
-			continue
-		}
-		if iface.PrivateIpAddress != nil {
-			addrs = append(addrs, *iface.PrivateIpAddress)
-		}
-		if len(iface.Ipv6Addresses) > 0 {
-			addrs = append(addrs, *iface.Ipv6Addresses[0].Ipv6Address)
-		}
-		if iface.Association != nil && iface.Association.PublicIp != nil {
-			addrs = append(addrs, *iface.Association.PublicIp)
-		}
-	}
-	return addrs, nil
 }

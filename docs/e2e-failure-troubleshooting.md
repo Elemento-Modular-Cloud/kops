@@ -22,7 +22,7 @@ Each job is annotated with `test.kops.k8s.io/*` keys in its Prow config that des
 |---|---|---|
 | Cloud provider | `test.kops.k8s.io/cloud` | aws, gce, digitalocean, azure |
 | OS distribution | `test.kops.k8s.io/distro` | al2023, deb11, deb12, flatcar, rhel9, rocky9, u2404 |
-| Networking plugin | `test.kops.k8s.io/networking` | cilium, calico, amazonvpc, kubenet, kopeio, flannel, kuberouter, cilium-eni, kindnet |
+| Networking plugin | `test.kops.k8s.io/networking` | cilium, calico, amazonvpc, kubenet, flannel, kuberouter, cilium-eni, kindnet |
 | Kubernetes version | `test.kops.k8s.io/k8s_version` | ci, stable, 1.32, 1.33, 1.34 |
 | kops version | `test.kops.k8s.io/kops_version` | latest, specific version markers |
 
@@ -117,7 +117,6 @@ Each build directory contains the following hierarchy:
         ├── containerd.log     # Container runtime log
         ├── kube-proxy.log     # kube-proxy log
         ├── kops-configuration.log  # kops node configuration service (nodeup)
-        ├── protokube.log      # protokube service
         ├── node-problem-detector.log
         ├── docker.log         # Docker service (if applicable)
         │
@@ -138,6 +137,10 @@ Each build directory contains the following hierarchy:
         ├── ip-rules.log       # ip rule list
         ├── ip-link.log        # ip -s link
         ├── netstat.log        # ss -s (socket statistics)
+        ├── bgp-protocols.log  # birdcl show protocols all (Calico only)
+        ├── bird.cfg           # confd-generated BIRD config (Calico only)
+        ├── bgp-sockets.log    # TCP sockets on port 179 (Calico only)
+        ├── bgp-conntrack.log  # conntrack entries for port 179 (Calico only)
         │
         │   # System state:
         ├── etchosts           # /etc/hosts
@@ -218,7 +221,7 @@ Use this priority order for investigating per-node logs in the `{node-name}/` di
 1. **`journal.log`** — Full systemd journal with kubelet, networking, and service errors
 2. **`kubelet.log`** — Kubelet-specific issues (pod scheduling, volume mounts, node registration)
 3. **`kube-apiserver.log`**, **`kube-controller-manager.log`** — Control plane issues (control plane nodes only)
-4. **Other service logs** — containerd.log, kube-proxy.log, protokube.log, kops-configuration.log
+4. **Other service logs** — containerd.log, kube-proxy.log, kops-configuration.log
 
 ### Step 6: Check networking state
 

@@ -86,9 +86,9 @@ func (b *AutoscalingGroupModelBuilder) buildInstanceTemplate(c *fi.CloudupModelB
 			return nil, err
 		}
 
-		HasExternalIP := fi.PtrTo(false)
+		HasExternalIP := new(false)
 		if subnet.Type == kops.SubnetTypePublic || subnet.Type == kops.SubnetTypeUtility || ig.IsBastion() {
-			HasExternalIP = fi.PtrTo(true)
+			HasExternalIP = new(true)
 		}
 		if ig.Spec.AssociatePublicIP != nil {
 			HasExternalIP = ig.Spec.AssociatePublicIP
@@ -104,7 +104,7 @@ func (b *AutoscalingGroupModelBuilder) buildInstanceTemplate(c *fi.CloudupModelB
 			BootDiskSizeGB: i64(int64(volumeSize)),
 			BootDiskImage:  s(ig.Spec.Image),
 
-			Preemptible:          fi.PtrTo(fi.ValueOf(ig.Spec.GCPProvisioningModel) == "SPOT"),
+			Preemptible:          new(fi.ValueOf(ig.Spec.GCPProvisioningModel) == "SPOT"),
 			GCPProvisioningModel: ig.Spec.GCPProvisioningModel,
 
 			HasExternalIP: HasExternalIP,
@@ -198,9 +198,10 @@ func (b *AutoscalingGroupModelBuilder) buildInstanceTemplate(c *fi.CloudupModelB
 		}
 
 		if len(b.SSHPublicKeys) > 0 {
+			sshUser := gce.SSHUsernameForImage(ig.Spec.Image)
 			var gFmtKeys []string
 			for _, key := range b.SSHPublicKeys {
-				gFmtKeys = append(gFmtKeys, fmt.Sprintf("%s: %s", fi.SecretNameSSHPrimary, key))
+				gFmtKeys = append(gFmtKeys, fmt.Sprintf("%s: %s", sshUser, key))
 			}
 
 			t.Metadata["ssh-keys"] = fi.NewStringResource(strings.Join(gFmtKeys, "\n"))
@@ -223,10 +224,21 @@ func (b *AutoscalingGroupModelBuilder) buildInstanceTemplate(c *fi.CloudupModelB
 
 		case kops.InstanceGroupRoleBastion:
 			t.Tags = append(t.Tags, b.GCETagForRole(kops.InstanceGroupRoleBastion))
+
+		case kops.InstanceGroupRoleEtcd:
+			t.Scopes = append(t.Scopes, "https://www.googleapis.com/auth/ndev.clouddns.readwrite")
+			t.Tags = append(t.Tags, b.GCETagForRole(kops.InstanceGroupRoleEtcd))
+
+		case kops.InstanceGroupRoleScheduler:
+			t.Tags = append(t.Tags, b.GCETagForRole(kops.InstanceGroupRoleScheduler))
+
+		case kops.InstanceGroupRoleKubeControllerManager:
+			t.Scopes = append(t.Scopes, "https://www.googleapis.com/auth/ndev.clouddns.readwrite")
+			t.Tags = append(t.Tags, b.GCETagForRole(kops.InstanceGroupRoleKubeControllerManager))
 		}
 
 		if gce.UsesIPAliases(b.Cluster) {
-			t.CanIPForward = fi.PtrTo(false)
+			t.CanIPForward = new(false)
 
 			nodeCIDRMaskSize := int32(24)
 			if b.Cluster.Spec.KubeControllerManager.NodeCIDRMaskSize != nil {
@@ -236,7 +248,7 @@ func (b *AutoscalingGroupModelBuilder) buildInstanceTemplate(c *fi.CloudupModelB
 				b.NameForIPAliasRange("pods"): fmt.Sprintf("/%d", nodeCIDRMaskSize),
 			}
 		} else {
-			t.CanIPForward = fi.PtrTo(true)
+			t.CanIPForward = new(true)
 		}
 		t.Subnet = b.LinkToSubnet(subnet)
 
@@ -327,7 +339,7 @@ func SplitCountAcrossZones(count int, zones []string) map[string]int {
 
 func (b *AutoscalingGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	clusterHasApiServerOnly := false
-	for _, ig := range b.InstanceGroups {
+	for _, ig := range b.AllInstanceGroups {
 		if ig.IsAPIServerOnly() {
 			clusterHasApiServerOnly = true
 			break
@@ -366,7 +378,7 @@ func (b *AutoscalingGroupModelBuilder) Build(c *fi.CloudupModelBuilderContext) e
 				Name:                        s(name),
 				Lifecycle:                   b.Lifecycle,
 				Zone:                        s(zone),
-				TargetSize:                  fi.PtrTo(int64(targetSize)),
+				TargetSize:                  new(int64(targetSize)),
 				UpdatePolicy:                &gcetasks.UpdatePolicy{MinimalAction: "REPLACE", Type: "OPPORTUNISTIC"},
 				BaseInstanceName:            s(ig.ObjectMeta.Name),
 				InstanceTemplate:            instanceTemplate,

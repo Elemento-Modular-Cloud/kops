@@ -86,11 +86,11 @@ func (t *Tester) setSkipRegexFlag() error {
 		// https://github.com/kubernetes/kubernetes/blob/418ae605ec1b788d43bff7ac44af66d8b669b833/test/e2e/network/networking.go#L135
 		skipRegex += "|should.check.kube-proxy.urls"
 
-		if k8sVersion.Minor < 38 {
+		if k8sVersion.Minor < 39 {
 			// Cilium SNATs the client source IP to a pod IP instead of preserving it, so it fails the
 			// externalTrafficPolicy=Local for type=NodePort test. This test passes on every other CNI,
 			// so it stays gated to Cilium.
-			// < 38 so we look at this again
+			// < 39 so we look at this again
 			skipRegex += "|Services.should.support.externalTrafficPolicy.Local.for.type.NodePort"
 		}
 	} else if networking.KubeRouter != nil {
@@ -102,21 +102,24 @@ func (t *Tester) setSkipRegexFlag() error {
 	// The "implement NodePort and HealthCheckNodePort correctly when ExternalTrafficPolicy changes"
 	// test requires externalTrafficPolicy=Local source-IP preservation, which is broken on these
 	// CNIs: the client IP is SNATed to a pod IP instead of being preserved (kube-router instead
-	// times out reaching the local endpoint). Confirmed failing on cilium, flannel, kopeio and
+	// times out reaching the local endpoint). Confirmed failing on cilium, flannel and
 	// kube-router on all clouds, and on calico on GCE and Azure, where the underlay cannot route
 	// the pod CIDR so calico encapsulates inter-node pod traffic (IPIP tunl0 on GCE, VXLAN
 	// vxlan.calico on Azure) and the masquerade rewrites the source to the node's tunnel address.
 	// Calico preserves the source IP only on AWS, where kOps disables the source/dest check and
 	// routes pod traffic natively. amazon-vpc and kindnet preserve it and keep running the test.
-	// < 38 so we look at this again
-	if k8sVersion.Minor < 38 &&
-		(networking.Cilium != nil || networking.Flannel != nil || networking.Kopeio != nil || networking.KubeRouter != nil ||
+	// < 39 so we look at this again
+	if k8sVersion.Minor < 39 &&
+		(networking.Cilium != nil || networking.Flannel != nil || networking.KubeRouter != nil ||
 			(networking.Calico != nil && (cluster.Spec.LegacyCloudProvider == "gce" || cluster.Spec.LegacyCloudProvider == "azure"))) {
 		skipRegex += "|Services.should.implement.NodePort.and.HealthCheckNodePort.correctly.when.ExternalTrafficPolicy.changes"
 	}
 
 	if cluster.Spec.LegacyCloudProvider == "digitalocean" {
 		skipRegex += "|Services.should.respect.internalTrafficPolicy=Local.Pod.and.Node,.to.Pod"
+		// The metrics grabber scrapes one kube-controller-manager pod picked by name, so with
+		// several control planes it usually misses the leader and reads an empty metric set.
+		skipRegex += "|\\[sig-storage\\].Volume.metrics"
 	}
 
 	if cluster.Spec.LegacyCloudProvider == "azure" {
@@ -128,6 +131,15 @@ func (t *Tester) setSkipRegexFlag() error {
 		skipRegex += "|should.resize.volume.when.PVC.is.edited.while.pod.is.using.it"
 		skipRegex += "|should.provision.storage.with.any.volume.data.source"
 		skipRegex += "|should.mount.multiple.PV.pointing.to.the.same.storage.on.the.same.node"
+		// Azure serializes disk attach/detach per VM in ARM, and under the suite's high
+		// parallelism a single detach can take minutes, so the attach-cycle-heavy azuredisk
+		// external-storage patterns time out on pod start or cleanup: data readback (detach +
+		// reattach mid-test), online/offline volume expansion, subPath pod restarts, and
+		// exec-after-attach. Skip only these families for the disk.csi.azure.com driver; the
+		// provisioning, topology, ephemeral, volumeMode and capacity specs still exercise
+		// attach/mount. Anchored to the driver so csi-hostpath/in-tree specs keep running.
+		// https://learn.microsoft.com/en-us/troubleshoot/azure/azure-kubernetes/storage/slow-attach-detach-operations-azure-disk
+		skipRegex += "|Driver:.disk.csi.azure.com.*(volumes.should.store.data|volume-expand|subPath|allow.exec)"
 	}
 
 	if cluster.Spec.LegacyCloudProvider == "gce" {
@@ -148,7 +160,12 @@ func (t *Tester) setSkipRegexFlag() error {
 
 	for _, subnet := range cluster.Spec.Subnets {
 		if subnet.Type == v1alpha2.SubnetTypePrivate || subnet.Type == v1alpha2.SubnetTypeDualStack {
-			skipRegex += "|SSH.should.SSH.to.all.nodes.and.run.commands"
+			// The test SSHes from the pod running the test binary to every node address reported
+			// by the API. Nodes in private subnets are only reachable through the bastion, and
+			// nodes in dual-stack/IPv6 clusters only report IPv6 addresses, which the IPv4-only
+			// Prow pod cannot reach at all. The framework then finds zero SSH-able hosts and the
+			// test fails with `dial tcp: missing address`.
+			skipRegex += "|should.SSH.to.all.nodes.and.run.commands"
 			break
 		}
 	}

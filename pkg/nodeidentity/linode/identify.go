@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/linode/linodego"
+	"github.com/linode/linodego/v2"
 	corev1 "k8s.io/api/core/v1"
 	expirationcache "k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
@@ -43,21 +43,24 @@ type linodeClient interface {
 	GetInstance(ctx context.Context, linodeID int) (*linodego.Instance, error)
 }
 
-// nodeIdentifier identifies a node from Linode (Akamai).
+// nodeIdentifier identifies a node from Akamai (Linode).
 type nodeIdentifier struct {
 	client       linodeClient
 	cache        expirationcache.Store
 	cacheEnabled bool
 }
 
-// New creates and returns a nodeidentity.Identifier for Nodes running on Linode (Akamai).
+// New creates and returns a nodeidentity.Identifier for Nodes running on Akamai (Linode).
 func New(cacheNodeidentityInfo bool) (nodeidentity.Identifier, error) {
 	accessToken := os.Getenv("LINODE_TOKEN")
 	if accessToken == "" {
 		return nil, fmt.Errorf("%s is required", "LINODE_TOKEN")
 	}
 
-	client := linodego.NewClient(nil)
+	client, err := linodego.NewClient(nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Linode client: %w", err)
+	}
 	client.SetUserAgent("kops/nodeidentity")
 	client.SetToken(accessToken)
 
@@ -68,7 +71,7 @@ func New(cacheNodeidentityInfo bool) (nodeidentity.Identifier, error) {
 	}, nil
 }
 
-// IdentifyNode queries Linode (Akamai) for the node identity information.
+// IdentifyNode queries Akamai (Linode) for the node identity information.
 func (i *nodeIdentifier) IdentifyNode(ctx context.Context, node *corev1.Node) (*nodeidentity.Info, error) {
 	providerID := node.Spec.ProviderID
 	if providerID == "" {
@@ -92,10 +95,10 @@ func (i *nodeIdentifier) IdentifyNode(ctx context.Context, node *corev1.Node) (*
 
 	instance, err := i.client.GetInstance(ctx, instanceNumericID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get info for Linode (Akamai) instance %q: %w", instanceID, err)
+		return nil, fmt.Errorf("failed to get info for Akamai (Linode) instance %q: %w", instanceID, err)
 	}
 	if instance == nil {
-		return nil, fmt.Errorf("failed to get info for Linode (Akamai) instance %q: empty response", instanceID)
+		return nil, fmt.Errorf("failed to get info for Akamai (Linode) instance %q: empty response", instanceID)
 	}
 
 	if !isExpectedInstanceStatus(instance.Status) {
@@ -153,7 +156,7 @@ func isExpectedInstanceStatus(status linodego.InstanceStatus) bool {
 	}
 }
 
-// buildLabelsFromTags converts Linode instance tags into Kubernetes node labels.
+// buildLabelsFromTags converts Akamai (Linode) instance tags into Kubernetes node labels.
 // It handles role tags (kops.k8s.io/instance-role) and direct label tags (kops.k8s.io/* and node-role.kubernetes.io/*).
 func buildLabelsFromTags(tags []string) map[string]string {
 	labels := map[string]string{}
@@ -174,7 +177,7 @@ func buildLabelsFromTags(tags []string) map[string]string {
 			case kops.InstanceGroupRoleAPIServer:
 				labels[nodelabels.RoleLabelAPIServer16] = ""
 			default:
-				klog.Warningf("Unknown node role %q for Linode (Akamai) instance", value)
+				klog.Warningf("Unknown node role %q for Akamai (Linode) instance", value)
 			}
 			continue
 		}

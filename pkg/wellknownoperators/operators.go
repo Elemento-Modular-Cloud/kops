@@ -27,7 +27,6 @@ import (
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/featureflag"
 	"k8s.io/kops/pkg/kubemanifest"
-	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/util/pkg/vfs"
 )
 
@@ -103,10 +102,10 @@ func (b *Builder) loadClusterPackage(u *unstructured.Unstructured) (*Package, er
 	addon := &Package{
 		Manifest: manifestBytes,
 		Spec: channelsapi.AddonSpec{
-			Name:     fi.PtrTo(operatorKey),
+			Name:     new(operatorKey),
 			Id:       id,
 			Selector: map[string]string{"k8s-addon": operatorKey},
-			Manifest: fi.PtrTo(location),
+			Manifest: new(location),
 		},
 	}
 	return addon, nil
@@ -117,57 +116,6 @@ func CreateAddons(channel *kops.Channel, kubernetesVersion *semver.Version, clus
 
 	if !featureflag.UseAddonOperators.Enabled() {
 		return addons, nil
-	}
-
-	if cluster.Spec.Networking.Kopeio != nil {
-		// TODO: Check that we haven't manually loaded a kopeio-networking operator
-		// TODO: Check that we haven't manually created a kopeio-networking CRD
-
-		{
-			operatorKey := "operator.networking.addons.kope.io"
-
-			operatorVersion, err := channel.GetPackageVersion(operatorKey, kubernetesVersion)
-			if err != nil {
-				return nil, err
-			}
-
-			metadata := map[string]interface{}{
-				"name": operatorKey,
-			}
-			spec := map[string]interface{}{
-				"version": operatorVersion.String(),
-			}
-
-			addonPackage := kubemanifest.NewObject(map[string]interface{}{
-				"apiVersion": "addons.x-k8s.io/v1alpha1",
-				"kind":       "ClusterPackage",
-				"metadata":   metadata,
-				"spec":       spec,
-			})
-			addons = append(addons, addonPackage)
-		}
-
-		{
-			key := "networking.addons.kope.io"
-			version, err := channel.GetPackageVersion(key, kubernetesVersion)
-			if err != nil {
-				return nil, err
-			}
-			metadata := map[string]interface{}{
-				"name": "networking",
-			}
-			spec := map[string]interface{}{
-				"version": version.String(),
-			}
-
-			crd := kubemanifest.NewObject(map[string]interface{}{
-				"apiVersion": "addons.kope.io/v1alpha1",
-				"kind":       "Networking",
-				"metadata":   metadata,
-				"spec":       spec,
-			})
-			addons = append(addons, crd)
-		}
 	}
 
 	{

@@ -12,10 +12,10 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
-NODEUP_URL_AMD64=https://artifacts.k8s.io/binaries/kops/1.34.0-beta.1/linux/amd64/nodeup,https://github.com/kubernetes/kops/releases/download/v1.34.0-beta.1/nodeup-linux-amd64
-NODEUP_HASH_AMD64=c86e072f622b91546b7b3f3cb1a0f8a131e48b966ad018a0ac1520ceedf37725
-NODEUP_URL_ARM64=https://artifacts.k8s.io/binaries/kops/1.34.0-beta.1/linux/arm64/nodeup,https://github.com/kubernetes/kops/releases/download/v1.34.0-beta.1/nodeup-linux-arm64
-NODEUP_HASH_ARM64=64a9a9510538a449e85d05e13e3cd98b80377d68a673447c26821d40f00f0075
+NODEUP_URL_AMD64=https://artifacts.k8s.io/binaries/kops/1.37.0-beta.1/linux/amd64/nodeup.xz,https://github.com/kubernetes/kops/releases/download/v1.37.0-beta.1/nodeup-linux-amd64.xz
+NODEUP_HASH_AMD64=a899417ddb4fa0bba91c07c8d10b10747088a1067ca3dfa83097c1720eeda9ea
+NODEUP_URL_ARM64=https://artifacts.k8s.io/binaries/kops/1.37.0-beta.1/linux/arm64/nodeup.xz,https://github.com/kubernetes/kops/releases/download/v1.37.0-beta.1/nodeup-linux-arm64.xz
+NODEUP_HASH_ARM64=c2e424da38473c3ee1b9309e84e4167857fe8c01ea0df0328f49f6472aebac0e
 
 export AWS_REGION=us-test-1
 
@@ -39,7 +39,7 @@ function ensure-install-dir() {
   cd ${INSTALL_DIR}
 }
 
-# Retry a download until we get it. args: name, sha, urls
+# Retry until a compressed archive is downloaded, validated, and decompressed. args: name, sha, urls
 download-or-bust() {
   echo "== Downloading $1 with hash $2 from $3 =="
   local -r file="$1"
@@ -47,36 +47,26 @@ download-or-bust() {
   local -a urls
   IFS=, read -r -a urls <<< "$3"
 
-  if [[ -f "${file}" ]]; then
-    if ! validate-hash "${file}" "${hash}"; then
-      rm -f "${file}"
-    else
-      return 0
-    fi
-  fi
-
   while true; do
     for url in "${urls[@]}"; do
-      commands=(
-        "curl -f --compressed -Lo ${file} --connect-timeout 20 --retry 6 --retry-delay 10"
-        "wget --compression=auto -O ${file} --connect-timeout=20 --tries=6 --wait=10"
-        "curl -f -Lo ${file} --connect-timeout 20 --retry 6 --retry-delay 10"
-        "wget -O ${file} --connect-timeout=20 --tries=6 --wait=10"
-      )
-      for cmd in "${commands[@]}"; do
-        echo "== Downloading ${url} using ${cmd} =="
-        if ! (${cmd} "${url}"); then
-          echo "== Failed to download ${url} using ${cmd} =="
-          continue
-        fi
-        if ! validate-hash "${file}" "${hash}"; then
-          echo "== Failed to validate hash for ${url} =="
-          rm -f "${file}"
-        else
-          echo "== Downloaded ${url} with hash ${hash} =="
-          return 0
-        fi
-      done
+      echo "== Downloading ${url} =="
+      rm -f "${file}.xz"
+      if ! curl -f -Lo "${file}.xz" --connect-timeout 20 --retry 6 --retry-delay 10 "${url}"; then
+        echo "== Failed to download ${url} =="
+        rm -f "${file}.xz"
+      elif ! validate-hash "${file}.xz" "${hash}"; then
+        echo "== Failed to validate compressed hash for ${url} =="
+        rm -f "${file}.xz"
+      elif ! xz -df "${file}.xz"; then
+        echo "== Failed to decompress ${url} =="
+        rm -f "${file}" "${file}.xz"
+      elif ! chmod +x "${file}"; then
+        echo "== Failed to make ${file} executable =="
+        rm -f "${file}"
+      else
+        echo "== Downloaded ${url}, validated hash ${hash} and decompressed =="
+        return 0
+      fi
     done
 
     echo "== All downloads failed; sleeping before retrying =="
@@ -115,8 +105,6 @@ function download-release() {
   cd ${INSTALL_DIR}/bin
   download-or-bust nodeup "${NODEUP_HASH}" "${NODEUP_URL}"
 
-  chmod +x nodeup
-
   echo "== Running nodeup =="
   # We can't run in the foreground because of https://github.com/docker/docker/issues/23793
   ( cd ${INSTALL_DIR}/bin; ./nodeup --install-systemd-unit --conf=${INSTALL_DIR}/conf/kube_env.yaml --v=8  )
@@ -129,7 +117,7 @@ function download-release() {
 echo "== nodeup node config starting =="
 ensure-install-dir
 
-echo "H4sIAAAAAAAA/6yUS4+ySBiF9/4K9qZbREUw6cVbUCDYIMjto3eIgCCX4qKlZn78pOlJvkymM5lMmgWLc1LP4s2TI5XN9WR1zS0/Jd2GiWg/kcprPySdGVXJhombinRJ378m96giZfIaN9VEauo0z5ykuyXdZsIwEkhJN+RpHkdD0m+YPyYMwzAvnx/CqmYyEj64mqJJ4OIxHXtD09CxkCQ45BlQDUGmGQoBs0WyYDqywIHnGMCqktOqjnZcyDZGEvXAQNldKcAbISgzfQSGKwfDPKz8x7Hy2Y9fxhBymG7PsWkUmJpPWBhyTPcy0OAze/7ORshYFBAah5AqEMq+bcuYzrtToJdxtSpPqv98D8yzoVAq26G+az608y02wcYI2SCPEIcCdUBHYCra4tmx7kW4dH0g3GiRGuSp78vAFvg5f1MXoRVxLWTa2l82O5r67EPL5iOkGKZbPl1aM3qxwHItNz0QUXsIzRZjhbISUAwQmZKBgcpZKPsH1gJ7O0Ngy5Bh9euwIKgw906YYjSjtmKAgSAV6NYeH+wRCrFiqounX7jxe6lTudeXs50o++tdc/bgL8g/Lw8sBiSc2EUacnQd7Ei658RW48QVuXLSMo5EyH11TzInFkbIUNl9y3fxfVi40+64EkTLH55sRWfxzr3vL3y25SRJmj626YOjb2+/vcGm/L01/9eqW+VE7B7KsPq1+1mrXIP73qrP4sesMhReWUYfJ5KwB488HpcIkYB+SDU9puk5VPd0mvb84fR+9dq1LZmVXs1wux4hQbB/5kYo55roHOOSyFPeznXWXOCWEN/7QavetYrwcCgsGbZ8fdamfRz4w8IWj/W/WuXb/n1leMMVtCSxrpbYrOb3gbicwyu3NBf0pSbd6/JLTRGtPZm79ufYV6whSpp3UU2vQhQudzpK2jZbNUW5bKtD7Z6L/2JVPy5Z/zllL8x5GEi/mc0uDelf4qYeuqYsk+41r4ekq6Py9btJ3CxEQZhNtLofojpO1K65kq8BrZtT0v+9ODRlsmHM5pRMPn9X8rWn26g/bxjNop6ptlPk+QQGSURcBsVzudrr6kXHa3HHZ5Y/u80umL5N/gQAAP//AQAA//8Bv0VLvgUAAA==" | base64 -d | gzip -d > conf/kube_env.yaml
+echo "H4sIAAAAAAAA/6yUS4+qSBzF934K9qZbREUwuYs/xVOblyBceodYIMqjeFlq5sNP5E5yM5nOZDJpFizOSf1SqfxyUFEPJ6etb/kJtxsmpt0EFUPX49aKS7xhkrokLe66d3yPS1Lg96QuJ6iu0jzzcHvD7WbCMAgQbvs8zZO4x92G+WPCMAzz9vokRTMsBil731ANBL7yCt/G3jQM6XhBCPZ5BtSQIDNMlYDVSLJgebLAwcEzgdWQ12iecVzIriIhegBTyu7qBQ4jRMqsQALTl8N+HpXB41gG7OdPs484hernxDIvCrWesDDlhNoy0PCVPX9nI2QsLhCZ+4iqEMmB68oKnbencFsk5ao4acHzI7TOpkqp7EbbXf1pnG+JBa4iSS7II8SjQD3YSmCpxuLZsv5VuLZdKNzoJTXJc2sXoSvwc/6mLSIn5hrIjHWwrHc0DdiHkc1HyKWf6ny6dGb06oDjO366J6LxEGpdUVTKIqAKQGwhUwEqZ5Ec7FkHXH0mgStDpmgjxARBg/nhpFBFmlFXNcGUIBWo7o4HbEmKFNXSFs/g4icfxZbK3XY524lysN7V5wP8BfnnywOrgCSc2EUacXQd7khqc2JjcOKKDBxaJrEIeaDZJPMSYYT0pds1fJvc+4U/bY8rQXSC/smWdJbs/Lt95TOdQwhNH3r64OiPH7+9USz5a2v+r1W30otZG4qo/Ln7Xqt8k/vaqlfxbVaZKq8u488Twez+QB6PayyRkH6iih7T9BxpNp2mHb8/fQyHZu0iq9yWM6VZjzcJQ/uZm5GcG6J3TAoiT3k337LWQmkICQ7faNWHURIe9hdHBp2vzsa0S8KgX7jisfpXqwI3uK/MQz+AgbEzOGK9mt974nMer97SXNguDXSvil9qitL6IHNDd04C1eljXH+IWjoIcbTcbSXcNNmqvhTLptxX/vnyX6zqxiXrXlP2xpz7nnSb2exak+4tqau+rYsCt+951eO2iov3ryZxsxAFYTYxqq6PqwRrbT2QXwNa1Sfc/b3Y1wXeMFZ9wpPXbyC/9lSPu/OG0dGg0TTicFb5UtjZYlDodBaZN1VNj+rARUBvK7uIKcl+TP4EAAD//wMA5dQijr4FAAA=" | base64 -d | gzip -d > conf/kube_env.yaml
 
 download-release
 echo "== nodeup node config done =="

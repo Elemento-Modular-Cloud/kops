@@ -13248,6 +13248,9 @@ spec:
           args:
           - --v=2
           - --leader-election-namespace=kube-system
+          {{ range $key, $value := .CertManager.CAInjectorFeatureGates }}
+          - --feature-gates={{ $key }}={{ $value }}
+          {{ end }}
           ports:
           - containerPort: 9402
             name: http-metrics
@@ -13270,6 +13273,9 @@ spec:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
             - matchExpressions:
+              - key: node-role.kops.k8s.io/cert-manager
+                operator: Exists
+            - matchExpressions:
               - key: node-role.kubernetes.io/control-plane
                 operator: Exists
             - matchExpressions:
@@ -13279,6 +13285,8 @@ spec:
         - key: node-role.kubernetes.io/control-plane
           operator: Exists
         - key: node-role.kubernetes.io/master
+          operator: Exists
+        - key: node-role.kubernetes.io/api-server
           operator: Exists
 ---
 # Source: cert-manager/templates/deployment.yaml
@@ -13391,6 +13399,9 @@ spec:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
             - matchExpressions:
+              - key: node-role.kops.k8s.io/cert-manager
+                operator: Exists
+            - matchExpressions:
               - key: node-role.kubernetes.io/control-plane
                 operator: Exists
             - matchExpressions:
@@ -13400,6 +13411,8 @@ spec:
         - key: node-role.kubernetes.io/control-plane
           operator: Exists
         - key: node-role.kubernetes.io/master
+          operator: Exists
+        - key: node-role.kubernetes.io/api-server
           operator: Exists
 ---
 # Source: cert-manager/templates/webhook-deployment.yaml
@@ -13453,6 +13466,9 @@ spec:
           - --dynamic-serving-dns-names=cert-manager-webhook
           - --dynamic-serving-dns-names=cert-manager-webhook.$(POD_NAMESPACE)
           - --dynamic-serving-dns-names=cert-manager-webhook.$(POD_NAMESPACE).svc
+          {{ range $key, $value := .CertManager.WebhookFeatureGates }}
+          - --feature-gates={{ $key }}={{ $value }}
+          {{ end }}
           ports:
           - name: https
             protocol: TCP
@@ -13501,6 +13517,9 @@ spec:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
             - matchExpressions:
+              - key: node-role.kops.k8s.io/cert-manager
+                operator: Exists
+            - matchExpressions:
               - key: node-role.kubernetes.io/control-plane
                 operator: Exists
             - matchExpressions:
@@ -13510,6 +13529,8 @@ spec:
         - key: node-role.kubernetes.io/control-plane
           operator: Exists
         - key: node-role.kubernetes.io/master
+          operator: Exists
+        - key: node-role.kubernetes.io/api-server
           operator: Exists
 ---
 # Source: cert-manager/templates/webhook-mutating-webhook.yaml

@@ -14,7 +14,7 @@ locals {
   subnet_us-test-1a_id         = "subnet-12345678"
   vpc_cidr_block               = data.aws_vpc.sharedsubnet-example-com.cidr_block
   vpc_id                       = "vpc-12345678"
-  vpc_ipv6_cidr_block          = data.aws_vpc.sharedsubnet-example-com.ipv6_cidr_block
+  vpc_ipv6_cidr_block          = element(concat([for a in data.aws_vpc.sharedsubnet-example-com.ipv6_cidr_block_associations : a.ipv6_cidr_block if a.state == "associated"], [""]), 0)
   vpc_ipv6_cidr_length         = local.vpc_ipv6_cidr_block == "" ? null : tonumber(regex(".*/(\\d+)", local.vpc_ipv6_cidr_block)[0])
 }
 
@@ -79,7 +79,7 @@ output "vpc_id" {
 }
 
 output "vpc_ipv6_cidr_block" {
-  value = data.aws_vpc.sharedsubnet-example-com.ipv6_cidr_block
+  value = element(concat([for a in data.aws_vpc.sharedsubnet-example-com.ipv6_cidr_block_associations : a.ipv6_cidr_block if a.state == "associated"], [""]), 0)
 }
 
 output "vpc_ipv6_cidr_length" {
@@ -364,12 +364,6 @@ resource "aws_iam_role_policy" "masters-sharedsubnet-example-com" {
   name   = "masters.sharedsubnet.example.com"
   policy = file("${path.module}/data/aws_iam_role_policy_masters.sharedsubnet.example.com_policy")
   role   = aws_iam_role.masters-sharedsubnet-example-com.name
-}
-
-resource "aws_iam_role_policy" "nodes-sharedsubnet-example-com" {
-  name   = "nodes.sharedsubnet.example.com"
-  policy = file("${path.module}/data/aws_iam_role_policy_nodes.sharedsubnet.example.com_policy")
-  role   = aws_iam_role.nodes-sharedsubnet-example-com.name
 }
 
 resource "aws_key_pair" "kubernetes-sharedsubnet-example-com-c4a6ed9aa889b9e2c39cd663eb9c7157" {
@@ -897,7 +891,7 @@ terraform {
     aws = {
       "configuration_aliases" = [aws.files]
       "source"                = "hashicorp/aws"
-      "version"               = ">= 5.0.0"
+      "version"               = ">= 6.57.1"
     }
   }
 }

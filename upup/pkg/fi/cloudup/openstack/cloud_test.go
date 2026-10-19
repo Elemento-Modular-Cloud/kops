@@ -38,76 +38,6 @@ import (
 	"k8s.io/kops/util/pkg/vfs"
 )
 
-func Test_OpenstackCloud_MakeCloud(t *testing.T) {
-	baseCloudConfigWithBlockStorage := []string{
-		"auth-url=\"\"",
-		"username=\"\"",
-		"password=\"\"",
-		"region=\"\"",
-		"tenant-id=\"\"",
-		"tenant-name=\"\"",
-		"domain-name=\"\"",
-		"domain-id=\"\"",
-		"application-credential-id=\"\"",
-		"application-credential-secret=\"\"",
-		"",
-		"[BlockStorage]",
-		"bs-version=",
-		"ignore-volume-az=false",
-	}
-
-	tests := []struct {
-		desc                string
-		cluster             *kops.Cluster
-		expectedCloudConfig []string
-	}{
-		{
-			desc: "Ignore volume microversion is set to false when not configured",
-			cluster: &kops.Cluster{
-				Spec: kops.ClusterSpec{
-					CloudProvider: kops.CloudProviderSpec{
-						Openstack: &kops.OpenstackSpec{
-							BlockStorage: &kops.OpenstackBlockStorageConfig{},
-						},
-					},
-				},
-			},
-			expectedCloudConfig: append(baseCloudConfigWithBlockStorage,
-				"ignore-volume-microversion=false",
-				"",
-			),
-		},
-		{
-			desc: "Ignore volume microversion is set to configured value",
-			cluster: &kops.Cluster{
-				Spec: kops.ClusterSpec{
-					CloudProvider: kops.CloudProviderSpec{
-						Openstack: &kops.OpenstackSpec{
-							BlockStorage: &kops.OpenstackBlockStorageConfig{
-								IgnoreVolumeMicroVersion: fi.PtrTo(true),
-							},
-						},
-					},
-				},
-			},
-			expectedCloudConfig: append(baseCloudConfigWithBlockStorage,
-				"ignore-volume-microversion=true",
-				"",
-			),
-		},
-	}
-
-	for _, testCase := range tests {
-		t.Run(testCase.desc, func(t *testing.T) {
-			actualCloudConfig := MakeCloudConfig(testCase.cluster.Spec.CloudProvider.Openstack)
-
-			if !reflect.DeepEqual(actualCloudConfig, testCase.expectedCloudConfig) {
-				t.Errorf("Ingress status differ: expected\n%+#v\n\tgot:\n%+#v\n", testCase.expectedCloudConfig, actualCloudConfig)
-			}
-		})
-	}
-}
-
 func Test_OpenstackCloud_GetApiIngressStatus(t *testing.T) {
 	tests := []struct {
 		desc                 string
@@ -583,7 +513,7 @@ func Test_BuildClients(t *testing.T) {
 			name: "When octavia is set, but no router, an error should be returned",
 			spec: &kops.OpenstackSpec{
 				Loadbalancer: &kops.OpenstackLoadbalancerConfig{
-					UseOctavia: fi.PtrTo(true),
+					UseOctavia: new(true),
 				},
 			},
 			expectLB:     true,
@@ -594,7 +524,7 @@ func Test_BuildClients(t *testing.T) {
 			name: "When octavia is set, and there is a router, a load-balancer should be returned",
 			spec: &kops.OpenstackSpec{
 				Loadbalancer: &kops.OpenstackLoadbalancerConfig{
-					UseOctavia: fi.PtrTo(true),
+					UseOctavia: new(true),
 				},
 				Router: &kops.OpenstackRouter{},
 			},
@@ -616,13 +546,13 @@ func Test_BuildClients(t *testing.T) {
 			name: "When router is set, but no LB, FIP support should be enabled",
 			spec: &kops.OpenstackSpec{
 				Router: &kops.OpenstackRouter{
-					ExternalNetwork: fi.PtrTo("some-ext-net"),
+					ExternalNetwork: new("some-ext-net"),
 				},
 			},
 			expectLB:              false,
 			expectedType:          "",
 			expectFloatingEnabled: true,
-			expectedExtNetName:    fi.PtrTo("some-ext-net"),
+			expectedExtNetName:    new("some-ext-net"),
 		}}
 
 	for _, g := range grid {

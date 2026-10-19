@@ -40,13 +40,6 @@ export KOPS
 
 export KOPS_RUN_TOO_NEW_VERSION=1
 
-if [[ -z "${AWS_SSH_PRIVATE_KEY_FILE-}" ]]; then
-    export AWS_SSH_PRIVATE_KEY_FILE="${HOME}/.ssh/id_rsa"
-fi
-if [[ -z "${AWS_SSH_PUBLIC_KEY_FILE-}" ]]; then
-    export AWS_SSH_PUBLIC_KEY_FILE="${HOME}/.ssh/id_rsa.pub"
-fi
-
 KUBETEST2="kubetest2 kops -v=2 --cloud-provider=${CLOUD_PROVIDER} --cluster-name=${CLUSTER_NAME:-} --kops-root=${REPO_ROOT}"
 if [[ -n "${ADMIN_ACCESS-}" ]]; then
   KUBETEST2="${KUBETEST2} --admin-access=${ADMIN_ACCESS}"
@@ -131,12 +124,6 @@ function kops-up() {
     fi
     if [[ -z "${K8S_VERSION-}" ]]; then
         K8S_VERSION="$(curl -fs -L https://dl.k8s.io/release/stable.txt)"
-    fi
-
-    # TODO: Switch scripts to use KOPS_CONTROL_PLANE_COUNT
-    if [[ -n "${KOPS_CONTROL_PLANE_SIZE:-}" ]]; then
-      echo "Recognized (deprecated) KOPS_CONTROL_PLANE_SIZE=${KOPS_CONTROL_PLANE_SIZE}, please set KOPS_CONTROL_PLANE_COUNT instead"
-      KOPS_CONTROL_PLANE_COUNT=${KOPS_CONTROL_PLANE_SIZE}
     fi
 
     if [[ -z "${ENV_FILE-}" ]]; then

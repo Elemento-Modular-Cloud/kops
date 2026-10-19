@@ -45,8 +45,8 @@ import (
 	"k8s.io/kops/pkg/rbac"
 	"k8s.io/kops/pkg/systemd"
 	"k8s.io/kops/upup/pkg/fi"
-	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
-	azurecloud "k8s.io/kops/upup/pkg/fi/cloudup/azure"
+	"k8s.io/kops/upup/pkg/fi/cloudup/azure/azuremetadata"
+	"k8s.io/kops/upup/pkg/fi/cloudup/do/dometadata"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
 	"k8s.io/kops/util/pkg/distributions"
 	kubeletv1 "k8s.io/kubelet/config/v1"
@@ -127,11 +127,21 @@ func (b *KubeletBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 			}
 			providerID = fmt.Sprintf("aws:///%s/%s", instanceIdentity.AvailabilityZone, instanceIdentity.InstanceID)
 		} else if b.CloudProvider() == kops.CloudProviderAzure {
-			metadata, err := azurecloud.QueryComputeInstanceMetadata(ctx)
+			metadata, err := azuremetadata.QueryComputeInstanceMetadata(ctx)
 			if err != nil {
 				return fmt.Errorf("error querying Azure instance metadata: %v", err)
 			}
 			providerID = "azure://" + metadata.ResourceID
+		} else if b.CloudProvider() == kops.CloudProviderDO {
+			// The DO CCM resolves nodes by provider ID; its name-based fallback does not match
+			// our IP-based node names.
+			dropletID, err := dometadata.GetDropletID()
+			if err != nil {
+				return fmt.Errorf("error querying DigitalOcean droplet ID: %w", err)
+			}
+			providerID = "digitalocean://" + dropletID
+		} else if b.CloudProvider() == kops.CloudProviderGCE {
+			// TODO
 		}
 
 		t, err := b.buildKubeletComponentConfig(kubeletConfig, providerID)
@@ -189,7 +199,7 @@ func (b *KubeletBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 
 		{
 			var kubeconfig fi.Resource
-			if b.HasAPIServer {
+			if b.canSignCertificates() {
 				kubeconfig, err = b.buildControlPlaneKubeletKubeconfig(c)
 			} else {
 				kubeconfig, err = b.BuildBootstrapKubeconfig("kubelet", c)
@@ -228,45 +238,49 @@ func (b *KubeletBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 		}
 	}
 
-	{
-		cgroup := kubeletConfig.KubeletCgroups
-		if cgroup != "" {
-			c.EnsureTask(b.buildCgroupService(cgroup))
+	// With the systemd cgroup driver, the cgroups that kubelet and containerd are placed in are systemd slices,
+	// which must exist as units. With the cgroupfs driver they are plain cgroupfs paths that the kubelet creates itself.
+	if kubeletConfig.CgroupDriver == "systemd" {
+		{
+			cgroup := kubeletConfig.KubeletCgroups
+			if cgroup != "" {
+				c.EnsureTask(b.buildCgroupService(cgroup))
+			}
+
+		}
+		{
+			cgroup := kubeletConfig.RuntimeCgroups
+			if cgroup != "" {
+				c.EnsureTask(b.buildCgroupService(cgroup))
+			}
+
+		}
+		/* Kubelet incorrectly interprets this value when CgroupDriver is systemd
+		See https://github.com/kubernetes/kubernetes/issues/101189
+		{
+			cgroup := kubeletConfig.KubeReservedCgroup
+			if cgroup != "" {
+				c.EnsureTask(b.buildCgroupService(cgroup))
+			}
+		}
+		*/
+
+		{
+			cgroup := kubeletConfig.SystemCgroups
+			if cgroup != "" {
+				c.EnsureTask(b.buildCgroupService(cgroup))
+			}
 		}
 
-	}
-	{
-		cgroup := kubeletConfig.RuntimeCgroups
-		if cgroup != "" {
-			c.EnsureTask(b.buildCgroupService(cgroup))
+		/* This suffers from the same issue as KubeReservedCgroup
+		{
+			cgroup := kubeletConfig.SystemReservedCgroup
+			if cgroup != "" {
+				c.EnsureTask(b.buildCgroupService(cgroup))
+			}
 		}
-
+		*/
 	}
-	/* Kubelet incorrectly interprets this value when CgroupDriver is systemd
-	See https://github.com/kubernetes/kubernetes/issues/101189
-	{
-		cgroup := kubeletConfig.KubeReservedCgroup
-		if cgroup != "" {
-			c.EnsureTask(b.buildCgroupService(cgroup))
-		}
-	}
-	*/
-
-	{
-		cgroup := kubeletConfig.SystemCgroups
-		if cgroup != "" {
-			c.EnsureTask(b.buildCgroupService(cgroup))
-		}
-	}
-
-	/* This suffers from the same issue as KubeReservedCgroup
-	{
-		cgroup := kubeletConfig.SystemReservedCgroup
-		if cgroup != "" {
-			c.EnsureTask(b.buildCgroupService(cgroup))
-		}
-	}
-	*/
 
 	c.AddTask(b.buildSystemdService())
 
@@ -576,14 +590,18 @@ func (b *KubeletBuilder) buildSystemdService() *nodetasks.Service {
 	manifest.Set("Service", "StartLimitInterval", "0")
 	manifest.Set("Service", "KillMode", "process")
 	manifest.Set("Service", "User", "root")
-	manifest.Set("Service", "CPUAccounting", "true")
+	// Enable the memory controller so kubelet can read stats for its own cgroup.
+	// CPU stats need no such opt-in on cgroup v2; systemd 258 dropped CPUAccounting=
+	// and later versions log a warning if the option is present.
 	manifest.Set("Service", "MemoryAccounting", "true")
 
 	manifest.Set("Install", "WantedBy", "multi-user.target")
 
-	cgroup := b.NodeupConfig.KubeletConfig.KubeletCgroups
-	if cgroup != "" {
-		manifest.Set("Service", "Slice", strings.Trim(cgroup, "/")+".slice")
+	if b.NodeupConfig.KubeletConfig.CgroupDriver == "systemd" {
+		cgroup := b.NodeupConfig.KubeletConfig.KubeletCgroups
+		if cgroup != "" {
+			manifest.Set("Service", "Slice", strings.Trim(cgroup, "/")+".slice")
+		}
 	}
 
 	manifestString := manifest.Render()
@@ -598,8 +616,8 @@ func (b *KubeletBuilder) buildSystemdService() *nodetasks.Service {
 	service.InitDefaults()
 
 	if b.ConfigurationMode == "Warming" {
-		service.Running = fi.PtrTo(false)
-		service.Enabled = fi.PtrTo(false)
+		service.Running = new(false)
+		service.Enabled = new(false)
 	}
 
 	return service
@@ -634,8 +652,11 @@ func (b *KubeletBuilder) addECRCredentialProvider(c *fi.NodeupModelBuilderContex
 		// Build the list of container registry globs to match
 		registryList := []string{
 			"*.dkr.ecr.*.amazonaws.com",
+			"*.dkr-ecr.*.on.aws",
 			"*.dkr.ecr.*.amazonaws.com.cn",
+			"*.dkr-ecr.*.on.amazonwebservices.com.cn",
 			"*.dkr.ecr-fips.*.amazonaws.com",
+			"*.dkr-ecr-fips.*.on.aws",
 			"*.dkr.ecr.us-iso-east-1.c2s.ic.gov",
 		}
 
@@ -783,9 +804,8 @@ func (b *KubeletBuilder) buildKubeletConfigSpec(ctx context.Context) (*kops.Kube
 			instanceTypeName = ec2types.InstanceType(*b.NodeupConfig.DefaultMachineType)
 		}
 
-		awsCloud := b.Cloud.(awsup.AWSCloud)
 		// Get the instance type's detailed information.
-		instanceType, err := awsup.GetMachineTypeInfo(awsCloud, instanceTypeName)
+		instanceType, err := b.Cloud.GetMachineTypeInfo(ctx, instanceTypeName)
 		if err != nil {
 			return nil, err
 		}
@@ -805,7 +825,7 @@ func (b *KubeletBuilder) buildKubeletConfigSpec(ctx context.Context) (*kops.Kube
 		}
 
 		// Write back values that could have changed
-		c.MaxPods = fi.PtrTo(int32(maxPods))
+		c.MaxPods = new(int32(maxPods))
 	}
 
 	if c.VolumePluginDirectory == "" {
@@ -833,7 +853,6 @@ func (b *KubeletBuilder) buildKubeletConfigSpec(ctx context.Context) (*kops.Kube
 
 	// As of 1.16 we can no longer set critical labels.
 	// kops-controller will set these labels.
-	// For bootstrapping reasons, protokube sets the critical labels for kops-controller to run.
 	c.NodeLabels = nil
 
 	if c.AuthorizationMode == "" {
@@ -841,7 +860,7 @@ func (b *KubeletBuilder) buildKubeletConfigSpec(ctx context.Context) (*kops.Kube
 	}
 
 	if c.AuthenticationTokenWebhook == nil {
-		c.AuthenticationTokenWebhook = fi.PtrTo(true)
+		c.AuthenticationTokenWebhook = new(true)
 	}
 
 	return &c, nil
@@ -865,18 +884,19 @@ func (b *KubeletBuilder) buildKubeletServingCertificate(c *fi.NodeupModelBuilder
 	name := "kubelet-server"
 	dir := b.PathSrvKubernetes()
 
-	names, err := b.kubeletNames(c.Context())
-	if err != nil {
-		return err
-	}
-
 	var cert, key fi.Resource
-	if !b.HasAPIServer {
+	if !b.canSignCertificates() {
+		var err error
 		cert, key, err = b.GetBootstrapCert(name, fi.CertificateIDCA)
 		if err != nil {
 			return err
 		}
 	} else {
+		names, err := b.kubeletNames(c.Context())
+		if err != nil {
+			return err
+		}
+
 		issueCert := &nodetasks.IssueCert{
 			Name:      name,
 			Signer:    fi.CertificateIDCA,
@@ -892,7 +912,7 @@ func (b *KubeletBuilder) buildKubeletServingCertificate(c *fi.NodeupModelBuilder
 		c.EnsureTask(&nodetasks.File{
 			Path: dir,
 			Type: nodetasks.FileType_Directory,
-			Mode: fi.PtrTo("0755"),
+			Mode: new("0755"),
 		})
 	}
 
@@ -900,7 +920,7 @@ func (b *KubeletBuilder) buildKubeletServingCertificate(c *fi.NodeupModelBuilder
 		Path:           filepath.Join(dir, name+".crt"),
 		Contents:       cert,
 		Type:           nodetasks.FileType_File,
-		Mode:           fi.PtrTo("0644"),
+		Mode:           new("0644"),
 		BeforeServices: []string{kubeletService},
 	})
 
@@ -908,7 +928,7 @@ func (b *KubeletBuilder) buildKubeletServingCertificate(c *fi.NodeupModelBuilder
 		Path:           filepath.Join(dir, name+".key"),
 		Contents:       key,
 		Type:           nodetasks.FileType_File,
-		Mode:           fi.PtrTo("0400"),
+		Mode:           new("0400"),
 		BeforeServices: []string{kubeletService},
 	})
 
@@ -927,7 +947,16 @@ func (b *KubeletBuilder) kubeletNames(ctx context.Context) ([]string, error) {
 		return append(addrs, name), nil
 	}
 
+	// The node name goes first when it differs from the instance ID, as it becomes the certificate
+	// CommonName.
 	addrs := []string{b.InstanceID}
+	nodeName, err := b.NodeName()
+	if err != nil {
+		return nil, fmt.Errorf("error getting NodeName: %v", err)
+	}
+	if nodeName != b.InstanceID {
+		addrs = append([]string{nodeName}, addrs...)
+	}
 	config, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error loading AWS config: %v", err)
@@ -936,7 +965,9 @@ func (b *KubeletBuilder) kubeletNames(ctx context.Context) ([]string, error) {
 
 	if localHostname, err := getMetadata(ctx, metadata, "local-hostname"); err == nil {
 		klog.V(2).Infof("Local Hostname: %s", localHostname)
-		addrs = append(addrs, localHostname)
+		if localHostname != addrs[0] {
+			addrs = append(addrs, localHostname)
+		}
 	}
 	if localIPv4, err := getMetadata(ctx, metadata, "local-ipv4"); err == nil {
 		klog.V(2).Infof("Local IPv4: %s", localIPv4)

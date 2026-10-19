@@ -94,12 +94,6 @@ function kops-upgrade() {
         KOPS="${KOPS_A}"
     fi
 
-    # TODO: Switch scripts to use KOPS_CONTROL_PLANE_COUNT
-    if [[ -n "${KOPS_CONTROL_PLANE_SIZE:-}" ]]; then
-        echo "Recognized (deprecated) KOPS_CONTROL_PLANE_SIZE=${KOPS_CONTROL_PLANE_SIZE}, please set KOPS_CONTROL_PLANE_COUNT instead"
-        KOPS_CONTROL_PLANE_COUNT=${KOPS_CONTROL_PLANE_SIZE}
-    fi
-
     # Note that we use --control-plane-size, even though it is deprecated, because we have to support old versions
     # in the upgrade test.
     ${KUBETEST2} \
@@ -144,6 +138,19 @@ function kops-upgrade() {
 
     # Verify kubeconfig-a still works
     kubectl get nodes -owide --kubeconfig="${KUBECONFIG_A}"
+
+    # A cluster that was never rolled still validates, so assert the upgrade actually landed.
+    # A "ci" version was rewritten above into a release-dev URL, so compare on its last segment,
+    # which is the version kubelet reports. Plain versions are unaffected by the strip.
+    local expected_kubelet stale_nodes
+    expected_kubelet="${K8S_VERSION_B##*/}"
+    stale_nodes=$(kubectl get nodes --kubeconfig="${KUBECONFIG_A}" \
+        -o jsonpath="{range .items[?(@.status.nodeInfo.kubeletVersion!='${expected_kubelet}')]}{.metadata.name}{' '}{.status.nodeInfo.kubeletVersion}{'\n'}{end}")
+    if [[ -n "${stale_nodes}" ]]; then
+        >&2 echo "upgrade to ${expected_kubelet} did not reach all nodes:"
+        >&2 echo "${stale_nodes}"
+        exit 1
+    fi
 
     cp "${KOPS_B}" "${WORKSPACE}/kops"
     export PATH="${WORKSPACE}:${PATH}"

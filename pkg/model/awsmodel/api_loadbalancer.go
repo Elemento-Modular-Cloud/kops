@@ -19,7 +19,6 @@ package awsmodel
 import (
 	"fmt"
 	"sort"
-	"time"
 
 	elbv2types "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -30,9 +29,6 @@ import (
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awstasks"
 )
-
-// LoadBalancerDefaultIdleTimeout is the default idle time for the ELB
-const LoadBalancerDefaultIdleTimeout = 5 * time.Minute
 
 // APILoadBalancerBuilder builds a LoadBalancer for accessing the API
 type APILoadBalancerBuilder struct {
@@ -65,18 +61,14 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		return fmt.Errorf("unhandled LoadBalancer type %q", lbSpec.Type)
 	}
 
-	var elbSubnets []*awstasks.Subnet
 	var nlbSubnetMappings []*awstasks.SubnetMapping
 	if len(lbSpec.Subnets) != 0 {
 		// Subnets have been explicitly set
 		for _, subnet := range lbSpec.Subnets {
 			for _, clusterSubnet := range b.Cluster.Spec.Networking.Subnets {
 				if subnet.Name == clusterSubnet.Name {
-					elbSubnet := b.LinkToSubnet(&clusterSubnet)
-					elbSubnets = append(elbSubnets, elbSubnet)
-
 					nlbSubnetMapping := &awstasks.SubnetMapping{
-						Subnet: elbSubnet,
+						Subnet: b.LinkToSubnet(&clusterSubnet),
 					}
 					if subnet.PrivateIPv4Address != nil {
 						nlbSubnetMapping.PrivateIPv4Address = subnet.PrivateIPv4Address
@@ -116,28 +108,17 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		for zone, subnets := range subnetsByZone {
 			subnet := b.chooseBestSubnetForELB(zone, subnets)
 
-			elbSubnet := b.LinkToSubnet(subnet)
-			elbSubnets = append(elbSubnets, elbSubnet)
-			nlbSubnetMappings = append(nlbSubnetMappings, &awstasks.SubnetMapping{Subnet: elbSubnet})
+			nlbSubnetMappings = append(nlbSubnetMappings, &awstasks.SubnetMapping{Subnet: b.LinkToSubnet(subnet)})
 		}
 	}
 
-	var clb *awstasks.ClassicLoadBalancer
 	var nlb *awstasks.NetworkLoadBalancer
 	{
-		idleTimeout := LoadBalancerDefaultIdleTimeout
-		if lbSpec.IdleTimeoutSeconds != nil {
-			idleTimeout = time.Second * time.Duration(*lbSpec.IdleTimeoutSeconds)
-		}
-
-		listeners := map[string]*awstasks.ClassicLoadBalancerListener{
-			"443": {InstancePort: 443},
-		}
 		var nlbListeners []*awstasks.NetworkLoadBalancerListener
 
 		if lbSpec.SSLCertificate == "" {
 			listener443 := &awstasks.NetworkLoadBalancerListener{
-				Name:                fi.PtrTo(b.NLBListenerName("api", 443)),
+				Name:                new(b.NLBListenerName("api", 443)),
 				Lifecycle:           b.Lifecycle,
 				NetworkLoadBalancer: b.LinkToNLB("api"),
 				Port:                443,
@@ -148,7 +129,7 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			// When using a custom certificate, we create a secondary listener on 8443, which does _not_ use the custom certificate.
 			// This is because client certificates cannot be used in conjunction with custom certificates on NLBs.
 			listener8443 := &awstasks.NetworkLoadBalancerListener{
-				Name:                fi.PtrTo(b.NLBListenerName("api", 8443)),
+				Name:                new(b.NLBListenerName("api", 8443)),
 				Lifecycle:           b.Lifecycle,
 				NetworkLoadBalancer: b.LinkToNLB("api"),
 				Port:                8443,
@@ -157,9 +138,8 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			nlbListeners = append(nlbListeners, listener8443)
 
 			// The primary listener _does_ use the custom certificate.
-			listeners["443"].SSLCertificateID = lbSpec.SSLCertificate
 			listener443 := &awstasks.NetworkLoadBalancerListener{
-				Name:                fi.PtrTo(b.NLBListenerName("api", 443)),
+				Name:                new(b.NLBListenerName("api", 443)),
 				Lifecycle:           b.Lifecycle,
 				NetworkLoadBalancer: b.LinkToNLB("api"),
 				Port:                443,
@@ -177,7 +157,7 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		if b.Cluster.UsesLoadBalancerForKopsController() {
 			{
 				nlbListener := &awstasks.NetworkLoadBalancerListener{
-					Name:                fi.PtrTo(b.NLBListenerName("api", wellknownports.KopsControllerPort)),
+					Name:                new(b.NLBListenerName("api", wellknownports.KopsControllerPort)),
 					Lifecycle:           b.Lifecycle,
 					NetworkLoadBalancer: b.LinkToNLB("api"),
 					Port:                wellknownports.KopsControllerPort,
@@ -188,7 +168,7 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 
 			if b.Cluster.Spec.Networking.Cilium != nil && b.Cluster.Spec.Networking.Cilium.EtcdManaged {
 				nlbListener := &awstasks.NetworkLoadBalancerListener{
-					Name:                fi.PtrTo(b.NLBListenerName("etcd-cilium", wellknownports.EtcdCiliumClientPort)),
+					Name:                new(b.NLBListenerName("etcd-cilium", wellknownports.EtcdCiliumClientPort)),
 					Lifecycle:           b.Lifecycle,
 					NetworkLoadBalancer: b.LinkToNLB("api"),
 					Port:                wellknownports.EtcdCiliumClientPort,
@@ -210,11 +190,10 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		tags["Name"] = "api." + b.ClusterName()
 
 		nlb = &awstasks.NetworkLoadBalancer{
-			Name:      fi.PtrTo(b.NLBName("api")),
+			Name:      new(b.NLBName("api")),
 			Lifecycle: b.Lifecycle,
 
-			LoadBalancerBaseName: fi.PtrTo(b.LBName32("api")),
-			CLBName:              fi.PtrTo("api." + b.ClusterName()),
+			LoadBalancerBaseName: new(b.LBName32("api")),
 			SecurityGroups: []*awstasks.SecurityGroup{
 				b.LinkToELBSecurityGroup("api"),
 			},
@@ -232,86 +211,36 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			nlb.SetWaitForLoadBalancerReady(true)
 		}
 
-		clb = &awstasks.ClassicLoadBalancer{
-			Name:      fi.PtrTo("api." + b.ClusterName()),
-			Lifecycle: b.Lifecycle,
-
-			LoadBalancerName: fi.PtrTo(b.LBName32("api")),
-			SecurityGroups: []*awstasks.SecurityGroup{
-				b.LinkToELBSecurityGroup("api"),
-			},
-			Subnets:   elbSubnets,
-			Listeners: listeners,
-
-			// Configure fast-recovery health-checks
-			HealthCheck: &awstasks.ClassicLoadBalancerHealthCheck{
-				Target:             fi.PtrTo("SSL:443"),
-				Timeout:            fi.PtrTo(int32(5)),
-				Interval:           fi.PtrTo(int32(10)),
-				HealthyThreshold:   fi.PtrTo(int32(2)),
-				UnhealthyThreshold: fi.PtrTo(int32(2)),
-			},
-
-			ConnectionSettings: &awstasks.ClassicLoadBalancerConnectionSettings{
-				IdleTimeout: fi.PtrTo(int32(idleTimeout.Seconds())),
-			},
-
-			ConnectionDraining: &awstasks.ClassicLoadBalancerConnectionDraining{
-				Enabled: fi.PtrTo(true),
-				Timeout: fi.PtrTo(int32(300)),
-			},
-
-			Tags:              tags,
-			WellKnownServices: []wellknownservices.WellKnownService{wellknownservices.KubeAPIServer},
-		}
-
 		if b.Cluster.UsesLoadBalancerForKopsController() {
-			lbSpec.CrossZoneLoadBalancing = fi.PtrTo(true)
+			lbSpec.CrossZoneLoadBalancing = new(true)
 		} else if lbSpec.CrossZoneLoadBalancing == nil {
-			lbSpec.CrossZoneLoadBalancing = fi.PtrTo(false)
-		}
-
-		clb.CrossZoneLoadBalancing = &awstasks.ClassicLoadBalancerCrossZoneLoadBalancing{
-			Enabled: lbSpec.CrossZoneLoadBalancing,
+			lbSpec.CrossZoneLoadBalancing = new(false)
 		}
 
 		nlb.CrossZoneLoadBalancing = lbSpec.CrossZoneLoadBalancing
 
 		switch lbSpec.Type {
 		case kops.LoadBalancerTypeInternal:
-			clb.Scheme = fi.PtrTo("internal")
 			nlb.Scheme = elbv2types.LoadBalancerSchemeEnumInternal
 		case kops.LoadBalancerTypePublic:
-			clb.Scheme = nil
 			nlb.Scheme = elbv2types.LoadBalancerSchemeEnumInternetFacing
 		default:
 			return fmt.Errorf("unknown load balancer Type: %q", lbSpec.Type)
 		}
 
 		if lbSpec.AccessLog != nil {
-			clb.AccessLog = &awstasks.ClassicLoadBalancerAccessLog{
-				EmitInterval:   fi.PtrTo(int32(lbSpec.AccessLog.Interval)),
-				Enabled:        fi.PtrTo(true),
-				S3BucketName:   lbSpec.AccessLog.Bucket,
-				S3BucketPrefix: lbSpec.AccessLog.BucketPrefix,
-			}
 			nlb.AccessLog = &awstasks.NetworkLoadBalancerAccessLog{
-				Enabled:        fi.PtrTo(true),
+				Enabled:        new(true),
 				S3BucketName:   lbSpec.AccessLog.Bucket,
 				S3BucketPrefix: lbSpec.AccessLog.BucketPrefix,
 			}
 		} else {
-			clb.AccessLog = &awstasks.ClassicLoadBalancerAccessLog{
-				Enabled: fi.PtrTo(false),
-			}
 			nlb.AccessLog = &awstasks.NetworkLoadBalancerAccessLog{
-				Enabled: fi.PtrTo(false),
+				Enabled: new(false),
 			}
 		}
 
-		if b.APILoadBalancerClass() == kops.LoadBalancerClassClassic {
-			c.AddTask(clb)
-		} else if b.APILoadBalancerClass() == kops.LoadBalancerClassNetwork {
+		{
 			groupAttrs := map[string]string{
 				awstasks.TargetGroupAttributeDeregistrationDelayConnectionTerminationEnabled: "true",
 				awstasks.TargetGroupAttributeDeregistrationDelayTimeoutSeconds:               "30",
@@ -325,18 +254,18 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 				groupTags["Name"] = groupName
 
 				tg := &awstasks.TargetGroup{
-					Name:                fi.PtrTo(groupName),
+					Name:                new(groupName),
 					Lifecycle:           b.Lifecycle,
 					VPC:                 b.LinkToVPC(),
 					Tags:                groupTags,
 					Protocol:            elbv2types.ProtocolEnumTcp,
-					Port:                fi.PtrTo(int32(443)),
+					Port:                new(int32(443)),
 					Attributes:          groupAttrs,
-					Interval:            fi.PtrTo(int32(10)),
-					HealthyThreshold:    fi.PtrTo(int32(2)),
-					UnhealthyThreshold:  fi.PtrTo(int32(2)),
+					Interval:            new(int32(10)),
+					HealthyThreshold:    new(int32(2)),
+					UnhealthyThreshold:  new(int32(2)),
 					HealthCheckProtocol: elbv2types.ProtocolEnumTcp,
-					Shared:              fi.PtrTo(false),
+					Shared:              new(false),
 				}
 				tg.CreateNewRevisionsWith(nlb)
 				c.AddTask(tg)
@@ -351,19 +280,19 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 					groupTags["Name"] = groupName
 
 					tg := &awstasks.TargetGroup{
-						Name:                fi.PtrTo(groupName),
+						Name:                new(groupName),
 						Lifecycle:           b.Lifecycle,
 						VPC:                 b.LinkToVPC(),
 						Tags:                groupTags,
 						Protocol:            elbv2types.ProtocolEnumTcp,
-						Port:                fi.PtrTo(int32(wellknownports.KopsControllerPort)),
+						Port:                new(int32(wellknownports.KopsControllerPort)),
 						Attributes:          groupAttrs,
-						Interval:            fi.PtrTo(int32(10)),
-						HealthyThreshold:    fi.PtrTo(int32(2)),
-						UnhealthyThreshold:  fi.PtrTo(int32(2)),
+						Interval:            new(int32(10)),
+						HealthyThreshold:    new(int32(2)),
+						UnhealthyThreshold:  new(int32(2)),
 						HealthCheckProtocol: elbv2types.ProtocolEnumHttps,
-						HealthCheckPath:     fi.PtrTo("/healthz"),
-						Shared:              fi.PtrTo(false),
+						HealthCheckPath:     new("/healthz"),
+						Shared:              new(false),
 					}
 					tg.CreateNewRevisionsWith(nlb)
 
@@ -378,18 +307,18 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 					groupTags["Name"] = groupName
 
 					tg := &awstasks.TargetGroup{
-						Name:                fi.PtrTo(groupName),
+						Name:                new(groupName),
 						Lifecycle:           b.Lifecycle,
 						VPC:                 b.LinkToVPC(),
 						Tags:                groupTags,
 						Protocol:            elbv2types.ProtocolEnumTcp,
-						Port:                fi.PtrTo(int32(wellknownports.EtcdCiliumClientPort)),
+						Port:                new(int32(wellknownports.EtcdCiliumClientPort)),
 						Attributes:          groupAttrs,
-						Interval:            fi.PtrTo(int32(10)),
-						HealthyThreshold:    fi.PtrTo(int32(2)),
-						UnhealthyThreshold:  fi.PtrTo(int32(2)),
+						Interval:            new(int32(10)),
+						HealthyThreshold:    new(int32(2)),
+						UnhealthyThreshold:  new(int32(2)),
 						HealthCheckProtocol: elbv2types.ProtocolEnumTcp,
-						Shared:              fi.PtrTo(false),
+						Shared:              new(false),
 					}
 					tg.CreateNewRevisionsWith(nlb)
 
@@ -404,18 +333,18 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 				// Override the returned name to be the expected NLB TG name
 				tlsGroupTags["Name"] = tlsGroupName
 				secondaryTG := &awstasks.TargetGroup{
-					Name:                fi.PtrTo(tlsGroupName),
+					Name:                new(tlsGroupName),
 					Lifecycle:           b.Lifecycle,
 					VPC:                 b.LinkToVPC(),
 					Tags:                tlsGroupTags,
 					Protocol:            elbv2types.ProtocolEnumTls,
-					Port:                fi.PtrTo(int32(443)),
+					Port:                new(int32(443)),
 					Attributes:          groupAttrs,
-					Interval:            fi.PtrTo(int32(10)),
-					HealthyThreshold:    fi.PtrTo(int32(2)),
-					UnhealthyThreshold:  fi.PtrTo(int32(2)),
+					Interval:            new(int32(10)),
+					HealthyThreshold:    new(int32(2)),
+					UnhealthyThreshold:  new(int32(2)),
 					HealthCheckProtocol: elbv2types.ProtocolEnumTcp,
-					Shared:              fi.PtrTo(false),
+					Shared:              new(false),
 				}
 				secondaryTG.CreateNewRevisionsWith(nlb)
 				c.AddTask(secondaryTG)
@@ -431,17 +360,17 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	var lbSG *awstasks.SecurityGroup
 	{
 		lbSG = &awstasks.SecurityGroup{
-			Name:             fi.PtrTo(b.ELBSecurityGroupName("api")),
+			Name:             new(b.ELBSecurityGroupName("api")),
 			Lifecycle:        b.SecurityLifecycle,
-			Description:      fi.PtrTo("Security group for api ELB"),
+			Description:      new("Security group for api ELB"),
 			RemoveExtraRules: []string{"port=443"},
 			VPC:              b.LinkToVPC(),
 		}
 		lbSG.Tags = b.CloudTags(*lbSG.Name, false)
 
 		if lbSpec.SecurityGroupOverride != nil {
-			lbSG.ID = fi.PtrTo(*lbSpec.SecurityGroupOverride)
-			lbSG.Shared = fi.PtrTo(true)
+			lbSG.ID = new(*lbSpec.SecurityGroupOverride)
+			lbSG.Shared = new(true)
 		}
 
 		c.AddTask(lbSG)
@@ -451,20 +380,20 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	{
 		{
 			t := &awstasks.SecurityGroupRule{
-				Name:          fi.PtrTo("ipv4-api-elb-egress"),
+				Name:          new("ipv4-api-elb-egress"),
 				Lifecycle:     b.SecurityLifecycle,
-				CIDR:          fi.PtrTo("0.0.0.0/0"),
-				Egress:        fi.PtrTo(true),
+				CIDR:          new("0.0.0.0/0"),
+				Egress:        new(true),
 				SecurityGroup: lbSG,
 			}
 			AddDirectionalGroupRule(c, t)
 		}
 		{
 			t := &awstasks.SecurityGroupRule{
-				Name:          fi.PtrTo("ipv6-api-elb-egress"),
+				Name:          new("ipv6-api-elb-egress"),
 				Lifecycle:     b.SecurityLifecycle,
-				IPv6CIDR:      fi.PtrTo("::/0"),
-				Egress:        fi.PtrTo(true),
+				IPv6CIDR:      new("::/0"),
+				Egress:        new(true),
 				SecurityGroup: lbSG,
 			}
 			AddDirectionalGroupRule(c, t)
@@ -476,25 +405,25 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		for _, cidr := range b.Cluster.Spec.API.Access {
 			{
 				t := &awstasks.SecurityGroupRule{
-					Name:          fi.PtrTo("https-api-elb-" + cidr),
+					Name:          new("https-api-elb-" + cidr),
 					Lifecycle:     b.SecurityLifecycle,
-					FromPort:      fi.PtrTo(int32(443)),
-					Protocol:      fi.PtrTo("tcp"),
+					FromPort:      new(int32(443)),
+					Protocol:      new("tcp"),
 					SecurityGroup: lbSG,
-					ToPort:        fi.PtrTo(int32(443)),
+					ToPort:        new(int32(443)),
 				}
 				t.SetCidrOrPrefix(cidr)
 				AddDirectionalGroupRule(c, t)
 			}
 
 			// If we have opened a secondary listener on 8443, allow it also
-			if b.APILoadBalancerClass() == kops.LoadBalancerClassNetwork && b.Cluster.Spec.API.LoadBalancer != nil && b.Cluster.Spec.API.LoadBalancer.SSLCertificate != "" {
+			if lbSpec.SSLCertificate != "" {
 				t := &awstasks.SecurityGroupRule{
-					Name:          fi.PtrTo("https-api-elb-8443-" + cidr),
+					Name:          new("https-api-elb-8443-" + cidr),
 					Lifecycle:     b.SecurityLifecycle,
-					FromPort:      fi.PtrTo(int32(8443)),
-					ToPort:        fi.PtrTo(int32(8443)),
-					Protocol:      fi.PtrTo("tcp"),
+					FromPort:      new(int32(8443)),
+					ToPort:        new(int32(8443)),
+					Protocol:      new("tcp"),
 					SecurityGroup: lbSG,
 				}
 				lbSG.RemoveExtraRules = append(lbSG.RemoveExtraRules, "port=8443")
@@ -506,12 +435,12 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			// Allow ICMP traffic required for PMTU discovery
 			{
 				t := &awstasks.SecurityGroupRule{
-					Name:          fi.PtrTo("icmpv6-pmtu-api-elb-" + cidr),
+					Name:          new("icmpv6-pmtu-api-elb-" + cidr),
 					Lifecycle:     b.SecurityLifecycle,
-					FromPort:      fi.PtrTo(int32(-1)),
-					Protocol:      fi.PtrTo("icmpv6"),
+					FromPort:      new(int32(-1)),
+					Protocol:      new("icmpv6"),
 					SecurityGroup: lbSG,
-					ToPort:        fi.PtrTo(int32(-1)),
+					ToPort:        new(int32(-1)),
 				}
 				t.SetCidrOrPrefix(cidr)
 				if t.CIDR == nil {
@@ -520,12 +449,12 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			}
 			{
 				t := &awstasks.SecurityGroupRule{
-					Name:          fi.PtrTo("icmp-pmtu-api-elb-" + cidr),
+					Name:          new("icmp-pmtu-api-elb-" + cidr),
 					Lifecycle:     b.SecurityLifecycle,
-					FromPort:      fi.PtrTo(int32(3)),
-					Protocol:      fi.PtrTo("icmp"),
+					FromPort:      new(int32(3)),
+					Protocol:      new("icmp"),
 					SecurityGroup: lbSG,
-					ToPort:        fi.PtrTo(int32(4)),
+					ToPort:        new(int32(4)),
 				}
 				t.SetCidrOrPrefix(cidr)
 				if t.IPv6CIDR == nil {
@@ -544,7 +473,7 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		for _, nodeGroup := range nodeGroups {
 			suffix := nodeGroup.Suffix
 			t := &awstasks.SecurityGroupRule{
-				Name:          fi.PtrTo(fmt.Sprintf("node%s-to-elb", suffix)),
+				Name:          new(fmt.Sprintf("node%s-to-elb", suffix)),
 				Lifecycle:     b.SecurityLifecycle,
 				SecurityGroup: lbSG,
 				SourceGroup:   nodeGroup.Task,
@@ -558,18 +487,18 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		return err
 	}
 
-	if b.APILoadBalancerClass() == kops.LoadBalancerClassNetwork && b.Cluster.Spec.API.LoadBalancer != nil && b.Cluster.Spec.API.LoadBalancer.SSLCertificate != "" {
+	if lbSpec.SSLCertificate != "" {
 		for _, masterGroup := range masterGroups {
 			suffix := masterGroup.Suffix
 			// Allow access to control plane on secondary port through NLB
 			t := &awstasks.SecurityGroupRule{
-				Name:          fi.PtrTo(fmt.Sprintf("tcp-api-cp%s", suffix)),
+				Name:          new(fmt.Sprintf("tcp-api-cp%s", suffix)),
 				Lifecycle:     b.SecurityLifecycle,
-				FromPort:      fi.PtrTo(int32(8443)),
-				Protocol:      fi.PtrTo("tcp"),
+				FromPort:      new(int32(8443)),
+				Protocol:      new("tcp"),
 				SecurityGroup: masterGroup.Task,
 				SourceGroup:   lbSG,
-				ToPort:        fi.PtrTo(int32(8443)),
+				ToPort:        new(int32(8443)),
 			}
 			c.AddTask(t)
 		}
@@ -579,13 +508,12 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 	{
 		for _, id := range b.Cluster.Spec.API.LoadBalancer.AdditionalSecurityGroups {
 			t := &awstasks.SecurityGroup{
-				Name:      fi.PtrTo(id),
+				Name:      new(id),
 				Lifecycle: b.SecurityLifecycle,
-				ID:        fi.PtrTo(id),
-				Shared:    fi.PtrTo(true),
+				ID:        new(id),
+				Shared:    new(true),
 			}
 			c.EnsureTask(t)
-			clb.SecurityGroups = append(clb.SecurityGroups, t)
 			nlb.SecurityGroups = append(nlb.SecurityGroups, t)
 		}
 	}
@@ -595,44 +523,43 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		for _, masterGroup := range masterGroups {
 			suffix := masterGroup.Suffix
 			c.AddTask(&awstasks.SecurityGroupRule{
-				Name:          fi.PtrTo(fmt.Sprintf("https-elb-to-master%s", suffix)),
+				Name:          new(fmt.Sprintf("https-elb-to-master%s", suffix)),
 				Lifecycle:     b.SecurityLifecycle,
-				FromPort:      fi.PtrTo(int32(443)),
-				Protocol:      fi.PtrTo("tcp"),
+				FromPort:      new(int32(443)),
+				Protocol:      new("tcp"),
 				SecurityGroup: masterGroup.Task,
 				SourceGroup:   lbSG,
-				ToPort:        fi.PtrTo(int32(443)),
+				ToPort:        new(int32(443)),
 			})
 			c.AddTask(&awstasks.SecurityGroupRule{
-				Name:          fi.PtrTo(fmt.Sprintf("icmp-pmtu-elb-to-cp%s", suffix)),
+				Name:          new(fmt.Sprintf("icmp-pmtu-elb-to-cp%s", suffix)),
 				Lifecycle:     b.SecurityLifecycle,
-				FromPort:      fi.PtrTo(int32(3)),
-				Protocol:      fi.PtrTo("icmp"),
+				FromPort:      new(int32(3)),
+				Protocol:      new("icmp"),
 				SecurityGroup: masterGroup.Task,
 				SourceGroup:   lbSG,
-				ToPort:        fi.PtrTo(int32(4)),
+				ToPort:        new(int32(4)),
 			})
 			c.AddTask(&awstasks.SecurityGroupRule{
-				Name:          fi.PtrTo(fmt.Sprintf("icmp-pmtu-cp%s-to-elb", suffix)),
+				Name:          new(fmt.Sprintf("icmp-pmtu-cp%s-to-elb", suffix)),
 				Lifecycle:     b.SecurityLifecycle,
-				FromPort:      fi.PtrTo(int32(3)),
-				Protocol:      fi.PtrTo("icmp"),
+				FromPort:      new(int32(3)),
+				Protocol:      new("icmp"),
 				SecurityGroup: lbSG,
 				SourceGroup:   masterGroup.Task,
-				ToPort:        fi.PtrTo(int32(4)),
+				ToPort:        new(int32(4)),
 			})
 			if b.Cluster.UsesLoadBalancerForKopsController() {
 				{
 					nlb.WellKnownServices = append(nlb.WellKnownServices, wellknownservices.KopsController)
-					clb.WellKnownServices = append(clb.WellKnownServices, wellknownservices.KopsController)
 
 					c.AddTask(&awstasks.SecurityGroupRule{
-						Name:          fi.PtrTo(fmt.Sprintf("kops-controller-elb-to-cp%s", suffix)),
+						Name:          new(fmt.Sprintf("kops-controller-elb-to-cp%s", suffix)),
 						Lifecycle:     b.SecurityLifecycle,
-						FromPort:      fi.PtrTo(int32(wellknownports.KopsControllerPort)),
-						Protocol:      fi.PtrTo("tcp"),
+						FromPort:      new(int32(wellknownports.KopsControllerPort)),
+						Protocol:      new("tcp"),
 						SecurityGroup: masterGroup.Task,
-						ToPort:        fi.PtrTo(int32(wellknownports.KopsControllerPort)),
+						ToPort:        new(int32(wellknownports.KopsControllerPort)),
 						SourceGroup:   lbSG,
 					})
 				}
@@ -641,12 +568,12 @@ func (b *APILoadBalancerBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 					nlb.WellKnownServices = append(nlb.WellKnownServices, wellknownservices.EtcdCilium)
 
 					c.AddTask(&awstasks.SecurityGroupRule{
-						Name:          fi.PtrTo(fmt.Sprintf("etcd-cilium-elb-to-cp%s", suffix)),
+						Name:          new(fmt.Sprintf("etcd-cilium-elb-to-cp%s", suffix)),
 						Lifecycle:     b.SecurityLifecycle,
-						FromPort:      fi.PtrTo(int32(wellknownports.EtcdCiliumClientPort)),
-						Protocol:      fi.PtrTo("tcp"),
+						FromPort:      new(int32(wellknownports.EtcdCiliumClientPort)),
+						Protocol:      new("tcp"),
 						SecurityGroup: masterGroup.Task,
-						ToPort:        fi.PtrTo(int32(wellknownports.EtcdCiliumClientPort)),
+						ToPort:        new(int32(wellknownports.EtcdCiliumClientPort)),
 						SourceGroup:   lbSG,
 					})
 				}
